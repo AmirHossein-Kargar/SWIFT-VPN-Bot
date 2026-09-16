@@ -11,6 +11,7 @@
   },
   "scripts": {
     "start": "node bot.js",
-    "server": "node server.js"
+    "server": "node server.js",
+    "test": "node --test tests/hooshpay.test.js"
   }
 }

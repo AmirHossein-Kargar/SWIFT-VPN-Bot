@@ -1,19 +1,28 @@
 import connectDB from "./config/db.js";
 import TelegramBot from "node-telegram-bot-api";
 import trxScanner from "./services/trxWalletScanner.js";
+import { setBotInstance } from "./config/botInstance.js";
+import app, { PORT } from "./server.js";
 
 export default async function startBot() {
+  // 1. Connect to MongoDB
   await connectDB();
   console.log("\x1b[32m%s\x1b[0m", "✔ DB Ready");
 
+  // 2. Start Express webhook server
+  app.listen(PORT, () => {
+    console.log("\x1b[32m%s\x1b[0m", `✔ Webhook server listening on port ${PORT}`);
+  });
+
+  // 3. Create Telegram bot (polling mode)
   const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
-  // راه‌اندازی سرویس اسکن کیف پول TRX
-  try {
-    // اتصال bot instance به سرویس اسکن
-    trxScanner.setBotInstance(bot);
+  // 4. Register shared bot instance so server.js webhook can send messages
+  setBotInstance(bot);
 
-    // شروع اسکن خودکار
+  // 5. Start TRX wallet auto-scanner
+  try {
+    trxScanner.setBotInstance(bot);
     trxScanner.startAutoScan();
     console.log("\x1b[32m%s\x1b[0m", "🚀 TRX Wallet Scanner Started");
   } catch (error) {

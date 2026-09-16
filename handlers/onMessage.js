@@ -3,6 +3,7 @@ import User from "../models/User.js";
 import handleTonAmount from "../paymentHandlers/handleTonAmount.js";
 import payBank from "../paymentHandlers/payBank.js";
 import handleTrxAmount from "../paymentHandlers/handleTrxAmount.js";
+import { handleHooshAmount } from "../paymentHandlers/payHoosh.js";
 import supportMessageHandler from "./supportMessageHandler.js";
 import {
   handleApiGigInput,
@@ -78,6 +79,48 @@ async function handleMessage(bot, msg) {
 
   if (session?.step === "waiting_for_trx_amount" && msg.text) {
     await handleTrxAmount(bot, msg, session);
+    return;
+  }
+
+  if (session?.step === "waiting_for_hoosh_amount" && msg.text) {
+    await handleHooshAmount(bot, msg, session);
+    return;
+  }
+
+  // Admin: search HooshPay invoice by UID or Order ID
+  if (session?.step === "admin_waiting_for_hoosh_search" && msg.text) {
+    const term = msg.text.trim();
+    await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
+    const { default: HooshPayInvoice } = await import("../models/HooshPayInvoice.js");
+    const inv = await HooshPayInvoice.findOne({
+      $or: [{ uid: term }, { orderId: term }],
+    });
+    if (!inv) {
+      await bot.sendMessage(chatId, `❌ فاکتوری با شناسه <code>${term}</code> یافت نشد.`, { parse_mode: "HTML" });
+    } else {
+      await bot.sendMessage(
+        chatId,
+        `🔍 <b>جزئیات فاکتور HooshPay</b>\n\n` +
+        `🆔 UID: <code>${inv.uid}</code>\n` +
+        `📦 Order ID: <code>${inv.orderId}</code>\n` +
+        `👤 User ID: <code>${inv.userId}</code>\n` +
+        `💰 مبلغ: <code>${inv.amount.toLocaleString()}</code> تومان\n` +
+        `📌 وضعیت: <code>${inv.status}</code>\n` +
+        `✅ تسویه: <code>${inv.fulfilled ? "بله" : "خیر"}</code>\n` +
+        `📅 ایجاد: <code>${inv.createdAt.toLocaleString("fa-IR")}</code>\n` +
+        `${inv.paidAt ? `💳 پرداخت: <code>${inv.paidAt.toLocaleString("fa-IR")}</code>\n` : ""}`,
+        {
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "🔄 ارسال مجدد موجودی", callback_data: `admin_hoosh_resend:${inv.uid}` }],
+              [{ text: "🏠 بازگشت", callback_data: "admin_back_to_panel" }],
+            ],
+          },
+        }
+      );
+    }
+    await setSession(chatId, { step: null });
     return;
   }
 
