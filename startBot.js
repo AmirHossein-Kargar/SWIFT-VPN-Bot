@@ -3,6 +3,7 @@ import TelegramBot from "node-telegram-bot-api";
 import trxScanner from "./services/trxWalletScanner.js";
 import { setBotInstance } from "./config/botInstance.js";
 import app, { PORT } from "./server.js";
+import { startHooshpayRecoveryCron } from "./services/hooshpay/hooshpayRecoveryCron.js";
 
 export default async function startBot() {
   // 1. Connect to MongoDB
@@ -29,6 +30,18 @@ export default async function startBot() {
     console.error(
       "\x1b[31m%s\x1b[0m",
       "❌ Failed to start TRX Wallet Scanner:",
+      error.message
+    );
+  }
+
+  // 6. Start HooshPay recovery + expiry cron
+  try {
+    startHooshpayRecoveryCron(bot);
+    console.log("\x1b[32m%s\x1b[0m", "✔ HooshPay Recovery Cron Started");
+  } catch (error) {
+    console.error(
+      "\x1b[31m%s\x1b[0m",
+      "❌ Failed to start HooshPay Recovery Cron:",
       error.message
     );
   }

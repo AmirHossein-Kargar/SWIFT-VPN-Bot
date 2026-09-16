@@ -108,7 +108,6 @@ const handleCallbackQuery = async (bot, query) => {
 
     if (result.success) {
       // fulfillHooshOrder already sent the confirmation message + keyboard.
-      // Delete the payment message.
       await bot.deleteMessage(chatId, messageId).catch(() => {});
       await clearSession(chatId);
       return;
@@ -127,8 +126,40 @@ const handleCallbackQuery = async (bot, query) => {
       return;
     }
 
+    // ── NEW: duplicate click / in-flight lock ──────────────────────────────
+    if (result.locked) {
+      // Another verify call is already in-flight — silently ignore this duplicate
+      try {
+        await bot.editMessageText(
+          "⏳ <b>بررسی پرداخت در حال انجام است...</b>\n\nلطفاً چند لحظه صبر کنید.",
+          { chat_id: chatId, message_id: messageId, parse_mode: "HTML" }
+        );
+      } catch (_) {}
+      return;
+    }
+
+    // ── NEW: expired invoice ───────────────────────────────────────────────
+    if (result.expired) {
+      await bot.editMessageText(
+        "⏰ <b>مهلت این فاکتور به پایان رسیده است.</b>\n\n" +
+        "لطفاً یک فاکتور جدید ایجاد کنید.",
+        {
+          chat_id: chatId,
+          message_id: messageId,
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "🔄 ایجاد فاکتور جدید", callback_data: "pay_hoosh" }],
+              [{ text: "🏠 بازگشت به خانه", callback_data: "back_to_home" }],
+            ],
+          },
+        }
+      );
+      await clearSession(chatId);
+      return;
+    }
+
     if (result.notPaid) {
-      // Re-fetch invoice to show payment URL again
       const inv = await HooshPayInvoice.findOne({ uid });
       const paymentUrl = inv?.paymentUrl;
       await bot.editMessageText(

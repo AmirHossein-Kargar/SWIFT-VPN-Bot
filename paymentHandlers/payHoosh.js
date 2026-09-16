@@ -1,16 +1,14 @@
 /**
  * payHoosh
  * --------
- * Entry point for the HooshPay payment flow.
+ * Bot payment flow for HooshPay.
  *
- * Flow:
- *  1. User presses "💳 پرداخت آنلاین (HooshPay)" in showPaymentMethods.
- *  2. This handler is invoked with the callback query.
- *  3. It asks the user for an amount (same pattern as payBank).
- *     Session step → "waiting_for_hoosh_amount"
- *  4. User types the amount → handleHooshAmount creates the invoice.
+ * Guards added:
+ *  - Session is set to "creating_hoosh_invoice" BEFORE the API call so a
+ *    second message from the same user cannot trigger a second invoice creation.
+ *  - Step is cleared to null on any exit path so the user is never stuck.
  */
-import { setSession } from "../config/sessionStore.js";
+import { getSession, setSession } from "../config/sessionStore.js";
 import validateWithCommas from "../utils/validationAmount.js";
 import { createHooshInvoice } from "../services/hooshpay/createHooshInvoice.js";
 
@@ -52,7 +50,7 @@ export async function payHoosh(bot, query, session) {
   });
 }
 
-// ─── Step 2: Process the amount, create invoice, send payment link ─────────
+// ─── Step 2: Process amount, create invoice, send payment link ─────────────
 
 export async function handleHooshAmount(bot, msg, session) {
   const chatId = msg.chat.id;
@@ -66,7 +64,19 @@ export async function handleHooshAmount(bot, msg, session) {
     [{ text: "🔙 بازگشت به روش‌های پرداخت", callback_data: "back_to_topup" }],
   ];
 
-  // Validate amount (min 10,000 — no realistic upper cap beyond 50M)
+  // ── Guard: block re-entrant invoice creation ──────────────────────────────
+  // If we're already creating an invoice for this user, ignore the duplicate message.
+  if (session?.step === "creating_hoosh_invoice") {
+    try {
+      await bot.editMessageText(
+        "⏳ <b>فاکتور در حال ایجاد است...</b>\n\nلطفاً چند لحظه صبر کنید.",
+        { chat_id: chatId, message_id: messageId, parse_mode: "HTML" }
+      );
+    } catch (_) {}
+    return;
+  }
+
+  // Validate amount
   const validation = validateWithCommas(text, 10000, 50000000);
   if (!validation.valid) {
     try {
@@ -86,17 +96,21 @@ export async function handleHooshAmount(bot, msg, session) {
 
   const amount = validation.amount;
 
-  // Show "creating invoice…" feedback
+  // ── Lock session against concurrent messages ──────────────────────────────
+  await setSession(chatId, {
+    ...session,
+    step: "creating_hoosh_invoice",
+    messageId,
+    paymentType: "hoosh",
+  });
+
+  // Show creating feedback
   try {
     await bot.editMessageText(
       `⏳ <b>در حال ایجاد فاکتور پرداخت...</b>\n\nلطفاً چند لحظه صبر کنید.`,
-      {
-        chat_id: chatId,
-        message_id: messageId,
-        parse_mode: "HTML",
-      }
+      { chat_id: chatId, message_id: messageId, parse_mode: "HTML" }
     );
-  } catch (e) { /* ignore */ }
+  } catch (_) {}
 
   // Create invoice
   let invoice;
@@ -120,23 +134,24 @@ export async function handleHooshAmount(bot, msg, session) {
           reply_markup: { inline_keyboard: backButton },
         }
       );
-    } catch (_) { /* ignore */ }
-    await setSession(chatId, { ...session, step: null });
+    } catch (_) {}
+    // Unlock session so user can try again
+    await setSession(chatId, { ...session, step: "waiting_for_hoosh_amount", messageId });
     return;
   }
 
-  // Persist invoice UID in session for the "I've Paid" button
+  // Save invoice UID in session
   await setSession(chatId, {
     ...session,
     step: "waiting_for_hoosh_confirm",
     paymentType: "hoosh",
-    paymentId: invoice.uid,        // HooshPay UID used for verification
+    paymentId: invoice.uid,
     hooshOrderId: invoice.orderId,
     rawAmount: text,
     messageId,
   });
 
-  // Send payment page link
+  // Send payment link
   try {
     await bot.editMessageText(
       `✅ <b>فاکتور پرداخت ایجاد شد</b>\n\n` +

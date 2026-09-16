@@ -1,19 +1,14 @@
 import mongoose from "mongoose";
 
 /**
- * HooshPay Invoice — stores the full lifecycle of a HooshPay payment.
+ * HooshPay Invoice — full lifecycle of a HooshPay payment.
  *
- * Fields:
- *   uid          — HooshPay's own invoice UID (returned on creation)
- *   orderId      — our unique order identifier sent to HooshPay
- *   userId       — Telegram user ID (Number) of the payer
- *   amount       — amount in Toman (IRR/10)
- *   paymentUrl   — HooshPay hosted payment page URL
- *   status       — current lifecycle state
- *   webhookLog   — array of raw webhook payloads received for audit / replay
- *   fulfilledAt  — timestamp when balance was credited (idempotency guard)
- *   createdAt    — record creation timestamp
- *   paidAt       — timestamp when payment was confirmed
+ * Two-phase delivery tracking (fixes crash-between-writes risk):
+ *   fulfilled      — set to true when the DB write for fulfilled started (atomic lock)
+ *   balanceCredited — set to true only after User.balance was actually incremented
+ *
+ * Recovery cron queries: { fulfilled: true, balanceCredited: false }
+ * and re-runs the balance credit step safely.
  */
 const hooshPayInvoiceSchema = new mongoose.Schema({
   uid: { type: String, required: true, unique: true, index: true },
@@ -24,20 +19,24 @@ const hooshPayInvoiceSchema = new mongoose.Schema({
 
   status: {
     type: String,
-    enum: ["pending", "paid", "expired", "failed"],
+    enum: ["pending", "paid", "expired", "failed", "reversed"],
     default: "pending",
     index: true,
   },
 
-  // Anti-replay / idempotency guard — set to true only once per invoice
+  // Phase-1 lock: flipped atomically by findOneAndUpdate({fulfilled:false})
   fulfilled: { type: Boolean, default: false, index: true },
   fulfilledAt: { type: Date, default: null },
 
+  // Phase-2 confirmation: set AFTER User.balance has been incremented
+  balanceCredited: { type: Boolean, default: false, index: true },
+  balanceCreditedAt: { type: Date, default: null },
+
   // Timestamps
-  createdAt: { type: Date, default: Date.now },
+  createdAt: { type: Date, default: Date.now, index: true },
   paidAt: { type: Date, default: null },
 
-  // Raw webhook payloads for audit (array keeps every delivery)
+  // Raw webhook payloads for audit/replay (one entry per delivery)
   webhookLog: [
     {
       receivedAt: { type: Date, default: Date.now },
@@ -45,9 +44,6 @@ const hooshPayInvoiceSchema = new mongoose.Schema({
     },
   ],
 });
-
-// Auto-expire pending invoices after 24 hours (TTL index on createdAt when status stays pending)
-// Note: MongoDB TTL cannot be conditional — we handle cleanup in the recovery cron instead.
 
 const HooshPayInvoice = mongoose.model("HooshPayInvoice", hooshPayInvoiceSchema);
 export default HooshPayInvoice;

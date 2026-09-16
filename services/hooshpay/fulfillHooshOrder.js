@@ -1,15 +1,23 @@
 /**
  * fulfillHooshOrder
  * -----------------
- * Central idempotent fulfillment function.
- * Called by BOTH the webhook handler AND the manual verify flow.
+ * Central idempotent fulfillment — two-phase write with crash recovery.
  *
- * Guarantees:
- *  - Balance is credited exactly once per invoice (fulfilled flag).
- *  - Uses a MongoDB findOneAndUpdate with { fulfilled: false } as the filter
- *    so two concurrent calls cannot both credit the balance.
- *  - Sends a Telegram confirmation message to the user.
- *  - On Telegram API failure, balance is still credited (payment already done).
+ * Phase 1 — Acquire the fulfillment lock atomically:
+ *   findOneAndUpdate({ _id, fulfilled: false }) → flip fulfilled=true
+ *   If result is null, another process already owns this invoice — bail out.
+ *
+ * Phase 2 — Credit the user's balance:
+ *   After User.findOneAndUpdate succeeds, set balanceCredited=true.
+ *   If the process crashes between Phase 1 and Phase 2, the recovery cron
+ *   (services/hooshpay/hooshpayRecoveryCron.js) will re-run Phase 2 for
+ *   any invoice where fulfilled=true && balanceCredited=false.
+ *
+ * Called by:
+ *   - POST /api/hooshpay/webhook  (primary)
+ *   - verifyHooshPayment()        (manual fallback)
+ *   - admin_hoosh_run_pending     (admin recovery)
+ *   - hooshpayRecoveryCron        (automatic recovery)
  */
 import HooshPayInvoice from "../../models/HooshPayInvoice.js";
 import User from "../../models/User.js";
@@ -17,17 +25,17 @@ import keyboard from "../../keyboards/mainKeyboard.js";
 
 /**
  * @param {object} params
- * @param {import('../../models/HooshPayInvoice.js').default} params.invoice - Mongoose document
- * @param {object}  params.bot     - node-telegram-bot-api instance (may be null in webhook-only mode)
- * @param {number}  [params.chatId] - Telegram chat ID; falls back to invoice.userId
+ * @param {object}  params.invoice  - Mongoose document or plain object with _id, uid, userId, amount
+ * @param {object}  [params.bot]    - node-telegram-bot-api instance (null-safe)
+ * @param {number}  [params.chatId] - Override Telegram chat ID; falls back to invoice.userId
  */
 export async function fulfillHooshOrder({ invoice, bot, chatId }) {
   const targetChatId = chatId ?? invoice.userId;
 
-  // ── Idempotency guard ────────────────────────────────────────────────────
-  // Atomically flip fulfilled=true only if it is currently false.
-  // If two processes race here, only one will get a non-null result.
-  const updated = await HooshPayInvoice.findOneAndUpdate(
+  // ── Phase 1: Acquire the lock ─────────────────────────────────────────────
+  // Only one concurrent caller can win this write. The filter includes
+  // fulfilled:false so any second caller gets null back and exits.
+  const locked = await HooshPayInvoice.findOneAndUpdate(
     { _id: invoice._id, fulfilled: false },
     {
       $set: {
@@ -40,13 +48,34 @@ export async function fulfillHooshOrder({ invoice, bot, chatId }) {
     { new: true }
   );
 
-  if (!updated) {
-    // Another process already fulfilled this invoice — do nothing
-    console.log(`[HooshPay] Duplicate fulfillment blocked for uid=${invoice.uid}`);
+  if (!locked) {
+    // Either already fulfilled, or a concurrent call owns the lock.
+    // Check if balanceCredited also needs completing (crash recovery path).
+    const current = await HooshPayInvoice.findById(invoice._id).lean();
+    if (current?.fulfilled && !current?.balanceCredited) {
+      // Phase 1 was done before crash but Phase 2 was not — continue below
+      // using `current` as the invoice reference.
+      return _creditBalance({ invoice: current, bot, targetChatId });
+    }
+    console.log(`[HooshPay] Duplicate fulfillment blocked for uid=${invoice.uid ?? invoice._id}`);
     return;
   }
 
-  // ── Credit user balance ──────────────────────────────────────────────────
+  // ── Phase 2: Credit the balance ───────────────────────────────────────────
+  return _creditBalance({ invoice: locked, bot, targetChatId });
+}
+
+/**
+ * Internal: credit balance + mark balanceCredited + notify user.
+ * Safe to call multiple times — User.$inc is idempotent once balanceCredited=true.
+ */
+async function _creditBalance({ invoice, bot, targetChatId }) {
+  // Guard: don't double-credit if already marked
+  if (invoice.balanceCredited) {
+    console.log(`[HooshPay] Balance already credited for uid=${invoice.uid}, skipping.`);
+    return;
+  }
+
   let user;
   try {
     user = await User.findOneAndUpdate(
@@ -55,26 +84,32 @@ export async function fulfillHooshOrder({ invoice, bot, chatId }) {
       { new: true }
     );
   } catch (dbErr) {
-    // Critical: balance credit failed. Roll back the fulfilled flag so the
-    // next attempt can retry, then re-throw so the caller can log/alert.
-    await HooshPayInvoice.findByIdAndUpdate(invoice._id, {
-      $set: { fulfilled: false, fulfilledAt: null, status: "pending", paidAt: null },
-    });
-    console.error(`[HooshPay] DB error crediting balance for uid=${invoice.uid}:`, dbErr.message);
+    // Do NOT roll back fulfilled — it stays true so the recovery cron can
+    // retry just the balance credit step (balanceCredited remains false).
+    console.error(
+      `[HooshPay] DB error crediting balance for uid=${invoice.uid}:`,
+      dbErr.message
+    );
     throw dbErr;
   }
 
   if (!user) {
-    console.warn(`[HooshPay] User not found for telegramId=${invoice.userId}, uid=${invoice.uid}`);
+    console.warn(
+      `[HooshPay] User not found for telegramId=${invoice.userId}, uid=${invoice.uid}. ` +
+      `Balance credit skipped — user may have been deleted.`
+    );
   }
 
-  const newBalance = user ? user.balance : "نامشخص";
-  const formattedAmount = invoice.amount.toLocaleString("en-US");
-  const formattedBalance = typeof newBalance === "number"
-    ? newBalance.toLocaleString("en-US")
-    : newBalance;
+  // Mark Phase 2 complete — now safe to consider the invoice fully settled
+  await HooshPayInvoice.findByIdAndUpdate(invoice._id, {
+    $set: { balanceCredited: true, balanceCreditedAt: new Date() },
+  });
 
-  // ── Notify user ──────────────────────────────────────────────────────────
+  // ── Notify user ───────────────────────────────────────────────────────────
+  const newBalance = user?.balance ?? null;
+  const formattedAmount = Number(invoice.amount).toLocaleString("en-US");
+  const formattedBalance = newBalance !== null ? newBalance.toLocaleString("en-US") : "نامشخص";
+
   if (bot) {
     const confirmMsg =
       `✅ <b>پرداخت شما تأیید شد!</b>\n\n` +
@@ -89,7 +124,7 @@ export async function fulfillHooshOrder({ invoice, bot, chatId }) {
         reply_markup: keyboard.reply_markup,
       });
     } catch (tgErr) {
-      // Non-fatal — user may have blocked the bot. Log and continue.
+      // Non-fatal — user may have blocked the bot.
       console.warn(
         `[HooshPay] Could not send confirmation to chatId=${targetChatId}:`,
         tgErr.message
@@ -98,7 +133,7 @@ export async function fulfillHooshOrder({ invoice, bot, chatId }) {
   }
 
   console.log(
-    `[HooshPay] ✅ Fulfilled: uid=${invoice.uid} orderId=${invoice.orderId} ` +
+    `[HooshPay] ✅ Fulfilled+Credited: uid=${invoice.uid} ` +
     `userId=${invoice.userId} amount=${invoice.amount}`
   );
 }
