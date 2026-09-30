@@ -15,11 +15,12 @@ const hooshpayReport = async (bot, query, _session) => {
   const messageId = query.message.message_id;
 
   try {
-    const [all, paid, pending, expired, failed] = await Promise.all([
+    const [all, paid, pending, expired, cancelled, failed] = await Promise.all([
       HooshPayInvoice.countDocuments({}),
       HooshPayInvoice.countDocuments({ status: "paid" }),
       HooshPayInvoice.countDocuments({ status: "pending" }),
       HooshPayInvoice.countDocuments({ status: "expired" }),
+      HooshPayInvoice.countDocuments({ status: "cancelled" }),
       HooshPayInvoice.countDocuments({ status: "failed" }),
     ]);
 
@@ -41,7 +42,8 @@ const hooshpayReport = async (bot, query, _session) => {
       recentLines = "\n\n📋 <b>آخرین پرداخت‌ها:</b>\n";
       for (const inv of paidInvoices) {
         const date = inv.paidAt ? new Date(inv.paidAt).toLocaleString("fa-IR") : "نامشخص";
-        recentLines += `• <code>${inv.uid.slice(0, 12)}…</code> | ${inv.amount.toLocaleString()} تومان | کاربر: <code>${inv.userId}</code> | ${date}\n`;
+        const tracking = inv.trackingCode ? ` | کد: ${inv.trackingCode}` : "";
+        recentLines += `• <code>${inv.uid.slice(0, 12)}…</code> | ${inv.amount.toLocaleString()} تومان | کاربر: <code>${inv.userId}</code>${tracking} | ${date}\n`;
       }
     }
 
@@ -52,6 +54,7 @@ const hooshpayReport = async (bot, query, _session) => {
       `• پرداخت شده: <code>${paid}</code>\n` +
       `• در انتظار: <code>${pending}</code>\n` +
       `• منقضی: <code>${expired}</code>\n` +
+      `• لغوشده: <code>${cancelled}</code>\n` +
       `• ناموفق: <code>${failed}</code>\n\n` +
       `💰 <b>جمع کل دریافتی:</b> <code>${totalAmount.toLocaleString()}</code> تومان\n` +
       (unfulfilled > 0

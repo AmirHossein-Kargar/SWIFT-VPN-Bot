@@ -9,6 +9,7 @@
  *   { success: false, notPaid: true }
  *   { success: false, locked: true }
  *   { success: false, expired: true }
+ *   { success: false, cancelled: true }
  *   { success: false, error: string, correlationId }
  *
  * Redis lock failure → fail-open (MongoDB Phase-1 guard is authoritative).
@@ -24,6 +25,9 @@ function log(level, message, meta = {}) {
     JSON.stringify({ ts: new Date().toISOString(), service: "hooshpay-verify", level, message, ...meta })
   );
 }
+
+// Terminal states where we should NOT contact the HooshPay API
+const TERMINAL_STATUSES = ["expired", "cancelled", "failed", "reversed"];
 
 export async function verifyHooshPayment(uid, bot, chatId) {
   const cid = randomUUID();
@@ -42,8 +46,12 @@ export async function verifyHooshPayment(uid, bot, chatId) {
   }
 
   // Terminal state — do not contact API
-  if (["expired", "failed", "reversed"].includes(invoice.status)) {
+  if (TERMINAL_STATUSES.includes(invoice.status)) {
     log("info", "Invoice in terminal state", { cid, uid, status: invoice.status });
+
+    if (invoice.status === "cancelled") {
+      return { success: false, cancelled: true };
+    }
     return { success: false, expired: true };
   }
 
@@ -55,7 +63,7 @@ export async function verifyHooshPayment(uid, bot, chatId) {
   }
 
   try {
-    log("info", "Calling HooshPay verify API", { cid, uid });
+    log("info", "PAYMENT_VERIFICATION_STARTED — calling HooshPay verify API", { cid, uid });
 
     let verifyResult;
     try {
@@ -65,8 +73,22 @@ export async function verifyHooshPayment(uid, bot, chatId) {
       return { success: false, error: err.message, correlationId: cid };
     }
 
-    if (!verifyResult?.paid) {
-      log("info", "HooshPay reports not paid", { cid, uid });
+    // Official verify response: { success, paid, status, data: { uid, tracking_code, ... } }
+    const isPaid = verifyResult?.paid === true || verifyResult?.status === "paid";
+
+    // Store tracking code if returned
+    if (verifyResult?.data?.tracking_code) {
+      await HooshPayInvoice.findByIdAndUpdate(invoice._id, {
+        $set: { trackingCode: verifyResult.data.tracking_code },
+      });
+    }
+
+    if (!isPaid) {
+      log("info", "HooshPay reports not paid", {
+        cid, uid,
+        status: verifyResult?.status,
+        paid: verifyResult?.paid,
+      });
       return { success: false, notPaid: true };
     }
 

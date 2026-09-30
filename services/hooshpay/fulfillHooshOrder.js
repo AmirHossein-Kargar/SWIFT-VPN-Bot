@@ -92,7 +92,9 @@ export async function fulfillHooshOrder({ invoice, bot, chatId, correlationId })
     return;
   }
 
-  log("info", "Phase-1 lock acquired", { cid, uid: locked.uid, userId: locked.userId, amount: locked.amount });
+  log("info", "PAYMENT_VERIFIED — Phase-1 lock acquired", {
+    cid, uid: locked.uid, userId: locked.userId, amount: locked.amount,
+  });
   return _creditBalance({ invoice: locked, bot, targetChatId, cid });
 }
 
@@ -162,17 +164,22 @@ async function _creditBalance({ invoice, bot, targetChatId, cid }) {
   const fmtAmount = Number(invoice.amount).toLocaleString("en-US");
   const fmtBalance = newBalance !== null ? newBalance.toLocaleString("en-US") : "نامشخص";
 
-  log("info", "Phase-2 complete: balance credited", {
+  log("info", "PAYMENT_CREDITED — Phase-2 complete", {
     cid, uid: invoice.uid, userId: invoice.userId,
     amount: invoice.amount, newBalance,
   });
 
   // ── Notify user ────────────────────────────────────────────────────────────
   if (bot) {
+    const trackingLine = invoice.trackingCode
+      ? `🔢 <b>کد پیگیری:</b> <code>${invoice.trackingCode}</code>\n`
+      : "";
+
     const msg =
       `✅ <b>پرداخت شما تأیید شد!</b>\n\n` +
       `🧾 <b>شناسه فاکتور:</b> <code>${invoice.uid}</code>\n` +
-      `💰 <b>مبلغ پرداختی:</b> <code>${fmtAmount}</code> تومان\n` +
+      trackingLine +
+      `💰 <b>مبلغ شارژ:</b> <code>${fmtAmount}</code> تومان\n` +
       `💳 <b>موجودی جدید:</b> <code>${fmtBalance}</code> تومان\n\n` +
       `🎉 <b>موجودی کیف پول شارژ شد. می‌توانید سرویس خود را خریداری کنید.</b>`;
 

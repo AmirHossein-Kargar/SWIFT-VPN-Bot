@@ -1,12 +1,19 @@
 /**
  * payHoosh
  * --------
- * Bot payment flow for HooshPay.
+ * Bot payment flow for HooshPay card-to-card.
  *
- * Guards added:
- *  - Session is set to "creating_hoosh_invoice" BEFORE the API call so a
- *    second message from the same user cannot trigger a second invoice creation.
- *  - Step is cleared to null on any exit path so the user is never stuck.
+ * Flow:
+ *   1. User selects "پرداخت آنلاین (HooshPay)"
+ *   2. User enters amount (validated: 10,000–50,000,000 Toman with commas)
+ *   3. Invoice created via HooshPay API → stored in MongoDB
+ *   4. User sees: amount, fee, payable_amount, card info, payment link
+ *   5. User pays → presses "پرداخت کردم" → verifyHooshPayment
+ *
+ * Guards:
+ *   - Session set to "creating_hoosh_invoice" BEFORE the API call so a
+ *     second message from the same user cannot trigger a second invoice.
+ *   - Step cleared on any exit path so the user is never stuck.
  */
 import { getSession, setSession } from "../config/sessionStore.js";
 import validateWithCommas from "../utils/validationAmount.js";
@@ -26,6 +33,7 @@ export async function payHoosh(bot, query, session) {
       `🔻 <b>محدودیت مبلغ:</b>\n` +
       `▫️ حداقل: <code>10,000 تومان</code>\n` +
       `▫️ حداکثر: <code>50,000,000 تومان</code>\n\n` +
+      `ℹ️ <b>کارمزد درگاه:</b> ۲۰٪ (روی مبلغ پرداختی شما اعمال می‌شود)\n\n` +
       `✍️ <i>برای ادامه، مبلغ را به صورت صحیح ارسال کنید.</i>`,
       {
         chat_id: chatId,
@@ -65,7 +73,6 @@ export async function handleHooshAmount(bot, msg, session) {
   ];
 
   // ── Guard: block re-entrant invoice creation ──────────────────────────────
-  // If we're already creating an invoice for this user, ignore the duplicate message.
   if (session?.step === "creating_hoosh_invoice") {
     try {
       await bot.editMessageText(
@@ -125,7 +132,6 @@ export async function handleHooshAmount(bot, msg, session) {
     try {
       await bot.editMessageText(
         `❌ <b>خطا در ایجاد فاکتور پرداخت</b>\n\n` +
-        `<code>${err.message}</code>\n\n` +
         `لطفاً دوباره تلاش کنید یا از روش دیگری استفاده کنید.`,
         {
           chat_id: chatId,
@@ -151,15 +157,51 @@ export async function handleHooshAmount(bot, msg, session) {
     messageId,
   });
 
-  // Send payment link
+  // ── Build payment info message with fee transparency ──────────────────────
+  const fmtAmount = amount.toLocaleString("en-US");
+  const fmtPayable = invoice.payableAmount
+    ? Number(invoice.payableAmount).toLocaleString("en-US")
+    : fmtAmount;
+  const fmtFee = invoice.feeAmount
+    ? Number(invoice.feeAmount).toLocaleString("en-US")
+    : null;
+  const fmtMerchant = invoice.merchantCredit
+    ? Number(invoice.merchantCredit).toLocaleString("en-US")
+    : fmtAmount;
+
+  let cardInfo = "";
+  if (invoice.cardNumber) {
+    cardInfo =
+      `\n💳 <b>شماره کارت مقصد:</b> <code>${invoice.cardNumber}</code>\n`;
+    if (invoice.cardHolder) {
+      cardInfo += `👤 <b>نام دارنده:</b> ${invoice.cardHolder}\n`;
+    }
+    if (invoice.cardBank) {
+      cardInfo += `🏦 <b>بانک:</b> ${invoice.cardBank}\n`;
+    }
+    cardInfo += `\n⚠️ <i>مبلغ دقیق <code>${fmtPayable}</code> تومان را به کارت بالا واریز کنید.</i>\n\n`;
+  }
+
+  const feeLine = fmtFee
+    ? `💸 <b>کارمزد درگاه:</b> <code>${fmtFee}</code> تومان (${invoice.feePercent ?? 20}%)\n` +
+      `💰 <b>مبلغ قابل پرداخت:</b> <code>${fmtPayable}</code> تومان\n` +
+      `💳 <b>شارژ کیف پول:</b> <code>${fmtMerchant}</code> تومان\n`
+    : `💰 <b>مبلغ قابل پرداخت:</b> <code>${fmtPayable}</code> تومان\n`;
+
+  const expiryLine = invoice.expiresAt
+    ? `⏱ <b>مهلت پرداخت:</b> <code>${new Date(invoice.expiresAt).toLocaleString("fa-IR")}</code>\n`
+    : `⏱ این فاکتور به مدت <b>۳۰ دقیقه</b> معتبر است.\n`;
+
   try {
     await bot.editMessageText(
       `✅ <b>فاکتور پرداخت ایجاد شد</b>\n\n` +
       `🧾 <b>شناسه فاکتور:</b> <code>${invoice.uid}</code>\n` +
-      `💰 <b>مبلغ:</b> <code>${amount.toLocaleString()}</code> تومان\n\n` +
-      `👇 <b>برای پرداخت روی دکمه زیر کلیک کنید:</b>\n\n` +
-      `پس از پرداخت، دکمه <b>«پرداخت کردم»</b> را بزنید تا موجودی شما بلافاصله اضافه شود.\n\n` +
-      `⏱ این فاکتور به مدت <b>۳۰ دقیقه</b> معتبر است.`,
+      `💰 <b>مبلغ درخواستی:</b> <code>${fmtAmount}</code> تومان\n` +
+      feeLine +
+      cardInfo +
+      `\n👇 <b>برای پرداخت روی دکمه زیر کلیک کنید:</b>\n` +
+      expiryLine +
+      `\nپس از پرداخت، دکمه <b>«پرداخت کردم»</b> را بزنید تا موجودی شما بلافاصله اضافه شود.`,
       {
         chat_id: chatId,
         message_id: messageId,

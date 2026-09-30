@@ -5,30 +5,38 @@ import mongoose from "mongoose";
  * ---------------
  * Full lifecycle of a HooshPay payment with two-phase write tracking.
  *
+ * Official statuses (per https://hooshpay.xyz/developers):
+ *   pending   — awaiting payment
+ *   paid      — paid and confirmed
+ *   expired   — payment deadline passed
+ *   cancelled — cancelled by merchant or user
+ *   failed    — payment failed
+ *
+ * Internal-only status:
+ *   reversed  — refund/chargeback detected via webhook
+ *
  * Allowed state transitions (enforced by pre-save hook):
- *   pending  → paid | expired | failed | reversed
- *   paid     → reversed                              (refund only)
- *   expired  → (terminal — no transitions allowed)
- *   failed   → (terminal — no transitions allowed)
- *   reversed → (terminal — no transitions allowed)
+ *   pending   → paid | expired | cancelled | failed | reversed
+ *   paid      → reversed
+ *   expired   → (terminal)
+ *   cancelled → (terminal)
+ *   failed    → (terminal)
+ *   reversed  → (terminal)
  *
  * Phase tracking:
- *   fulfilled      — Phase-1 lock (set atomically by findOneAndUpdate)
+ *   fulfilled       — Phase-1 lock (set atomically by findOneAndUpdate)
  *   balanceCredited — Phase-2 completion (set after User.balance incremented)
- *
- * Compound indexes optimise the two most-frequent query patterns:
- *   - Recovery cron: { fulfilled, balanceCredited, status }
- *   - Expiry cron:   { status, createdAt }
  */
 
-const TERMINAL_STATES = new Set(["expired", "failed", "reversed"]);
+const TERMINAL_STATES = new Set(["expired", "cancelled", "failed", "reversed"]);
 
 const ALLOWED_TRANSITIONS = {
-  pending:  new Set(["paid", "expired", "failed", "reversed"]),
-  paid:     new Set(["reversed"]),
-  expired:  new Set(),
-  failed:   new Set(),
-  reversed: new Set(),
+  pending:   new Set(["paid", "expired", "cancelled", "failed", "reversed"]),
+  paid:      new Set(["reversed"]),
+  expired:   new Set(),
+  cancelled:  new Set(),
+  failed:    new Set(),
+  reversed:  new Set(),
 };
 
 const hooshPayInvoiceSchema = new mongoose.Schema({
@@ -36,21 +44,40 @@ const hooshPayInvoiceSchema = new mongoose.Schema({
   orderId:    { type: String, required: true, unique: true },
   userId:     { type: Number, required: true },
   amount:     { type: Number, required: true },
+
+  // Fee / payable fields from HooshPay API response
+  feeMode:       { type: String, enum: ["seller", "buyer", "split"], default: "buyer" },
+  feePercent:    { type: Number, default: null },
+  feeAmount:     { type: Number, default: null },
+  payableAmount: { type: Number, default: null },
+  merchantCredit:{ type: Number, default: null },
+
+  // Card info from HooshPay (for card-to-card display)
+  cardNumber: { type: String, default: null },
+  cardHolder: { type: String, default: null },
+  cardBank:   { type: String, default: null },
+
   paymentUrl: { type: String, required: true },
+
+  // Expiry from HooshPay API
+  expiresAt: { type: Date, default: null },
 
   status: {
     type: String,
-    enum: ["pending", "paid", "expired", "failed", "reversed"],
+    enum: ["pending", "paid", "expired", "cancelled", "failed", "reversed"],
     default: "pending",
   },
+
+  // Tracking code returned by verify endpoint
+  trackingCode: { type: String, default: null },
 
   // Phase-1 lock
   fulfilled:    { type: Boolean, default: false },
   fulfilledAt:  { type: Date, default: null },
 
   // Phase-2 completion
-  balanceCredited:    { type: Boolean, default: false },
-  balanceCreditedAt:  { type: Date, default: null },
+  balanceCredited:   { type: Boolean, default: false },
+  balanceCreditedAt: { type: Date, default: null },
 
   createdAt: { type: Date, default: Date.now },
   paidAt:    { type: Date, default: null },

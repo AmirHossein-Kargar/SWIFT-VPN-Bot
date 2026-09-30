@@ -38,3 +38,19 @@ WIZARD_API_URL=https://robot.wizardxray.shop/bot/api/v1
 REDIS_HOST=your_redis_host
 REDIS_PORT=your_redis_port
 REDIS_PASSWORD=your_redis_password
+
+# HooshPay Card-to-Card Payment Gateway
+HOOSHPAY_API_KEY=your_hooshpay_api_key
+HOOSHPAY_WEBHOOK_SECRET=your_hooshpay_webhook_secret
+WEBHOOK_BASE_URL=https://your-server-domain.com
+PORT=3000
+```
+
+### HooshPay Environment Variables
+
+| Variable | Description |
+|---|---|
+| `HOOSHPAY_API_KEY` | Your HooshPay API key (from the HooshPay dashboard → Development). Format: `hp_live_xxx` |
+| `HOOSHPAY_WEBHOOK_SECRET` | Your HooshPay webhook secret used for HMAC-SHA256 signature verification |
+| `WEBHOOK_BASE_URL` | Your server's public HTTPS URL (e.g., `https://bot.example.com`). The webhook endpoint is at `/api/hooshpay/webhook` |
+| `PORT` | Express server port (default: 3000) |

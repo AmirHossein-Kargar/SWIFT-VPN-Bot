@@ -28,27 +28,37 @@ export async function createHooshInvoice({ userId, amount, description = "VPN wa
   const callbackUrl = `${webhookBase}/api/hooshpay/webhook`;
 
   // Call HooshPay API — throws on network / auth errors (caller handles)
-  const apiResponse = await apiCreateInvoice({
+  const apiData = await apiCreateInvoice({
     order_id: orderId,
     amount,
     callback_url: callbackUrl,
+    fee_mode: "buyer",
     description,
   });
 
   // Defensive: ensure we got what we need
-  if (!apiResponse?.uid || !apiResponse?.payment_url) {
+  if (!apiData?.uid || !apiData?.payment_url) {
     throw new Error(
-      `HooshPay API returned unexpected response: ${JSON.stringify(apiResponse)}`
+      `HooshPay API returned unexpected response: ${JSON.stringify(apiData)}`
     );
   }
 
-  // Persist to DB
+  // Persist to DB with all fields from the API response
   const doc = await HooshPayInvoice.create({
-    uid: apiResponse.uid,
+    uid: apiData.uid,
     orderId,
     userId,
-    amount,
-    paymentUrl: apiResponse.payment_url,
+    amount: apiData.amount ?? amount,
+    feeMode: apiData.fee_mode ?? "buyer",
+    feePercent: apiData.fee_percent ?? null,
+    feeAmount: apiData.fee_amount ?? null,
+    payableAmount: apiData.payable_amount ?? null,
+    merchantCredit: apiData.merchant_credit ?? null,
+    cardNumber: apiData?.card?.card_number ?? null,
+    cardHolder: apiData?.card?.holder_name ?? null,
+    cardBank: apiData?.card?.bank_name ?? null,
+    paymentUrl: apiData.payment_url,
+    expiresAt: apiData.expires_at ? new Date(apiData.expires_at) : null,
     status: "pending",
   });
 

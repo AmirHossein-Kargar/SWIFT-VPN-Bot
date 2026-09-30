@@ -14,14 +14,18 @@
  *      → calls fulfillHooshOrder which re-runs Phase 2 atomically
  *   B) Stale pending invoices older than EXPIRY_MINUTES
  *      → marks as "expired"
+ *   C) Reconciliation: pending invoices that may have been paid but webhook missed
+ *      → queries HooshPay verify API for pending invoices older than RECONCILE_MINUTES
  */
 import { randomUUID } from "crypto";
 import HooshPayInvoice from "../../models/HooshPayInvoice.js";
 import { fulfillHooshOrder } from "./fulfillHooshOrder.js";
 import { acquireCronLock } from "./verifyLock.js";
+import { verifyInvoice as apiVerify } from "./hooshpayClient.js";
 
 const INTERVAL_MS     = 5 * 60 * 1000;   // 5 minutes
 const EXPIRY_MINUTES  = 35;
+const RECONCILE_MINUTES = 10;             // after 10 min, check pending invoices with HooshPay API
 const BATCH_SIZE      = 50;
 const CRON_JOB_NAME   = "hooshpay-recovery";
 
@@ -51,13 +55,12 @@ async function _runCycle(bot) {
 
   try {
     await _recoverStuckInvoices(bot, cycleId);
+    await _reconcilePendingInvoices(bot, cycleId);
     await _expireStaleInvoices(cycleId);
     log("info", "Cron cycle complete", { cycleId });
   } catch (err) {
     log("error", "Cron cycle error", { cycleId, error: err.message });
   }
-  // Lock auto-expires after 270 s — no explicit release needed
-  // (releasing early could allow another worker to immediately re-run)
 }
 
 async function _recoverStuckInvoices(bot, cycleId) {
@@ -76,11 +79,56 @@ async function _recoverStuckInvoices(bot, cycleId) {
   for (const inv of stuck) {
     const cid = randomUUID();
     try {
-      // fulfillHooshOrder._creditBalance uses its own atomic Phase-2 guard
-      // so two concurrent workers calling this for the same invoice is safe.
       await fulfillHooshOrder({ invoice: inv, bot, chatId: inv.userId, correlationId: cid });
     } catch (err) {
       log("error", "Recovery failed for invoice", { cycleId, cid, uid: inv.uid, error: err.message });
+    }
+  }
+}
+
+/**
+ * Reconciliation: for pending invoices older than RECONCILE_MINUTES,
+ * query the HooshPay verify API to check if the payment was actually made
+ * but the webhook was missed.
+ */
+async function _reconcilePendingInvoices(bot, cycleId) {
+  const cutoff = new Date(Date.now() - RECONCILE_MINUTES * 60 * 1000);
+  const pending = await HooshPayInvoice.find({
+    status: "pending",
+    createdAt: { $lt: cutoff },
+    fulfilled: false,
+  })
+    .limit(BATCH_SIZE)
+    .lean();
+
+  if (pending.length === 0) return;
+
+  log("info", `Reconciling ${pending.length} pending invoice(s) with HooshPay API`, { cycleId });
+
+  for (const inv of pending) {
+    const cid = randomUUID();
+    try {
+      const verifyResult = await apiVerify(inv.uid);
+      const isPaid = verifyResult?.paid === true || verifyResult?.status === "paid";
+
+      if (isPaid) {
+        log("info", "PAYMENT_RECONCILIATION_STARTED — webhook missed but payment confirmed", {
+          cycleId, cid, uid: inv.uid,
+        });
+
+        // Store tracking code if returned
+        if (verifyResult?.data?.tracking_code) {
+          await HooshPayInvoice.findByIdAndUpdate(inv._id, {
+            $set: { trackingCode: verifyResult.data.tracking_code },
+          });
+        }
+
+        await fulfillHooshOrder({ invoice: inv, bot, chatId: inv.userId, correlationId: cid });
+      }
+    } catch (err) {
+      log("warn", "Reconciliation API call failed for invoice", {
+        cycleId, cid, uid: inv.uid, error: err.message,
+      });
     }
   }
 }

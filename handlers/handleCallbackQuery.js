@@ -159,6 +159,27 @@ const handleCallbackQuery = async (bot, query) => {
       return;
     }
 
+    // ── NEW: cancelled invoice ────────────────────────────────────────────
+    if (result.cancelled) {
+      await bot.editMessageText(
+        "❌ <b>این فاکتور لغو شده است.</b>\n\n" +
+        "لطفاً یک فاکتور جدید ایجاد کنید.",
+        {
+          chat_id: chatId,
+          message_id: messageId,
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "🔄 ایجاد فاکتور جدید", callback_data: "pay_hoosh" }],
+              [{ text: "🏠 بازگشت به خانه", callback_data: "back_to_home" }],
+            ],
+          },
+        }
+      );
+      await clearSession(chatId);
+      return;
+    }
+
     if (result.notPaid) {
       const inv = await HooshPayInvoice.findOne({ uid });
       const paymentUrl = inv?.paymentUrl;
