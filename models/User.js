@@ -20,4 +20,13 @@ const userSchema = new mongoose.Schema({
   isBanned: { type: Boolean, default: false },
 });
 
+// ── Indexes ───────────────────────────────────────────────────────────────────
+// telegramId already carries a unique index from `unique: true` above; it backs
+// every balance lookup and the atomic reserve/refund writes.
+//
+// Multikey index on the embedded services array. Service-ownership checks
+// (utils/auth.js + handleCallbackQuery) run on every user service action:
+//   User.findOne({ telegramId, "services.username": username })
+userSchema.index({ "services.username": 1 }, { name: "idx_user_service_username" });
+
 export default mongoose.model("User", userSchema);

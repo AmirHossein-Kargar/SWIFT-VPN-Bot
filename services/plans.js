@@ -22,5 +22,3 @@ export const plans90 = [
   { id: "plan90_700", name: "🔷 700 گیگ - 90 روزه", days: 90, gig: 700, price: 456000 },
   { id: "plan90_1000", name: "🔷 1 ترابایت - 90 روزه", days: 90, gig: 1000, price: 636000 },
 ];
-
-export default { plans30, plans60, plans90 };

@@ -156,9 +156,6 @@ const handleTrxWalletScan = async (bot, query, session) => {
       lines.push(
         `• اسکن خودکار: ${trxScanner.scanInterval ? "🟢 فعال" : "🔴 غیرفعال"}`
       );
-      lines.push(
-        `• حالت تست: ${trxScanner.testMode ? "🧪 فعال" : "🚀 غیرفعال"}`
-      );
     }
 
     const resultText = lines.join("\n");

@@ -28,7 +28,19 @@ const invoiceSchema = new mongoose.Schema({
     type: Date,
     default: Date.now,
   },
+  // Manual (card-to-card) confirmation audit trail.
+  // Set exactly once by the atomic admin claim in handleCallbackQuery.
+  confirmedAt: { type: Date, default: null },
+  confirmedBy: { type: String, default: null },
 });
+
+// The admin confirmation callback claims an invoice with a single atomic
+// findOneAndUpdate on { paymentId, status: { $ne: "confirmed" } } — paymentId
+// already carries a unique index (declared above), which makes that claim
+// race-free.
+
+// Receipt-approval queue and admin reports scan by status.
+invoiceSchema.index({ status: 1, createdAt: -1 }, { name: "idx_invoice_status_recent" });
 
 const invoice = mongoose.model("invoice", invoiceSchema);
 export default invoice;

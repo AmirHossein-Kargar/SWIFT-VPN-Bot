@@ -7,7 +7,7 @@
  * Generates a unique order_id using crypto.randomUUID() so there is zero
  * chance of collision even on restart.
  */
-import { randomUUID } from "crypto";
+import { randomUUID } from "node:crypto";
 import { createInvoice as apiCreateInvoice } from "./hooshpayClient.js";
 import HooshPayInvoice from "../../models/HooshPayInvoice.js";
 

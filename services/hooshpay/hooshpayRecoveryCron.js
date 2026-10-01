@@ -17,7 +17,7 @@
  *   C) Reconciliation: pending invoices that may have been paid but webhook missed
  *      → queries HooshPay verify API for pending invoices older than RECONCILE_MINUTES
  */
-import { randomUUID } from "crypto";
+import { randomUUID } from "node:crypto";
 import HooshPayInvoice from "../../models/HooshPayInvoice.js";
 import { fulfillHooshOrder } from "./fulfillHooshOrder.js";
 import { acquireCronLock } from "./verifyLock.js";
@@ -35,11 +35,24 @@ function log(level, message, meta = {}) {
   );
 }
 
+let _cronTimer = null;
+
 export function startHooshpayRecoveryCron(bot) {
   _runCycle(bot);
-  const timer = setInterval(() => _runCycle(bot), INTERVAL_MS);
-  if (timer.unref) timer.unref();
+  _cronTimer = setInterval(() => _runCycle(bot), INTERVAL_MS);
+  if (_cronTimer.unref) _cronTimer.unref();
   log("info", "Recovery + expiry cron started", { pid: process.pid });
+}
+
+/**
+ * Stop the recovery cron — used during graceful shutdown.
+ */
+export function stopHooshpayRecoveryCron() {
+  if (_cronTimer) {
+    clearInterval(_cronTimer);
+    _cronTimer = null;
+    log("info", "Recovery + expiry cron stopped", { pid: process.pid });
+  }
 }
 
 async function _runCycle(bot) {

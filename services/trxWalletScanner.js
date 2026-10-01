@@ -1,180 +1,200 @@
+/**
+ * TRXWalletScanner
+ * ----------------
+ * Polls TronScan for incoming TRX transfers to TRX_WALLET, matches them against
+ * unpaid CryptoInvoice documents, and credits the user's wallet.
+ *
+ * Concurrency & correctness model
+ * -------------------------------
+ *  • Single-instance: a Redis lock (`trx:scan:cron`, NX + TTL) means only one
+ *    worker scans at a time. It fails OPEN when Redis is unavailable — the
+ *    in-process `isScanning` guard still protects a single process, and the
+ *    atomic MongoDB claims below are the real safety net.
+ *
+ *  • Exactly-once crediting is enforced by two atomic single-document writes,
+ *    NOT by read-then-write:
+ *      Phase 1  { _id, status: "unpaid" }                      -> status: "paid"
+ *      Phase 2  { _id, status: "paid", balanceCredited: false } -> balanceCredited: true
+ *    A duplicate scan (or a second worker) loses the race and does nothing.
+ *
+ *  • One transaction settles at most one invoice: `transactionHash` is a sparse
+ *    unique index, so reusing a hash across invoices raises E11000 and is
+ *    treated as "already consumed". The scanner also stops after the first
+ *    successful match for a given transaction.
+ *
+ *  • Crash recovery: an invoice left at { status: "paid", balanceCredited:
+ *    false } is completed at the start of the next scan cycle.
+ *
+ * MongoDB is the authoritative source of financial truth; Redis is only a
+ * scheduling optimisation.
+ */
 import axios from "axios";
 import CryptoInvoice from "../models/CryptoInvoice.js";
 import { getSession } from "../config/sessionStore.js";
-import mongoose from "mongoose"; // Added for database connection check
+import mongoose from "mongoose";
+import redisClient from "../config/redisClient.js";
+
+const TRX_CRON_LOCK_KEY = "trx:scan:cron";
+const TRX_CRON_LOCK_TTL = 270; // 4.5 min — just under the 5-min scan interval
+const SCAN_INTERVAL_MS = 5 * 60 * 1000;
+const MATCH_TOLERANCE = 0.01; // 1% — covers rate drift between quote and payment
+const RECENT_TX_LIMIT = 20;
+const RECOVERY_BATCH_SIZE = 50;
+
+function log(level, message, meta = {}) {
+  console[level === "error" ? "error" : level === "warn" ? "warn" : "log"](
+    JSON.stringify({ ts: new Date().toISOString(), service: "trx-scanner", level, message, ...meta })
+  );
+}
 
 class TRXWalletScanner {
   constructor() {
     this.walletAddress = process.env.TRX_WALLET;
     this.scanInterval = null;
     this.isScanning = false;
-    this.testMode = false; // حالت تست
-    this.botInstance = null; // برای ارسال پیام به کاربران
-    this.scanCount = 0; // تعداد اسکن‌های انجام شده
-    this.lastScanTime = null; // زمان آخرین اسکن
-    this.startTime = Date.now(); // زمان شروع اسکنر
-    this.databaseConnected = false; // وضعیت اتصال دیتابیس
-    this.tronScanConnected = false; // وضعیت اتصال TronScan API
+    this.botInstance = null;
+    this.scanCount = 0;
+    this.lastScanTime = null;
+    this.startTime = Date.now();
+    this.databaseConnected = false;
+    this.tronScanConnected = false;
   }
 
-  // تنظیم instance bot برای ارسال پیام
   setBotInstance(bot) {
     this.botInstance = bot;
-    console.log("🤖 Bot instance set for TRX scanner");
   }
 
-  // فعال‌سازی حالت تست
-  enableTestMode() {
-    this.testMode = true;
-    console.log("🧪 Test mode enabled - Using mock data");
+  // ── Pause/stop controls ────────────────────────────────────────────────────
+  pause(client) {
+    if (client && client.pause) client.pause();
   }
 
-  // غیرفعال‌سازی حالت تست
-  disableTestMode() {
-    this.testMode = false;
-    console.log("🚀 Test mode disabled - Using real API");
+  resume(client) {
+    if (client && client.resume) client.resume();
   }
 
-  // بررسی وضعیت اتصال دیتابیس
+  // ── Connectivity checks ────────────────────────────────────────────────────
   async checkDatabaseConnection() {
     try {
-      if (mongoose.connection && mongoose.connection.readyState === 1) {
-        this.databaseConnected = true;
-        return true;
-      } else {
-        this.databaseConnected = false;
-        return false;
-      }
-    } catch (error) {
+      this.databaseConnected = mongoose.connection?.readyState === 1;
+    } catch {
       this.databaseConnected = false;
-      return false;
     }
+    return this.databaseConnected;
   }
 
-  // بررسی وضعیت اتصال TronScan API
   async checkTronScanConnection() {
     try {
-      // تست ساده با درخواست به API
-      const testUrl = `https://apilist.tronscanapi.com/api/account?address=${this.walletAddress}`;
-      const response = await axios.get(testUrl, { timeout: 10000 }); // 10 ثانیه timeout
-
-      if (response.status === 200) {
-        this.tronScanConnected = true;
-        return true;
-      } else {
-        this.tronScanConnected = false;
-        return false;
-      }
-    } catch (error) {
+      const res = await axios.get(
+        `https://apilist.tronscanapi.com/api/account?address=${this.walletAddress}`,
+        { timeout: 10000 }
+      );
+      this.tronScanConnected = res.status === 200;
+    } catch {
       this.tronScanConnected = false;
-      return false;
     }
+    return this.tronScanConnected;
   }
 
-  // شروع اسکن خودکار
+  // ── Scheduling ─────────────────────────────────────────────────────────────
   startAutoScan() {
     if (this.scanInterval) {
-      console.log("🔄 TRX wallet scanner is already running");
+      log("info", "TRX wallet scanner already running");
       return;
     }
 
-    console.log("🚀 Starting TRX wallet scanner...");
     this.scanInterval = setInterval(() => {
-      this.scanWallet();
-    }, 5 * 60 * 1000); // هر 5 دقیقه
+      this.scanWallet().catch((e) => log("error", "Unhandled scan error", { error: e.message }));
+    }, SCAN_INTERVAL_MS);
+    if (this.scanInterval.unref) this.scanInterval.unref();
 
-    // اجرای اولیه
-    this.scanWallet();
+    // Initial run (not awaited — startAutoScan stays synchronous for callers)
+    this.scanWallet().catch((e) => log("error", "Unhandled scan error", { error: e.message }));
   }
 
-  // توقف اسکن خودکار
   stopAutoScan() {
     if (this.scanInterval) {
       clearInterval(this.scanInterval);
       this.scanInterval = null;
-      console.log("⏹️ TRX wallet scanner stopped");
     }
   }
 
-  // اسکن کیف پول
+  // ── Main scan ──────────────────────────────────────────────────────────────
+  /**
+   * @returns {Promise<object>} summary object (also consumed by the admin panel)
+   */
   async scanWallet() {
+    const emptySummary = {
+      totalTransactions: 0,
+      processedTransactions: 0,
+      matchedInvoices: 0,
+      confirmedInvoices: 0,
+      rejectedInvoices: 0,
+      pendingMatches: 0,
+      recoveredInvoices: 0,
+      matchedInvoiceDetails: [],
+      recentTransactions: [],
+      totalBalance: 0,
+    };
+
     if (this.isScanning) {
-      console.log("⏳ TRX wallet scan already in progress, skipping...");
-      return;
+      log("info", "Scan already in progress — skipping");
+      return emptySummary;
+    }
+    if (!this.walletAddress) {
+      log("error", "TRX_WALLET is not configured — scanner disabled");
+      return { ...emptySummary, error: "TRX_WALLET not configured" };
+    }
+
+    // Distributed lock — only one instance scans at a time.
+    let redisLockAcquired = false;
+    try {
+      const lockResult = await redisClient.set(TRX_CRON_LOCK_KEY, process.pid.toString(), {
+        NX: true,
+        EX: TRX_CRON_LOCK_TTL,
+      });
+      if (lockResult !== "OK") {
+        log("info", "Scan lock held by another instance — skipping");
+        return emptySummary;
+      }
+      redisLockAcquired = true;
+    } catch (err) {
+      // Redis unavailable — fail open; atomic Mongo claims keep us safe.
+      log("warn", "Redis lock unavailable (fail-open)", { error: err.message });
     }
 
     this.isScanning = true;
-    this.scanCount++;
+    this.scanCount += 1;
     this.lastScanTime = Date.now();
 
-    // بررسی وضعیت اتصال دیتابیس و TronScan API
-    await this.checkDatabaseConnection();
-    await this.checkTronScanConnection();
-
-    console.log("🔍 Scanning TRX wallet for new transactions...");
-
     try {
-      // دریافت موجودی ولت
-      const walletBalance = this.testMode
-        ? 100.0
-        : await this.fetchWalletBalance();
+      await this.checkDatabaseConnection();
+      await this.checkTronScanConnection();
 
-      // دریافت تراکنش‌ها (واقعی یا تست)
-      const transactions = this.testMode
-        ? await this.getMockTransactions()
-        : await this.fetchTransactions();
-
-      if (!transactions || transactions.length === 0) {
-        console.log("📭 No transactions found");
-        this.isScanning = false;
-        return {
-          totalTransactions: 0,
-          processedTransactions: 0,
-          matchedInvoices: 0,
-          confirmedInvoices: 0,
-          rejectedInvoices: 0,
-          pendingMatches: 0,
-          matchedInvoiceDetails: [],
-          recentTransactions: [],
-          totalBalance: walletBalance,
-        };
+      if (!this.databaseConnected) {
+        log("warn", "Database not connected — aborting scan");
+        return emptySummary;
       }
 
-      console.log(`📊 Found ${transactions.length} incoming TRX transactions`);
+      // Finish anything a previous crash left half-done.
+      const recoveredInvoices = await this.recoverStuckInvoices();
 
-      // نمایش جزئیات تراکنش‌ها
-      if (transactions.length > 0) {
-        console.log("📋 Transaction details:");
-        transactions.forEach((tx, index) => {
-          const amount = parseFloat(tx.amount) / 1000000;
-          const status =
-            tx.confirmed && tx.contractRet === "SUCCESS"
-              ? "✅ Confirmed"
-              : tx.revert
-              ? "❌ Reverted"
-              : "⏳ Pending";
-          console.log(
-            `  ${
-              index + 1
-            }. ${amount} TRX - ${status} - Hash: ${tx.hash.substring(0, 10)}...`
-          );
-        });
-      }
+      const walletBalance = await this.fetchWalletBalance();
+      const transactions = await this.fetchTransactions();
 
-      // آمار خلاصه
       const summary = {
+        ...emptySummary,
         totalTransactions: transactions.length,
-        processedTransactions: 0,
-        matchedInvoices: 0,
-        confirmedInvoices: 0,
-        rejectedInvoices: 0,
-        pendingMatches: 0,
-        matchedInvoiceDetails: [], // {invoiceId, amount, cryptoAmount}
-        recentTransactions: transactions, // تراکنش‌های اخیر
-        totalBalance: walletBalance, // موجودی کل ولت
+        recentTransactions: transactions,
+        totalBalance: walletBalance,
+        recoveredInvoices,
       };
 
-      // بررسی هر تراکنش
+      if (transactions.length === 0) {
+        log("info", "No incoming TRX transactions found");
+        return summary;
+      }
+
       for (const tx of transactions) {
         const result = await this.processTransaction(tx);
         if (!result) continue;
@@ -188,505 +208,442 @@ class TRXWalletScanner {
         }
       }
 
+      log("info", "Scan complete", {
+        scanCount: this.scanCount,
+        transactions: summary.totalTransactions,
+        confirmed: summary.confirmedInvoices,
+        rejected: summary.rejectedInvoices,
+        recovered: summary.recoveredInvoices,
+      });
+
       return summary;
     } catch (error) {
-      console.error("❌ Error scanning TRX wallet:", error.message);
-      return {
-        totalTransactions: 0,
-        processedTransactions: 0,
-        matchedInvoices: 0,
-        confirmedInvoices: 0,
-        rejectedInvoices: 0,
-        pendingMatches: 0,
-        matchedInvoiceDetails: [],
-        recentTransactions: [],
-        totalBalance: 0,
-        error: error.message,
-      };
+      log("error", "Scan failed", { error: error.message });
+      return { ...emptySummary, error: error.message };
     } finally {
       this.isScanning = false;
+      if (redisLockAcquired) {
+        try {
+          await redisClient.del(TRX_CRON_LOCK_KEY);
+        } catch {
+          /* TTL will clean up */
+        }
+      }
     }
   }
 
-  // دریافت تراکنش‌های Mock برای تست
-  async getMockTransactions() {
-    console.log("🧪 Using mock transactions for testing...");
-
-    // ایجاد تراکنش‌های تست با مبالغ مختلف
-    const mockTransactions = [
-      {
-        hash: "mock_hash_001",
-        contractType: 1,
-        tokenInfo: { tokenAbbr: "trx" },
-        toAddress: this.walletAddress,
-        amount: "3043114", // 3.043114 TRX (مطابق با فاکتور تست)
-        confirmed: true,
-        contractRet: "SUCCESS",
-        revert: false,
-      },
-      {
-        hash: "mock_hash_002",
-        contractType: 1,
-        tokenInfo: { tokenAbbr: "trx" },
-        toAddress: this.walletAddress,
-        amount: "5000000", // 5.0 TRX (مبلغ جدید)
-        confirmed: true,
-        contractRet: "SUCCESS",
-        revert: false,
-      },
-      {
-        hash: "mock_hash_003",
-        contractType: 1,
-        tokenInfo: { tokenAbbr: "trx" },
-        toAddress: this.walletAddress,
-        amount: "1000000", // 1.0 TRX (مبلغ کوچک)
-        confirmed: false,
-        contractRet: "PENDING",
-        revert: false,
-      },
-    ];
-
-    return mockTransactions;
-  }
-
-  // دریافت موجودی ولت از TronScan API
+  // ── TronScan reads ─────────────────────────────────────────────────────────
   async fetchWalletBalance() {
     try {
-      const url = `https://apilist.tronscanapi.com/api/account/tokens`;
-      const params = {
-        address: this.walletAddress,
-        start: 0,
-        limit: 100,
-      };
-
-      const response = await axios.get(url, { params });
-
-      if (response.data && response.data.data) {
-        // پیدا کردن TRX balance
-        const trxToken = response.data.data.find(
-          (token) => token.tokenAbbr === "trx" || token.tokenId === "_"
-        );
-
-        if (trxToken) {
-          const balance =
-            parseFloat(trxToken.balance) /
-            Math.pow(10, trxToken.tokenDecimal || 6);
-          return balance;
-        }
+      const response = await axios.get("https://apilist.tronscanapi.com/api/account/tokens", {
+        params: { address: this.walletAddress, start: 0, limit: 100 },
+      });
+      const trxToken = response.data?.data?.find(
+        (t) => t.tokenAbbr === "trx" || t.tokenId === "_"
+      );
+      if (trxToken) {
+        return parseFloat(trxToken.balance) / Math.pow(10, trxToken.tokenDecimal || 6);
       }
 
-      // Fallback: try to get balance from account info
-      try {
-        const accountUrl = `https://apilist.tronscanapi.com/api/account?address=${this.walletAddress}`;
-        const accountResponse = await axios.get(accountUrl);
-
-        if (accountResponse.data && accountResponse.data.balance) {
-          const fallbackBalance =
-            parseFloat(accountResponse.data.balance) / 1000000;
-          return fallbackBalance;
-        }
-      } catch (fallbackError) {
-        // Fallback failed, continue to default
+      const accountResponse = await axios.get(
+        `https://apilist.tronscanapi.com/api/account?address=${this.walletAddress}`
+      );
+      if (accountResponse.data?.balance) {
+        return parseFloat(accountResponse.data.balance) / 1e6;
       }
-
       return 0;
-    } catch (error) {
+    } catch {
       return 0;
     }
   }
 
-  // دریافت تراکنش‌ها از TronScan API
   async fetchTransactions() {
     try {
-      const url = `https://apilist.tronscanapi.com/api/transaction`;
-      const params = {
-        sort: "-timestamp",
-        count: true,
-        limit: 20, // کاهش محدودیت برای نمایش تعداد واقعی تراکنش‌ها
-        start: 0,
-        address: this.walletAddress,
-      };
+      const response = await axios.get("https://apilist.tronscanapi.com/api/transaction", {
+        params: {
+          sort: "-timestamp",
+          count: true,
+          limit: RECENT_TX_LIMIT,
+          start: 0,
+          address: this.walletAddress,
+        },
+      });
 
-      const response = await axios.get(url, { params });
+      const list = response.data?.data;
+      if (!Array.isArray(list)) return [];
 
-      if (response.data && response.data.data) {
-        // فیلتر کردن فقط تراکنش‌های ورودی (incoming) به کیف پول
-        const incomingTransactions = response.data.data.filter(
-          (tx) =>
-            tx.toAddress === this.walletAddress &&
-            tx.contractType === 1 &&
-            tx.tokenInfo?.tokenAbbr === "trx"
-        );
-
-        return incomingTransactions;
-      }
-
-      return [];
+      return list.filter(
+        (tx) =>
+          tx.toAddress === this.walletAddress &&
+          tx.contractType === 1 &&
+          tx.tokenInfo?.tokenAbbr === "trx"
+      );
     } catch (error) {
-      console.error("❌ Error fetching transactions:", error.message);
+      log("error", "Failed to fetch transactions", { error: error.message });
       return [];
     }
   }
 
-  // پردازش یک تراکنش
+  // ── Transaction processing ─────────────────────────────────────────────────
   async processTransaction(tx) {
+    const none = {
+      processed: false,
+      matchedCount: 0,
+      confirmedCount: 0,
+      rejectedCount: 0,
+      pendingCount: 0,
+      matchedInvoiceDetails: [],
+    };
+
     try {
-      // بررسی اینکه آیا این تراکنش TRX است
-      if (tx.contractType !== 1 || tx.tokenInfo?.tokenAbbr !== "trx") {
-        return {
-          processed: false,
-          matchedCount: 0,
-          confirmedCount: 0,
-          rejectedCount: 0,
-          pendingCount: 0,
-          matchedInvoiceDetails: [],
-        }; // فقط تراکنش‌های TRX
+      if (tx.contractType !== 1 || tx.tokenInfo?.tokenAbbr !== "trx") return none;
+      if (tx.toAddress !== this.walletAddress) return none;
+
+      const txAmount = parseFloat(tx.amount) / 1e6;
+      const invoices = await this.findMatchingInvoices(txAmount);
+
+      if (invoices.length === 0) {
+        return { ...none, processed: true };
       }
 
-      // بررسی اینکه آیا تراکنش به کیف پول ما ارسال شده
-      if (tx.toAddress !== this.walletAddress) {
-        return {
-          processed: false,
-          matchedCount: 0,
-          confirmedCount: 0,
-          rejectedCount: 0,
-          pendingCount: 0,
-          matchedInvoiceDetails: [],
-        };
-      }
+      const isConfirmed = tx.confirmed && tx.contractRet === "SUCCESS" && !tx.revert;
 
-      // تبدیل مبلغ از string به number (TRX با 6 رقم اعشار)
-      const txAmount = parseFloat(tx.amount) / 1000000;
-
-      console.log(`💸 Found incoming TRX transaction: ${txAmount} TRX`);
-
-      // جستجوی فاکتورهای pending که با این مبلغ مطابقت دارند
-      const matchingInvoices = await this.findMatchingInvoices(txAmount);
-
-      if (matchingInvoices.length > 0) {
-        console.log(`✅ Found ${matchingInvoices.length} matching invoice(s)`);
-
-        for (const invoice of matchingInvoices) {
-          await this.processMatchedInvoice(invoice, tx);
+      // One on-chain transfer settles at most ONE invoice. Iterate and stop at
+      // the first invoice we can actually claim, so a single deposit can never
+      // clear several pending invoices.
+      for (const invoice of invoices) {
+        if (isConfirmed) {
+          const confirmed = await this.confirmInvoice(invoice, tx);
+          if (confirmed) {
+            return {
+              processed: true,
+              matchedCount: 1,
+              confirmedCount: 1,
+              rejectedCount: 0,
+              pendingCount: 0,
+              matchedInvoiceDetails: [
+                {
+                  invoiceId: invoice.invoiceId,
+                  amount: invoice.amount,
+                  cryptoAmount: invoice.cryptoAmount,
+                },
+              ],
+            };
+          }
+          // Lost the claim race (already processed, or hash already consumed) —
+          // try the next candidate.
+          continue;
         }
 
-        const confirmedCount =
-          tx.confirmed && tx.contractRet === "SUCCESS"
-            ? matchingInvoices.length
-            : 0;
-        const rejectedCount = tx.revert ? matchingInvoices.length : 0;
-        const pendingCount =
-          !confirmedCount && !rejectedCount ? matchingInvoices.length : 0;
+        if (tx.revert) {
+          const rejected = await this.rejectInvoice(invoice, tx);
+          if (rejected) {
+            return {
+              processed: true,
+              matchedCount: 1,
+              confirmedCount: 0,
+              rejectedCount: 1,
+              pendingCount: 0,
+              matchedInvoiceDetails: [],
+            };
+          }
+          continue;
+        }
 
+        // Still awaiting confirmation on-chain — report as pending, take no action.
+        log("info", "Transaction awaiting on-chain confirmation", { hash: tx.hash });
         return {
           processed: true,
-          matchedCount: matchingInvoices.length,
-          confirmedCount,
-          rejectedCount,
-          pendingCount,
-          matchedInvoiceDetails: matchingInvoices.map((inv) => ({
-            invoiceId: inv.invoiceId,
-            amount: inv.amount,
-            cryptoAmount: inv.cryptoAmount,
-          })),
-        };
-      } else {
-        console.log(`❌ No matching invoice found for amount: ${txAmount} TRX`);
-        return {
-          processed: true,
-          matchedCount: 0,
+          matchedCount: 1,
           confirmedCount: 0,
           rejectedCount: 0,
-          pendingCount: 0,
+          pendingCount: 1,
           matchedInvoiceDetails: [],
         };
       }
+
+      return { ...none, processed: true };
     } catch (error) {
-      console.error("❌ Error processing transaction:", error.message);
-      return {
-        processed: false,
-        matchedCount: 0,
-        confirmedCount: 0,
-        rejectedCount: 0,
-        pendingCount: 0,
-        matchedInvoiceDetails: [],
-      };
+      log("error", "Error processing transaction", { error: error.message });
+      return none;
     }
   }
 
-  // یافتن فاکتورهای مطابق
   async findMatchingInvoices(txAmount) {
+    if (mongoose.connection?.readyState !== 1) return [];
+
     try {
-      // بررسی اتصال دیتابیس
-      if (!mongoose.connection || mongoose.connection.readyState !== 1) {
-        console.log("⚠️ Database not connected, skipping invoice search");
-        return [];
-      }
-
-      // جستجوی فاکتورهای pending با مبلغ مشابه (با tolerance)
-      const tolerance = 0.01; // 1% tolerance
-
       const invoices = await CryptoInvoice.find({
         status: "unpaid",
         paymentType: "trx",
         currency: "TRX",
-      }).maxTimeMS(5000); // کاهش timeout به 5 ثانیه
-
-      console.log(
-        `🔍 Found ${invoices.length} unpaid TRX invoices in database`
-      );
+      }).maxTimeMS(5000);
 
       return invoices.filter((invoice) => {
-        const difference = Math.abs(invoice.cryptoAmount - txAmount);
-        const percentage = difference / invoice.cryptoAmount;
-        const isMatch = percentage <= tolerance;
-
-        if (isMatch) {
-          console.log(
-            `🎯 Match found: Invoice ${invoice.invoiceId} (${invoice.cryptoAmount} TRX) matches transaction (${txAmount} TRX)`
-          );
-        }
-
-        return isMatch;
+        if (!invoice.cryptoAmount) return false;
+        const percentage = Math.abs(invoice.cryptoAmount - txAmount) / invoice.cryptoAmount;
+        return percentage <= MATCH_TOLERANCE;
       });
     } catch (error) {
-      console.error("❌ Error finding matching invoices:", error.message);
+      log("error", "Failed to search matching invoices", { error: error.message });
       return [];
     }
   }
 
-  // پردازش فاکتور مطابق
-  async processMatchedInvoice(invoice, tx) {
-    try {
-      console.log(`🎯 Processing matched invoice: ${invoice.invoiceId}`);
-
-      // بررسی وضعیت تراکنش
-      if (tx.confirmed && tx.contractRet === "SUCCESS") {
-        // تایید فاکتور
-        await this.confirmInvoice(invoice, tx);
-      } else if (tx.revert) {
-        // رد فاکتور
-        await this.rejectInvoice(invoice, tx);
-      } else {
-        console.log(`⏳ Transaction ${tx.hash} is pending confirmation`);
-      }
-    } catch (error) {
-      console.error("❌ Error processing matched invoice:", error.message);
-    }
-  }
-
-  // تایید فاکتور
+  /**
+   * Phase 1 + Phase 2 for a matched invoice.
+   * @returns {Promise<boolean>} true when this call performed the fulfillment
+   */
   async confirmInvoice(invoice, tx) {
+    let claimed;
     try {
-      // به‌روزرسانی وضعیت فاکتور
-      await CryptoInvoice.findByIdAndUpdate(invoice._id, {
-        status: "paid",
-        // اضافه کردن اطلاعات تراکنش برای رکورد
-        transactionHash: tx.hash,
-        confirmedAt: new Date(),
-      });
-
-      console.log(`✅ Invoice ${invoice.invoiceId} confirmed successfully`);
-
-      // ارسال پیام تایید به کاربر
-      await this.sendPaymentConfirmation(invoice, tx);
-    } catch (error) {
-      console.error("❌ Error confirming invoice:", error.message);
-    }
-  }
-
-  // ارسال پیام تایید پرداخت به کاربر
-  async sendPaymentConfirmation(invoice, tx) {
-    try {
-      if (!this.botInstance) {
-        console.log("⚠️ Bot instance not available, skipping message send");
-        return;
-      }
-
-      const userId = invoice.userId;
-      const amount = invoice.amount;
-      const cryptoAmount = invoice.cryptoAmount;
-      const transactionHash = tx.hash;
-
-      // حذف پیام قبلی که شامل آدرس ولت بوده (اگر در session ذخیره شده)
-      const { getSession } = await import("../config/sessionStore.js");
-      const session = await getSession(userId);
-
-      if (session?.walletMessageId) {
-        try {
-          await this.botInstance.deleteMessage(userId, session.walletMessageId);
-          console.log(`🗑️ Deleted previous wallet message for user ${userId}`);
-        } catch (deleteError) {
-          console.log(
-            `⚠️ Could not delete previous wallet message: ${deleteError.message}`
-          );
-        }
-      }
-
-      const confirmationMessage = `🎉 <b>پرداخت شما تایید شد!</b>
-
-✅ <b>فاکتور:</b> <code>${invoice.invoiceId}</code>
-💰 <b>مبلغ:</b> <code>${amount.toLocaleString()}</code> تومان
-🪙 <b>مبلغ TRX:</b> <code>${cryptoAmount.toFixed(6)}</code> TRX
-🔗 <b>هش تراکنش:</b> <code>${transactionHash}</code>
-
-🎯 <b>وضعیت:</b> تایید شده
-⏰ <b>زمان تایید:</b> ${new Date().toLocaleString("fa-IR")}
-
-💳 <b>موجودی کیف پول شما شارژ شد.</b>
-
-🎊 <b>از اعتماد شما متشکریم!</b>`;
-
-      // ارسال پیام تایید
-      await this.botInstance.sendMessage(userId, confirmationMessage, {
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "🏠 بازگشت به منوی اصلی",
-                callback_data: "back_to_home",
-              },
-            ],
-          ],
-        },
-      });
-
-      console.log(`📱 Payment confirmation sent to user ${userId}`);
-
-      // شارژ کردن کیف پول کاربر
-      await this.creditUserWallet(invoice);
-    } catch (error) {
-      console.error("❌ Error sending payment confirmation:", error.message);
-    }
-  }
-
-  // شارژ کردن کیف پول کاربر
-  async creditUserWallet(invoice) {
-    try {
-      console.log(
-        `💳 Crediting wallet for user ${invoice.userId} with ${invoice.amount} Toman`
-      );
-
-      const User = (await import("../models/User.js")).default;
-
-      const updatedUser = await User.findOneAndUpdate(
-        { telegramId: invoice.userId.toString() },
+      claimed = await CryptoInvoice.findOneAndUpdate(
+        { _id: invoice._id, status: "unpaid" },
         {
-          $inc: {
-            balance: invoice.amount,
-            successfulPayments: 1,
+          $set: {
+            status: "paid",
+            transactionHash: tx.hash,
+            confirmedAt: new Date(),
           },
         },
         { new: true }
       );
-
-      if (updatedUser) {
-        console.log(
-          `✅ Wallet credited successfully for user ${invoice.userId}`
-        );
-        console.log(`💰 New balance: ${updatedUser.balance} Toman`);
-        console.log(
-          `📊 Total successful payments: ${updatedUser.successfulPayments}`
-        );
-      } else {
-        console.log(`⚠️ User ${invoice.userId} not found for wallet credit`);
+    } catch (err) {
+      if (err?.code === 11000) {
+        // The on-chain hash is already bound to another invoice.
+        log("warn", "Transaction hash already consumed — skipping invoice", {
+          invoiceId: invoice.invoiceId, hash: tx.hash,
+        });
+        return false;
       }
-    } catch (error) {
-      console.error("❌ Error crediting user wallet:", error.message);
+      log("error", "Failed to claim invoice", { invoiceId: invoice.invoiceId, error: err.message });
+      return false;
     }
+
+    if (!claimed) {
+      log("info", "Invoice already settled by another worker", { invoiceId: invoice.invoiceId });
+      return false;
+    }
+
+    // Phase 2 — credit exactly once, then notify.
+    const credited = await this.creditAndNotify(claimed, tx);
+    return credited;
   }
 
-  // رد فاکتور
   async rejectInvoice(invoice, tx) {
     try {
-      await CryptoInvoice.findByIdAndUpdate(invoice._id, {
-        status: "rejected",
-        transactionHash: tx.hash,
-        rejectedAt: new Date(),
-      });
-
-      console.log(
-        `❌ Invoice ${invoice.invoiceId} rejected due to transaction revert`
+      const claimed = await CryptoInvoice.findOneAndUpdate(
+        { _id: invoice._id, status: "unpaid" },
+        { $set: { status: "rejected", transactionHash: tx.hash, rejectedAt: new Date() } },
+        { new: true }
       );
+      if (!claimed) return false;
 
-      // ارسال پیام رد به کاربر
-      await this.sendPaymentRejection(invoice, tx);
-    } catch (error) {
-      console.error("❌ Error rejecting invoice:", error.message);
+      log("warn", "Invoice rejected (transaction reverted)", {
+        invoiceId: invoice.invoiceId, hash: tx.hash,
+      });
+      await this.sendPaymentRejection(claimed, tx);
+      return true;
+    } catch (err) {
+      if (err?.code === 11000) return false;
+      log("error", "Failed to reject invoice", { invoiceId: invoice.invoiceId, error: err.message });
+      return false;
     }
   }
 
-  // ارسال پیام رد پرداخت به کاربر
-  async sendPaymentRejection(invoice, tx) {
+  /**
+   * Phase 2: atomically mark balanceCredited, increment the wallet, then notify.
+   * Crediting happens BEFORE the notification so a user is never told "paid"
+   * for money that was not actually added.
+   */
+  async creditAndNotify(invoice, tx) {
+    const phase2 = await CryptoInvoice.findOneAndUpdate(
+      { _id: invoice._id, status: "paid", balanceCredited: false },
+      { $set: { balanceCredited: true, balanceCreditedAt: new Date() } },
+      { new: true }
+    );
+
+    if (!phase2) {
+      log("info", "Phase-2 already completed", { invoiceId: invoice.invoiceId });
+      return false;
+    }
+
+    let user;
     try {
-      if (!this.botInstance) {
-        console.log(
-          "⚠️ Bot instance not available, skipping rejection message"
-        );
-        return;
+      const User = (await import("../models/User.js")).default;
+      user = await User.findOneAndUpdate(
+        { telegramId: String(invoice.userId) },
+        { $inc: { balance: invoice.amount, successfulPayments: 1 } },
+        { new: true }
+      );
+    } catch (err) {
+      // Roll the flag back so the next scan retries.
+      await CryptoInvoice.findOneAndUpdate(
+        { _id: invoice._id, balanceCredited: true },
+        { $set: { balanceCredited: false, balanceCreditedAt: null } }
+      ).catch(() => {});
+      log("error", "Wallet credit failed — Phase-2 flag rolled back", {
+        invoiceId: invoice.invoiceId, error: err.message,
+      });
+      await this.alertAdmin(
+        `❌ <b>شارژ کیف پول ناموفق</b>\n` +
+          `🧾 فاکتور: <code>${invoice.invoiceId}</code>\n` +
+          `👤 کاربر: <code>${invoice.userId}</code>\n` +
+          `💰 مبلغ: <code>${invoice.amount.toLocaleString()}</code> تومان\n` +
+          `خطا: <code>${err.message}</code>`
+      );
+      return false;
+    }
+
+    if (!user) {
+      log("warn", "User not found for wallet credit", {
+        invoiceId: invoice.invoiceId, userId: invoice.userId,
+      });
+      await this.alertAdmin(
+        `⚠️ <b>کاربر یافت نشد — موجودی اضافه نشد</b>\n` +
+          `🧾 فاکتور: <code>${invoice.invoiceId}</code>\n` +
+          `👤 کاربر: <code>${invoice.userId}</code>\n` +
+          `💰 مبلغ: <code>${invoice.amount.toLocaleString()}</code> تومان`
+      );
+    }
+
+    log("info", "WALLET_CREDITED", {
+      invoiceId: invoice.invoiceId,
+      userId: invoice.userId,
+      amount: invoice.amount,
+      newBalance: user?.balance ?? null,
+    });
+
+    await this.sendPaymentConfirmation(invoice, tx, user?.balance ?? null);
+    return true;
+  }
+
+  /**
+   * Crash recovery: complete invoices stuck between Phase 1 and Phase 2.
+   * @returns {Promise<number>} how many were completed
+   */
+  async recoverStuckInvoices() {
+    try {
+      const stuck = await CryptoInvoice.find({ status: "paid", balanceCredited: false })
+        .limit(RECOVERY_BATCH_SIZE)
+        .lean();
+
+      if (stuck.length === 0) return 0;
+
+      log("warn", `Recovering ${stuck.length} stuck invoice(s)`);
+      let recovered = 0;
+      for (const inv of stuck) {
+        const tx = { hash: inv.transactionHash || "recovered", confirmed: true, contractRet: "SUCCESS" };
+        const ok = await this.creditAndNotify(inv, tx);
+        if (ok) recovered += 1;
       }
+      return recovered;
+    } catch (err) {
+      log("error", "Recovery sweep failed", { error: err.message });
+      return 0;
+    }
+  }
 
-      const userId = invoice.userId;
+  // ── Notifications ──────────────────────────────────────────────────────────
+  async alertAdmin(html) {
+    const groupId = process.env.GROUP_ID;
+    if (!groupId || !this.botInstance) return;
+    try {
+      await this.botInstance.sendMessage(groupId, `🚨 <b>TRX Scanner</b>\n\n${html}`, {
+        parse_mode: "HTML",
+      });
+    } catch (e) {
+      log("warn", "Admin alert failed", { error: e.message });
+    }
+  }
 
-      const { getSession } = await import("../config/sessionStore.js");
+  async sendPaymentConfirmation(invoice, tx, newBalance) {
+    if (!this.botInstance) return;
+
+    const userId = invoice.userId;
+
+    // Remove the wallet-instructions message if we still know its id.
+    try {
       const session = await getSession(userId);
-
       if (session?.walletMessageId) {
-        try {
-          await this.botInstance.deleteMessage(userId, session.walletMessageId);
-          console.log(`🗑️ Deleted previous wallet message for user ${userId}`);
-        } catch (deleteError) {
-          console.log(
-            `⚠️ Could not delete previous wallet message: ${deleteError.message}`
-          );
-        }
+        await this.botInstance.deleteMessage(userId, session.walletMessageId);
       }
+    } catch { /* non-fatal */ }
 
-      const rejectionMessage = `❌ <b>پرداخت شما رد شد!</b>
+    const balanceLine =
+      newBalance !== null && newBalance !== undefined
+        ? `💳 <b>موجودی جدید:</b> <code>${Number(newBalance).toLocaleString("en-US")}</code> تومان\n`
+        : "";
 
-🚫 <b>فاکتور:</b> <code>${invoice.invoiceId}</code>
-💰 <b>مبلغ:</b> <code>${invoice.amount.toLocaleString()}</code> تومان
-🔗 <b>هش تراکنش:</b> <code>${tx.hash}</code>
+    const message =
+      `🎉 <b>پرداخت شما تایید شد!</b>\n\n` +
+      `🧾 <b>فاکتور:</b> <code>${invoice.invoiceId}</code>\n` +
+      `💰 <b>مبلغ:</b> <code>${invoice.amount.toLocaleString("en-US")}</code> تومان\n` +
+      `🪙 <b>مبلغ TRX:</b> <code>${Number(invoice.cryptoAmount).toFixed(6)}</code> TRX\n` +
+      `🔗 <b>هش تراکنش:</b> <code>${tx.hash}</code>\n` +
+      balanceLine +
+      `\n⏰ <b>زمان تایید:</b> ${new Date().toLocaleString("fa-IR")}`;
 
-⚠️ <b>دلیل:</b> تراکنش ناموفق یا revert شده
-
-🔄 <b>لطفاً دوباره تلاش کنید یا از روش‌های دیگر پرداخت استفاده کنید.</b>`;
-
-      await this.botInstance.sendMessage(userId, rejectionMessage, {
+    try {
+      await this.botInstance.sendMessage(userId, message, {
         parse_mode: "HTML",
         reply_markup: {
           inline_keyboard: [
-            [
-              {
-                text: "🔄 تلاش مجدد",
-                callback_data: "back_to_topup",
-              },
-              {
-                text: "🏠 بازگشت به منوی اصلی",
-                callback_data: "back_to_home",
-              },
-            ],
+            [{ text: "🏠 بازگشت به منوی اصلی", callback_data: "back_to_home" }],
           ],
         },
       });
-
-      console.log(`📱 Payment rejection sent to user ${userId}`);
-    } catch (error) {
-      console.error("❌ Error sending payment rejection:", error.message);
+    } catch (e) {
+      log("warn", "User confirmation failed (non-fatal)", {
+        userId, invoiceId: invoice.invoiceId, error: e.message,
+      });
     }
   }
 
-  // اسکن دستی برای تست
-  async manualScan() {
-    console.log("🔍 Manual TRX wallet scan initiated...");
-    const summary = await this.scanWallet();
-    return summary;
+  async sendPaymentRejection(invoice, tx) {
+    if (!this.botInstance) return;
+    const userId = invoice.userId;
+
+    try {
+      const session = await getSession(userId);
+      if (session?.walletMessageId) {
+        await this.botInstance.deleteMessage(userId, session.walletMessageId);
+      }
+    } catch { /* non-fatal */ }
+
+    try {
+      await this.botInstance.sendMessage(
+        userId,
+        `❌ <b>پرداخت شما رد شد!</b>\n\n` +
+          `🚫 <b>فاکتور:</b> <code>${invoice.invoiceId}</code>\n` +
+          `💰 <b>مبلغ:</b> <code>${invoice.amount.toLocaleString("en-US")}</code> تومان\n` +
+          `🔗 <b>هش تراکنش:</b> <code>${tx.hash}</code>\n\n` +
+          `⚠️ <b>دلیل:</b> تراکنش ناموفق یا revert شده بود.\n\n` +
+          `🔄 <b>لطفاً دوباره تلاش کنید یا از روش‌های دیگر پرداخت استفاده کنید.</b>`,
+        {
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "🔄 تلاش مجدد", callback_data: "back_to_topup" }],
+              [{ text: "🏠 بازگشت به منوی اصلی", callback_data: "back_to_home" }],
+            ],
+          },
+        }
+      );
+    } catch (e) {
+      log("warn", "User rejection notice failed (non-fatal)", {
+        userId, invoiceId: invoice.invoiceId, error: e.message,
+      });
+    }
   }
 
-  // بررسی دستی وضعیت اتصال TronScan API
+  // ── Admin helpers ──────────────────────────────────────────────────────────
+  async manualScan() {
+    log("info", "Manual TRX wallet scan initiated");
+    return this.scanWallet();
+  }
+
   async checkTronScanStatus() {
-    console.log("🔍 Manual TronScan API status check...");
     const isConnected = await this.checkTronScanConnection();
     return {
       connected: isConnected,
@@ -694,201 +651,8 @@ class TRXWalletScanner {
       timestamp: new Date().toISOString(),
     };
   }
-
-  // تست کامل سیستم
-  async runFullTest() {
-    console.log("🧪 Running full system test...");
-
-    try {
-      // فعال‌سازی حالت تست
-      this.enableTestMode();
-
-      // اجرای اسکن
-      await this.scanWallet();
-
-      // نمایش نتایج
-      await this.showTestResults();
-
-      console.log("✅ Full test completed successfully");
-    } catch (error) {
-      console.error("❌ Full test failed:", error.message);
-    } finally {
-      // غیرفعال‌سازی حالت تست
-      this.disableTestMode();
-    }
-  }
-
-  // ماک تست برای تایید تراکنش
-  async mockConfirmTransaction(userId, invoiceId) {
-    try {
-      console.log(
-        `🧪 Mock confirming transaction for user ${userId}, invoice ${invoiceId}`
-      );
-
-      const invoice = await CryptoInvoice.findOne({
-        invoiceId: invoiceId,
-        userId: userId,
-      });
-
-      if (!invoice) {
-        console.log(`❌ Invoice ${invoiceId} not found for user ${userId}`);
-        return false;
-      }
-
-      const mockTx = {
-        hash: `mock_confirm_${Date.now()}`,
-        confirmed: true,
-        contractRet: "SUCCESS",
-        revert: false,
-      };
-
-      await this.confirmInvoice(invoice, mockTx);
-      console.log(`✅ Mock transaction confirmed for user ${userId}`);
-      return true;
-    } catch (error) {
-      console.error("❌ Error in mock confirm transaction:", error.message);
-      return false;
-    }
-  }
-
-  // ماک تست برای رد تراکنش
-  async mockRejectTransaction(userId, invoiceId) {
-    try {
-      console.log(
-        `🧪 Mock rejecting transaction for user ${userId}, invoice ${invoiceId}`
-      );
-
-      const invoice = await CryptoInvoice.findOne({
-        invoiceId: invoiceId,
-        userId: userId,
-      });
-
-      if (!invoice) {
-        console.log(`❌ Invoice ${invoiceId} not found for user ${userId}`);
-        return false;
-      }
-
-      const mockTx = {
-        hash: `mock_reject_${Date.now()}`,
-        confirmed: false,
-        contractRet: "REVERT",
-        revert: true,
-      };
-
-      await this.rejectInvoice(invoice, mockTx);
-      console.log(`❌ Mock transaction rejected for user ${userId}`);
-      return true;
-    } catch (error) {
-      console.error("❌ Error in mock reject transaction:", error.message);
-      return false;
-    }
-  }
-
-  // تست خودکار با تایید تصادفی
-  async runAutoMockTest() {
-    console.log("🎲 Running auto mock test with random confirmations...");
-
-    try {
-      this.enableTestMode();
-
-      const pendingInvoices = await CryptoInvoice.find({
-        status: "unpaid",
-        paymentType: "trx",
-      });
-
-      if (pendingInvoices.length === 0) {
-        console.log("📭 No pending invoices found for testing");
-        return;
-      }
-
-      console.log(
-        `📊 Found ${pendingInvoices.length} pending invoices for testing`
-      );
-
-      for (const invoice of pendingInvoices) {
-        const shouldConfirm = Math.random() > 0.3; // 70% chance of confirmation
-
-        if (shouldConfirm) {
-          await this.mockConfirmTransaction(invoice.userId, invoice.invoiceId);
-        } else {
-          await this.mockRejectTransaction(invoice.userId, invoice.invoiceId);
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-
-      console.log("✅ Auto mock test completed");
-    } catch (error) {
-      console.error("❌ Auto mock test failed:", error.message);
-    } finally {
-      this.disableTestMode();
-    }
-  }
-
-  // نمایش نتایج تست
-  async showTestResults() {
-    try {
-      // بررسی اتصال دیتابیس
-      if (!mongoose.connection || mongoose.connection.readyState !== 1) {
-        console.log("⚠️ Database not connected, cannot show test results");
-        return;
-      }
-
-      console.log("\n📊 Test Results:");
-      console.log("==================");
-
-      const allInvoices = await CryptoInvoice.find({
-        paymentType: "trx",
-      }).maxTimeMS(5000);
-
-      console.log(`Total TRX invoices: ${allInvoices.length}`);
-
-      const unpaid = allInvoices.filter(
-        (inv) => inv.status === "unpaid"
-      ).length;
-      const paid = allInvoices.filter((inv) => inv.status === "paid").length;
-      const rejected = allInvoices.filter(
-        (inv) => inv.status === "rejected"
-      ).length;
-
-      console.log(`Unpaid: ${unpaid}`);
-      console.log(`Paid: ${paid}`);
-      console.log(`Rejected: ${rejected}`);
-
-      // نمایش جزئیات فاکتورهای تایید شده
-      const paidInvoices = allInvoices.filter((inv) => inv.status === "paid");
-      if (paidInvoices.length > 0) {
-        console.log("\n✅ Confirmed Invoices:");
-        paidInvoices.forEach((inv) => {
-          console.log(
-            `- ${inv.invoiceId}: ${
-              inv.cryptoAmount
-            } TRX (${inv.amount.toLocaleString()} Toman)`
-          );
-        });
-      }
-
-      // نمایش جزئیات فاکتورهای pending
-      const unpaidInvoices = allInvoices.filter(
-        (inv) => inv.status === "unpaid"
-      );
-      if (unpaidInvoices.length > 0) {
-        console.log("\n⏳ Pending Invoices:");
-        unpaidInvoices.forEach((inv) => {
-          console.log(
-            `- ${inv.invoiceId}: ${
-              inv.cryptoAmount
-            } TRX (${inv.amount.toLocaleString()} Toman)`
-          );
-        });
-      }
-    } catch (error) {
-      console.error("❌ Error showing test results:", error.message);
-    }
-  }
 }
 
-// ایجاد instance
 const trxScanner = new TRXWalletScanner();
 
 export default trxScanner;

@@ -11,7 +11,8 @@ const hideKeyboard = async (bot, chatId) => {
     // Delete the message after sending
     await bot.deleteMessage(chatId, tempMsg.message_id).catch(() => {});
   } catch (error) {
-    console.log(error);
+    // Cosmetic helper — never let a failure here break the calling flow.
+    console.warn("⚠️ hideKeyboard failed:", error.message);
   }
 };
 export default hideKeyboard;

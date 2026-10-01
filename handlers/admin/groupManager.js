@@ -3,6 +3,7 @@ import CryptoInvoice from "../../models/CryptoInvoice.js";
 import invoice from "../../models/invoice.js";
 import User from "../../models/User.js";
 import { plans30, plans60, plans90 } from "../../services/plans.js";
+import { isAdmin } from "../../utils/auth.js";
 
 // ارسال پیام به گروه ادمین
 const sendToAdminGroup = async (bot, message, keyboard = null) => {
@@ -74,17 +75,8 @@ const handleGroupMessage = async (bot, msg) => {
   const text = msg.text;
   const userId = msg.from.id;
 
-  // فقط در گروه ادمین
-  if (chatId.toString() !== process.env.GROUP_ID) {
-    return;
-  }
-
-  // فقط ادمین‌ها مجازند
-  const adminIds = (process.env.ADMINS || "")
-    .split(",")
-    .filter(Boolean)
-    .map((id) => Number(id.trim()));
-  if (!adminIds.includes(Number(userId))) {
+  // فقط ادمین‌های مجاز در گروه ادمین (fail-closed)
+  if (!isAdmin(chatId, userId)) {
     return;
   }
 

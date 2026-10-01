@@ -1,2 +1,20 @@
-node_modules
+# ── Dependencies ─────────────────────────────────────────────────────────────
+node_modules/
+
+# ── Secrets — NEVER commit these ─────────────────────────────────────────────
 .env
+.env.*
+!.env.example
+
+# ── Runtime / build output ───────────────────────────────────────────────────
+node-compile-cache/
+coverage/
+*.log
+npm-debug.log*
+logs/
+
+# ── Editor / tooling state ───────────────────────────────────────────────────
+.vscode/settings.json
+.mimocode/
+.workbuddy-ai/
+.mimocode/.cron-lock

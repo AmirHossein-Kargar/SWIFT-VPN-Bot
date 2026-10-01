@@ -20,7 +20,6 @@ const validateWithCommas = (text, min = 10000, max = 500000) => {
       parse_mode: "HTML",
     };
   }
-  console.log(amount);
   return { valid: true, amount };
 };
 

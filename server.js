@@ -2,15 +2,15 @@
  * Express HTTP server
  *
  * Endpoints:
- *  POST /api/hooshpay/webhook    — HooshPay payment notifications
- *  POST /api/nowpayments/webhook — legacy stub
- *  GET  /health                  — liveness probe
+ *   POST /api/hooshpay/webhook   — HooshPay payment notifications
+ *   GET  /health                 — liveness probe (always 200 while the process is up)
+ *   GET  /ready                  — readiness probe (503 unless MongoDB is connected)
  *
  * HooshPay webhook spec (per https://hooshpay.xyz/developers):
  *   Headers: X-HooshPay-Signature: <hmac_sha256>
  *   Body: {
  *     event: "payment.success",
- *     invoice: "inv_AbC123xyz",    ← note: field is "invoice", not "uid"
+ *     invoice: "inv_AbC123xyz",    ← field is "invoice", not "uid"
  *     order_id: "ORDER-1402",
  *     status: "paid",
  *     amount: 250000,
@@ -22,53 +22,42 @@
  *     paid_at: "2026-06-16T12:05:00"
  *   }
  *
- * Signature verification (per official docs):
- *   1. Parse the JSON payload
- *   2. Sort keys alphabetically (ksort)
- *   3. Re-serialize with compact separators: json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
- *      In Node: JSON.stringify(sortedObj) — but separators must be (",", ":") which is the default
- *   4. HMAC-SHA256 over the re-serialized string
- *   5. timingSafeEqual against received signature
+ * Signature verification lives in services/hooshpay/verifySignature.js so the
+ * production implementation can be unit-tested directly.
  */
 import "dotenv/config";
-import { randomUUID } from "crypto";
+import { randomUUID } from "node:crypto";
 import express from "express";
-import crypto from "crypto";
+import mongoose from "mongoose";
 import HooshPayInvoice from "./models/HooshPayInvoice.js";
 import { fulfillHooshOrder } from "./services/hooshpay/fulfillHooshOrder.js";
 import { acquireVerifyLock, releaseVerifyLock } from "./services/hooshpay/verifyLock.js";
+import { verifyHooshPaySignature } from "./services/hooshpay/verifySignature.js";
 
 const app = express();
 
+// Behind Railway's edge proxy: trust exactly one hop so req.ip is the real client.
+app.set("trust proxy", 1);
+app.disable("x-powered-by");
+
 // ── Max webhook payload: 64 KB (prevents DoS via oversized body) ─────────────
-const MAX_PAYLOAD_BYTES = 64 * 1024;
+export const MAX_PAYLOAD_BYTES = 64 * 1024;
 
-// ── Raw body capture — must precede express.json() ───────────────────────────
-// We still capture rawBody for logging/audit purposes, but signature verification
-// uses the ksort'd re-serialized JSON per the official HooshPay documentation.
-app.use((req, res, next) => {
-  const chunks = [];
-  let totalBytes = 0;
+// ── Body parsing ─────────────────────────────────────────────────────────────
+// NOTE: we deliberately let express.json() own the request stream and capture
+// the raw bytes via its `verify` hook. A separate `req.on("data")` middleware
+// registered *before* express.json() would consume the stream and leave
+// `req.body` undefined, silently dropping every webhook.
+app.use(
+  express.json({
+    limit: "64kb",
+    verify: (req, _res, buf) => {
+      req.rawBody = buf; // retained for audit / debugging
+    },
+  })
+);
 
-  req.on("data", (chunk) => {
-    totalBytes += chunk.length;
-    if (totalBytes > MAX_PAYLOAD_BYTES) {
-      res.status(413).end();
-      req.destroy();
-      return;
-    }
-    chunks.push(chunk);
-  });
-
-  req.on("end", () => {
-    req.rawBody = Buffer.concat(chunks);
-    next();
-  });
-});
-
-app.use(express.json({ limit: "64kb" }));
-
-// ── Structured logger ─────────────────────────────────────────────────────────
+// ── Structured logger ────────────────────────────────────────────────────────
 function log(level, message, meta = {}) {
   console[level === "error" ? "error" : level === "warn" ? "warn" : "log"](
     JSON.stringify({ ts: new Date().toISOString(), service: "webhook", level, message, ...meta })
@@ -92,58 +81,58 @@ async function _alertAdmin(message) {
   }
 }
 
-/**
- * HooshPay signature verification per official documentation.
- *
- * The signature is computed over the JSON payload with keys sorted
- * alphabetically (ksort) and re-serialized with compact separators.
- *
- * @param {object} payload  - parsed JSON body
- * @param {string} signature - hex HMAC-SHA256 from X-HooshPay-Signature header
- * @param {string} secret   - webhook secret
- * @returns {boolean}
- */
-function verifyHooshPaySignature(payload, signature, secret) {
-  // Sort keys alphabetically (mirrors PHP ksort + Python sort_keys=True)
-  const sortedKeys = Object.keys(payload).sort();
-  const sortedObj = {};
-  for (const k of sortedKeys) {
-    sortedObj[k] = payload[k];
-  }
-
-  // Re-serialize with compact separators (no spaces), no ASCII escaping
-  // This matches: json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
-  const body = JSON.stringify(sortedObj);
-
-  const expectedSig = crypto
-    .createHmac("sha256", secret)
-    .update(body)
-    .digest("hex");
-
-  let valid = false;
-  try {
-    // timingSafeEqual requires equal-length buffers
-    valid = crypto.timingSafeEqual(
-      Buffer.from(signature, "hex"),
-      Buffer.from(expectedSig, "hex")
-    );
-  } catch {
-    valid = false;
-  }
-  return valid;
-}
-
 // ── Reversal statuses (internal mapping) ─────────────────────────────────────
 // Official statuses: pending, paid, expired, cancelled, failed
-// Webhook may also send reversal-type events for refunds
+// The webhook may also send reversal-type events for refunds/chargebacks.
 const REVERSAL_STATUSES = new Set(["reversed", "refunded", "chargedback"]);
+
+// ── Webhook rate limiting (dependency-free, in-memory, per client IP) ────────
+// Fixed 60-second window. Default 600 requests/minute — high enough that a
+// legitimate HooshPay retry burst is never dropped, low enough to stop a
+// trivial flood. Set WEBHOOK_RATE_LIMIT_PER_MIN=0 to disable.
+const RATE_LIMIT_PER_MIN = Number(process.env.WEBHOOK_RATE_LIMIT_PER_MIN ?? 600);
+const RATE_WINDOW_MS = 60_000;
+const rateBuckets = new Map(); // ip -> { count, resetAt }
+let rateSweepTimer = null;
+
+function isRateLimited(ip) {
+  if (!Number.isFinite(RATE_LIMIT_PER_MIN) || RATE_LIMIT_PER_MIN <= 0) return false;
+
+  const now = Date.now();
+  const bucket = rateBuckets.get(ip);
+  if (!bucket || now >= bucket.resetAt) {
+    rateBuckets.set(ip, { count: 1, resetAt: now + RATE_WINDOW_MS });
+    return false;
+  }
+  bucket.count += 1;
+  return bucket.count > RATE_LIMIT_PER_MIN;
+}
+
+// Bound memory: drop expired buckets once a minute.
+function startRateLimitSweeper() {
+  if (rateSweepTimer) return;
+  rateSweepTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [ip, bucket] of rateBuckets) {
+      if (now >= bucket.resetAt) rateBuckets.delete(ip);
+    }
+  }, RATE_WINDOW_MS);
+  if (rateSweepTimer.unref) rateSweepTimer.unref();
+}
 
 // ── HooshPay Webhook ──────────────────────────────────────────────────────────
 app.post("/api/hooshpay/webhook", async (req, res) => {
-  // Respond 200 immediately — HooshPay should not retry while we process
-  res.sendStatus(200);
+  const reqId = randomUUID(); // per-request correlation ID
 
-  const reqId = randomUUID();   // per-request correlation ID
+  if (isRateLimited(req.ip)) {
+    log("warn", "PAYMENT_CALLBACK_RATE_LIMITED", { reqId, ip: req.ip });
+    return res.sendStatus(429);
+  }
+
+  // Respond 200 immediately — HooshPay must not retry while we process.
+  // Fulfillment is idempotent and crash-safe, so an early 200 is safe: if we
+  // die mid-processing the recovery cron re-runs Phase-2.
+  res.sendStatus(200);
 
   try {
     const payload = req.body;
@@ -161,61 +150,67 @@ app.post("/api/hooshpay/webhook", async (req, res) => {
       status: payload.status,
     });
 
-    // ── 1. HMAC-SHA256 signature validation ───────────────────────────────
+    // ── 1. HMAC-SHA256 signature validation (MANDATORY) ───────────────
+    // The webhook secret MUST be set. If it is missing we reject ALL webhooks
+    // — no bypass is permitted. A missing secret means the application is
+    // misconfigured and cannot safely process any payment notification.
     const receivedSig = req.headers["x-hooshpay-signature"];
     const webhookSecret = process.env.HOOSHPAY_WEBHOOK_SECRET;
 
-    if (webhookSecret) {
-      if (!receivedSig) {
-        log("warn", "PAYMENT_SIGNATURE_INVALID — missing signature header", { reqId });
-        await _alertAdmin(
-          `⚠️ <b>امضای وب‌هوک نامعتبر</b>\n` +
-          `🔑 Req-ID: <code>${reqId}</code>\n` +
-          `دلیل: هدر امضا ارسال نشده است`
-        );
-        return;
-      }
-
-      const valid = verifyHooshPaySignature(payload, receivedSig, webhookSecret);
-
-      if (!valid) {
-        log("warn", "PAYMENT_SIGNATURE_INVALID — HMAC mismatch", {
-          reqId,
-          invoice: payload.invoice,
-          order_id: payload.order_id,
-        });
-        await _alertAdmin(
-          `⚠️ <b>امضای وب‌هوک نامعتبر!</b>\n` +
-          `🆔 فاکتور: <code>${payload.invoice || "نامشخص"}</code>\n` +
-          `📦 سفارش: <code>${payload.order_id || "نامشخص"}</code>\n` +
-          `🔑 Req-ID: <code>${reqId}</code>\n\n` +
-          `این درخواست رد شد. لطفاً بررسی کنید.`
-        );
-        return;
-      }
-
-      log("info", "PAYMENT_SIGNATURE_VALID", { reqId, invoice: payload.invoice });
-    } else {
-      log("warn", "HOOSHPAY_WEBHOOK_SECRET not set — skipping validation (unsafe)", { reqId });
+    if (!webhookSecret) {
+      log("error", "HOOSHPAY_WEBHOOK_SECRET is not set — REJECTING webhook (no bypass)", { reqId });
+      await _alertAdmin(
+        `🚨 <b>خطای امنیتی بحرانی!</b>\n\n` +
+        `متغیر <code>HOOSHPAY_WEBHOOK_SECRET</code> تنظیم نشده است.\n` +
+        `تمام وب‌هوک‌ها تا زمان تنظیم این متغیر رد می‌شوند.\n` +
+        `🔑 Req-ID: <code>${reqId}</code>`
+      );
+      return;
     }
 
-    // ── Extract fields using official webhook schema ───────────────────────
-    // The field is "invoice" (not "uid") per the official docs
-    const hooshUid    = payload.invoice || payload.uid;  // fallback to uid for backward compat
-    const orderId     = payload.order_id;
-    const status      = payload.status;
-    const paidAmount  = payload.amount;
-    const payableAmount = payload.payable_amount;
+    if (!receivedSig) {
+      log("warn", "PAYMENT_SIGNATURE_INVALID — missing signature header", { reqId });
+      await _alertAdmin(
+        `⚠️ <b>امضای وب‌هوک نامعتبر</b>\n` +
+        `🔑 Req-ID: <code>${reqId}</code>\n` +
+        `دلیل: هدر امضا ارسال نشده است`
+      );
+      return;
+    }
+
+    if (!verifyHooshPaySignature(payload, receivedSig, webhookSecret)) {
+      log("warn", "PAYMENT_SIGNATURE_INVALID — HMAC mismatch", {
+        reqId,
+        invoice: payload.invoice,
+        order_id: payload.order_id,
+      });
+      await _alertAdmin(
+        `⚠️ <b>امضای وب‌هوک نامعتبر!</b>\n` +
+        `🆔 فاکتور: <code>${payload.invoice || "نامشخص"}</code>\n` +
+        `📦 سفارش: <code>${payload.order_id || "نامشخص"}</code>\n` +
+        `🔑 Req-ID: <code>${reqId}</code>\n\n` +
+        `این درخواست رد شد. لطفاً بررسی کنید.`
+      );
+      return;
+    }
+
+    log("info", "PAYMENT_SIGNATURE_VALID", { reqId, invoice: payload.invoice });
+
+    // ── Extract fields using the official webhook schema ───────────────────
+    const hooshUid       = payload.invoice || payload.uid; // fallback for backward compat
+    const orderId        = payload.order_id;
+    const status         = payload.status;
+    const paidAmount     = payload.amount;
+    const payableAmount  = payload.payable_amount;
     const merchantCredit = payload.merchant_credit;
-    const feeAmount   = payload.fee_amount;
-    const trackingCode = payload.tracking_code;
-    const paidAtStr   = payload.paid_at;
+    const feeAmount      = payload.fee_amount;
+    const trackingCode   = payload.tracking_code;
 
     // ── 2. Find invoice ───────────────────────────────────────────────────
     const invoiceDoc = await HooshPayInvoice.findOne({
       $or: [
         ...(hooshUid ? [{ uid: hooshUid }] : []),
-        ...(orderId  ? [{ orderId: orderId }] : []),
+        ...(orderId ? [{ orderId: orderId }] : []),
       ],
     });
 
@@ -230,24 +225,31 @@ app.post("/api/hooshpay/webhook", async (req, res) => {
     });
 
     // ── 4. Amount validation ──────────────────────────────────────────────
-    // Verify the webhook amount matches our stored invoice amount
-    if (paidAmount !== undefined && Number(paidAmount) !== invoiceDoc.amount) {
-      log("warn", "Amount mismatch — rejecting", {
-        reqId,
-        uid: invoiceDoc.uid,
-        expected: invoiceDoc.amount,
-        received: paidAmount,
-      });
-      await _alertAdmin(
-        `⚠️ <b>عدم تطابق مبلغ!</b>\n` +
-        `🆔 UID: <code>${invoiceDoc.uid}</code>\n` +
-        `💰 مبلغ ثبت‌شده: <code>${invoiceDoc.amount.toLocaleString()}</code> تومان\n` +
-        `💰 مبلغ وب‌هوک: <code>${Number(paidAmount).toLocaleString()}</code> تومان\n` +
-        `👤 کاربر: <code>${invoiceDoc.userId}</code>\n` +
-        `🔑 Req-ID: <code>${reqId}</code>\n\n` +
-        `تراکنش رد شد. لطفاً دستی بررسی کنید.`
-      );
-      return;
+    // Only credit when the notified amount matches what we recorded. Accept
+    // either the invoice amount or the merchant credit (they differ under
+    // seller-paid fee modes).
+    if (paidAmount !== undefined) {
+      const accepted = new Set([Number(invoiceDoc.amount)]);
+      if (invoiceDoc.merchantCredit != null) accepted.add(Number(invoiceDoc.merchantCredit));
+
+      if (!accepted.has(Number(paidAmount))) {
+        log("warn", "Amount mismatch — rejecting", {
+          reqId,
+          uid: invoiceDoc.uid,
+          expected: [...accepted],
+          received: paidAmount,
+        });
+        await _alertAdmin(
+          `⚠️ <b>عدم تطابق مبلغ!</b>\n` +
+          `🆔 UID: <code>${invoiceDoc.uid}</code>\n` +
+          `💰 مبلغ ثبت‌شده: <code>${invoiceDoc.amount.toLocaleString()}</code> تومان\n` +
+          `💰 مبلغ وب‌هوک: <code>${Number(paidAmount).toLocaleString()}</code> تومان\n` +
+          `👤 کاربر: <code>${invoiceDoc.userId}</code>\n` +
+          `🔑 Req-ID: <code>${reqId}</code>\n\n` +
+          `تراکنش رد شد. لطفاً دستی بررسی کنید.`
+        );
+        return;
+      }
     }
 
     // ── 5. Reversal / refund ──────────────────────────────────────────────
@@ -256,11 +258,13 @@ app.post("/api/hooshpay/webhook", async (req, res) => {
         reqId, uid: invoiceDoc.uid, status,
       });
 
-      // Only reverse if currently paid (prevent illegal transitions)
+      // Only a paid invoice can be reversed. `paid` is the only legal source
+      // state, so guard the transition explicitly.
       if (invoiceDoc.status === "paid") {
-        await HooshPayInvoice.findByIdAndUpdate(invoiceDoc._id, {
-          $set: { status: "reversed" },
-        });
+        await HooshPayInvoice.findOneAndUpdate(
+          { _id: invoiceDoc._id, status: "paid" },
+          { $set: { status: "reversed" } }
+        );
       }
 
       await _alertAdmin(
@@ -288,7 +292,6 @@ app.post("/api/hooshpay/webhook", async (req, res) => {
     }
 
     // ── 7. Only proceed on confirmed payment ──────────────────────────────
-    // Official webhook event: "payment.success" with status: "paid"
     const isPaidEvent = status === "paid" || payload.event === "payment.success";
 
     if (!isPaidEvent) {
@@ -296,6 +299,30 @@ app.post("/api/hooshpay/webhook", async (req, res) => {
         reqId, uid: invoiceDoc.uid, status, event: payload.event,
       });
       return;
+    }
+
+    // A refunded/charged-back invoice must never be credited again.
+    if (invoiceDoc.status === "reversed") {
+      log("warn", "Paid webhook for REVERSED invoice — ignoring", {
+        reqId, uid: invoiceDoc.uid,
+      });
+      await _alertAdmin(
+        `⚠️ <b>وب‌هوک پرداخت برای فاکتور برگشت‌خورده</b>\n` +
+        `🆔 UID: <code>${invoiceDoc.uid}</code>\n` +
+        `این درخواست نادیده گرفته شد. لطفاً دستی بررسی کنید.\n` +
+        `🔑 Req-ID: <code>${reqId}</code>`
+      );
+      return;
+    }
+
+    // `expired` / `cancelled` / `failed` → `paid` is permitted here, and only
+    // here, because HooshPay has cryptographically confirmed that the customer's
+    // money was actually captured. Refusing to credit would take money without
+    // delivering value. The transition is logged loudly for reconciliation.
+    if (["expired", "cancelled", "failed"].includes(invoiceDoc.status)) {
+      log("warn", "Late payment for terminal invoice — crediting (funds confirmed by gateway)", {
+        reqId, uid: invoiceDoc.uid, previousStatus: invoiceDoc.status,
+      });
     }
 
     // ── 8. Already fully credited? (duplicate webhook) ─────────────────────
@@ -352,16 +379,37 @@ app.post("/api/hooshpay/webhook", async (req, res) => {
   }
 });
 
-// ── Legacy NowPayments stub ───────────────────────────────────────────────────
-app.post("/api/nowpayments/webhook", (req, res) => {
-  log("info", "NowPayments webhook received (legacy — no action)", { body: req.body });
-  res.sendStatus(200);
-});
-
-// ── Health check ──────────────────────────────────────────────────────────────
+// ── Health check (liveness) ───────────────────────────────────────────────────
+// Always 200 while the Node process is alive. Railway restarts on non-200, and
+// a transient MongoDB blip must not cause a restart loop — dependency state is
+// reported in the body and enforced by /ready instead.
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, ts: new Date().toISOString(), pid: process.pid });
+  res.json({
+    ok: true,
+    ts: new Date().toISOString(),
+    pid: process.pid,
+    uptime: Math.floor(process.uptime()),
+  });
 });
 
-export const PORT = process.env.PORT || 3000;
+// ── Readiness check (dependencies) ────────────────────────────────────────────
+function dependencyStatus() {
+  return {
+    mongo: mongoose.connection.readyState === 1 ? "connected" : "disconnected",
+  };
+}
+
+app.get("/ready", (_req, res) => {
+  const deps = dependencyStatus();
+  const ready = deps.mongo === "connected";
+  res.status(ready ? 200 : 503).json({
+    ready,
+    ts: new Date().toISOString(),
+    ...deps,
+  });
+});
+
+startRateLimitSweeper();
+
+export const PORT = Number(process.env.PORT) || 3000;
 export default app;

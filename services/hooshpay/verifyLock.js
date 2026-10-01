@@ -19,6 +19,24 @@ import client from "../../config/redisClient.js";
 const LOCK_PREFIX = "hoosh:lock:";
 const LOCK_TTL_SECONDS = 30;
 
+// Hard ceiling for any single Redis round-trip. Even with the offline queue
+// disabled, a half-open socket can stall a command; without this bound a Redis
+// problem would hang payment processing and the recovery cron indefinitely.
+const REDIS_OP_TIMEOUT_MS = 2000;
+
+/**
+ * Reject if `promise` does not settle within `ms`.
+ * Late rejections are swallowed so they cannot surface as unhandled rejections.
+ */
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    if (timer.unref) timer.unref();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 /**
  * Acquire an exclusive lock for the given invoice UID.
  *
@@ -30,10 +48,10 @@ const LOCK_TTL_SECONDS = 30;
  */
 export async function acquireVerifyLock(uid) {
   try {
-    const result = await client.set(
-      `${LOCK_PREFIX}${uid}`,
-      "1",
-      { NX: true, EX: LOCK_TTL_SECONDS }
+    const result = await withTimeout(
+      client.set(`${LOCK_PREFIX}${uid}`, "1", { NX: true, EX: LOCK_TTL_SECONDS }),
+      REDIS_OP_TIMEOUT_MS,
+      "acquireVerifyLock"
     );
     return result === "OK";
   } catch (err) {
@@ -54,7 +72,7 @@ export async function acquireVerifyLock(uid) {
  */
 export async function releaseVerifyLock(uid) {
   try {
-    await client.del(`${LOCK_PREFIX}${uid}`);
+    await withTimeout(client.del(`${LOCK_PREFIX}${uid}`), REDIS_OP_TIMEOUT_MS, "releaseVerifyLock");
   } catch (err) {
     // Non-fatal — key will auto-expire via TTL.
     console.warn(`[HooshPay Lock] Redis release failed for uid=${uid}: ${err.message}`);
@@ -72,10 +90,10 @@ export async function releaseVerifyLock(uid) {
 export async function acquireCronLock(jobName, ttlSeconds = 270) {
   // 270 s = 4.5 min — just under the 5-min cron interval
   try {
-    const result = await client.set(
-      `hoosh:cron:${jobName}`,
-      process.pid.toString(),
-      { NX: true, EX: ttlSeconds }
+    const result = await withTimeout(
+      client.set(`hoosh:cron:${jobName}`, process.pid.toString(), { NX: true, EX: ttlSeconds }),
+      REDIS_OP_TIMEOUT_MS,
+      "acquireCronLock"
     );
     return result === "OK";
   } catch (err) {

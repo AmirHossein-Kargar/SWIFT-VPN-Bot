@@ -1,6 +1,5 @@
 import { getSession, setSession } from "../config/sessionStore.js";
 import User from "../models/User.js";
-import handleTonAmount from "../paymentHandlers/handleTonAmount.js";
 import payBank from "../paymentHandlers/payBank.js";
 import handleTrxAmount from "../paymentHandlers/handleTrxAmount.js";
 import { handleHooshAmount } from "../paymentHandlers/payHoosh.js";
@@ -66,10 +65,6 @@ async function handleMessage(bot, msg) {
   if (session?.support && msg.text) {
     await supportMessageHandler(bot, msg);
     return;
-  }
-
-  if (session?.step === "waiting_for_ton_amount") {
-    return handleTonAmount(bot, msg);
   }
 
   if (session?.step === "waiting_for_bank_amount" && msg.text) {

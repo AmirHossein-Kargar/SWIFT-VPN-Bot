@@ -23,7 +23,7 @@
  *   - admin_hoosh_run_pending
  *   - hooshpayRecoveryCron
  */
-import { randomUUID } from "crypto";
+import { randomUUID } from "node:crypto";
 import HooshPayInvoice from "../../models/HooshPayInvoice.js";
 import User from "../../models/User.js";
 import keyboard from "../../keyboards/mainKeyboard.js";

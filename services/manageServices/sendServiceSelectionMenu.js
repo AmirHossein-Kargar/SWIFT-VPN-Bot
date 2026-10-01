@@ -9,19 +9,12 @@ async function sendServiceSelectionMenu(bot, chatId, userId) {
     }
 
     // * create buttons for services (each button should be an array for inline_keyboard)
-    const serviceButtons = user.services.map((service) => {
-      // console.log("Service username:", service.username);
-      return [
-        {
-          text: service.username || "بدون نام",
-          callback_data: `show_service_${service.username || ""}`,
-        },
-      ];
-    });
-    // Add the search button as a separate row
-    // serviceButtons.push([
-    //   { text: "🔍 جستجوی سرویس", callback_data: "search_service" },
-    // ]);
+    const serviceButtons = user.services.map((service) => [
+      {
+        text: service.username || "بدون نام",
+        callback_data: `show_service_${service.username || ""}`,
+      },
+    ]);
 
     await bot.sendMessage(chatId, "📌 یکی از اشتراک‌های زیر را انتخاب کنید:", {
       reply_markup: {

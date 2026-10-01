@@ -31,173 +31,107 @@ import { StatusApi } from "./api/wizardApi.js";
 import showStatusApi from "./handlers/admin/showStatusApi.js";
 
 // * 🛡️ Admins
-let adminIds = [];
-try {
-  if (process.env.ADMINS) {
-    adminIds = process.env.ADMINS.split(",").map((id) => Number(id.trim()));
-  } else {
-    console.error("❌ ADMINS environment variable not found");
-  }
-} catch (error) {
-  console.error("❌ Error parsing admin IDs:", error.message);
-  adminIds = [];
+// Admin parsing/authorization lives in utils/auth.js (fail-closed). This module
+// no longer keeps its own copy of the admin list.
+import { getAdminIds } from "./utils/auth.js";
+if (getAdminIds().length === 0) {
+  console.error("❌ ADMINS is missing or contains no valid IDs — all admin actions are denied.");
 }
 
 // * 🚀 Start Bot
 const bot = await startBot();
 
-// * 🔍 Initialize TRX Scanner with bot instance
-import trxScanner from "./services/trxWalletScanner.js";
-trxScanner.setBotInstance(bot);
-
 // * 🏠 Initialize Group Manager
 import { handleGroupMessage } from "./handlers/admin/groupManager.js";
 
 // * 📨 Message Handler
+// Every inbound update is contained: a failure in one handler must never take
+// down the bot or leave the user without feedback.
 bot.on("message", async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  const userText = msg.text;
-  const session = await getSession(chatId);
+  try {
+    const chatId = msg.chat.id;
+    const userId = msg.from?.id;
+    const userText = msg.text;
+    const session = await getSession(chatId);
 
-  // بررسی اینکه آیا پیام از گروه ادمین است
-  if (process.env.GROUP_ID && chatId.toString() === process.env.GROUP_ID) {
-    // اگر در این چت گروهی فرآیند فعالی وجود دارد (برای ادمین)، همان هندلر عمومی را صدا بزن
-    if (session?.step) {
-      await handleMessage(bot, msg);
-    } else {
-      await handleGroupMessage(bot, msg);
+    // بررسی اینکه آیا پیام از گروه ادمین است
+    if (process.env.GROUP_ID && chatId.toString() === process.env.GROUP_ID) {
+      // اگر در این چت گروهی فرآیند فعالی وجود دارد (برای ادمین)، همان هندلر عمومی را صدا بزن
+      if (session?.step) {
+        await handleMessage(bot, msg);
+      } else {
+        await handleGroupMessage(bot, msg);
+      }
+      return;
     }
-    return;
-  }
 
-  switch (userText) {
-    case "/start": {
-      await bot.sendMessage(chatId, WELCOME_MESSAGE, keyboard);
-      break;
-    }
-    case "/panel":
-    case "پنل": {
-      // پنل مدیریت فقط در گروه ادمین قابل استفاده است
-      await bot.sendMessage(
-        chatId,
-        "⛔️ پنل مدیریت فقط در گروه ادمین در دسترس است. لطفاً دستور را در گروه ارسال کنید."
-      );
-      break;
-    }
-    case "/status": {
-      await showStatusApi(bot, msg);
-      break;
-    }
-    case "🎁 سرویس تست":
-      await createTestService(bot, msg);
-      break;
-    case "🛒 خرید سرویس":
-      await handleBuyService(bot, chatId);
-      break;
-    case "💰 افزایش موجودی": {
-      await hideKeyboard(bot, chatId);
-      const user = await User.findOne({ telegramId: userId });
-      if (!user || !user.phoneNumber) {
-        await handleContact(bot, msg, async () => {
+    switch (userText) {
+      case "/start": {
+        await bot.sendMessage(chatId, WELCOME_MESSAGE, keyboard);
+        break;
+      }
+      case "/panel":
+      case "پنل": {
+        // پنل مدیریت فقط در گروه ادمین قابل استفاده است
+        await bot.sendMessage(
+          chatId,
+          "⛔️ پنل مدیریت فقط در گروه ادمین در دسترس است. لطفاً دستور را در گروه ارسال کنید."
+        );
+        break;
+      }
+      case "/status": {
+        await showStatusApi(bot, msg);
+        break;
+      }
+      case "🎁 سرویس تست":
+        await createTestService(bot, msg);
+        break;
+      case "🛒 خرید سرویس":
+        await handleBuyService(bot, chatId);
+        break;
+      case "💰 افزایش موجودی": {
+        await hideKeyboard(bot, chatId);
+        const user = await User.findOne({ telegramId: userId });
+        if (!user || !user.phoneNumber) {
+          await handleContact(bot, msg, async () => {
+            await showPaymentMethods(bot, chatId);
+          });
+        } else {
           await showPaymentMethods(bot, chatId);
-        });
-      } else {
-        await showPaymentMethods(bot, chatId);
+        }
+        break;
       }
-      break;
+      case "👤 پروفایل من":
+        await handleProfile(bot, chatId, userId);
+        break;
+      case "📖 راهنما":
+        await handleGuide(bot, chatId);
+        break;
+      case "🛠 پشتیبانی":
+        await handleSupport(bot, chatId, userId);
+        break;
+      case "📦 سرویس‌های من":
+        await sendServiceSelectionMenu(bot, chatId, userId);
+        break;
+      default:
+        await handleMessage(bot, msg);
     }
-    case "👤 پروفایل من":
-      await handleProfile(bot, chatId, userId);
-      break;
-    case "📖 راهنما":
-      await handleGuide(bot, chatId);
-      break;
-    case "🛠 پشتیبانی":
-      await handleSupport(bot, chatId, userId);
-      break;
-    case "📦 سرویس‌های من":
-      await sendServiceSelectionMenu(bot, chatId, userId);
-      break;
-    case "/test_mock":
-      // بررسی دسترسی ادمین
-      if (!adminIds.includes(userId)) {
-        await bot.sendMessage(
-          chatId,
-          "⛔️ شما دسترسی انجام این عملیات را ندارید."
-        );
-        break;
-      }
-
-      console.log("🧪 User initiated mock test...");
-      await trxScanner.runAutoMockTest();
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        service: "bot",
+        level: "error",
+        message: "Unhandled error in message handler",
+        error: err.message,
+      })
+    );
+    try {
       await bot.sendMessage(
-        chatId,
-        "🧪 Mock test completed! Check console for results."
+        msg.chat.id,
+        "❌ خطایی رخ داد. لطفاً دوباره تلاش کنید."
       );
-      break;
-    case "/test_confirm":
-      // بررسی دسترسی ادمین
-      if (!adminIds.includes(userId)) {
-        await bot.sendMessage(
-          chatId,
-          "⛔️ شما دسترسی انجام این عملیات را ندارید."
-        );
-        break;
-      }
-
-      const args = userText.split(" ");
-      if (args.length === 3) {
-        const targetUserId = parseInt(args[1]);
-        const invoiceId = args[2];
-        const result = await trxScanner.mockConfirmTransaction(
-          targetUserId,
-          invoiceId
-        );
-        await bot.sendMessage(
-          chatId,
-          result
-            ? "✅ Mock confirmation successful!"
-            : "❌ Mock confirmation failed!"
-        );
-      } else {
-        await bot.sendMessage(
-          chatId,
-          "📝 Usage: /test_confirm <userId> <invoiceId>"
-        );
-      }
-      break;
-    case "/test_reject":
-      // بررسی دسترسی ادمین
-      if (!adminIds.includes(userId)) {
-        await bot.sendMessage(
-          chatId,
-          "⛔️ شما دسترسی انجام این عملیات را ندارید."
-        );
-        break;
-      }
-
-      const rejectArgs = userText.split(" ");
-      if (rejectArgs.length === 3) {
-        const targetUserId = parseInt(rejectArgs[1]);
-        const invoiceId = rejectArgs[2];
-        const result = await trxScanner.mockRejectTransaction(
-          targetUserId,
-          invoiceId
-        );
-        await bot.sendMessage(
-          chatId,
-          result ? "❌ Mock rejection successful!" : "❌ Mock rejection failed!"
-        );
-      } else {
-        await bot.sendMessage(
-          chatId,
-          "📝 Usage: /test_reject <userId> <invoiceId>"
-        );
-      }
-      break;
-    default:
-      await handleMessage(bot, msg);
+    } catch { /* chat unreachable — nothing more we can do */ }
   }
 });
 
@@ -223,32 +157,39 @@ bot.on("callback_query", async (query) => {
 
 // * 🖼️ Photo Handler (for receipt uploads and support)
 bot.on("photo", async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  const session = await getSession(userId);
+  try {
+    const userId = msg.from?.id;
+    const session = await getSession(userId);
 
-  // Check if user is in support mode
-  if (session?.support) {
-    await supportMessageHandler(bot, msg);
-    return;
-  }
+    // Check if user is in support mode
+    if (session?.support) {
+      await supportMessageHandler(bot, msg);
+      return;
+    }
 
-  // Handle receipt uploads
-  if (session?.step === "waiting_for_receipt_image") {
-    const handleBankRecipt = (
-      await import("./paymentHandlers/handleBankRecipt.js")
-    ).default;
-    await handleBankRecipt(bot, msg, session);
+    // Handle receipt uploads
+    if (session?.step === "waiting_for_receipt_image") {
+      const handleBankRecipt = (
+        await import("./paymentHandlers/handleBankRecipt.js")
+      ).default;
+      await handleBankRecipt(bot, msg, session);
+    }
+  } catch (err) {
+    console.error("❌ Error in bot.on('photo'):", err.message);
   }
 });
 
 // * 🎥 Video Handler (for support)
 bot.on("video", async (msg) => {
-  const userId = msg.from.id;
-  const session = await getSession(userId);
+  try {
+    const userId = msg.from?.id;
+    const session = await getSession(userId);
 
-  if (session?.support) {
-    await supportMessageHandler(bot, msg);
+    if (session?.support) {
+      await supportMessageHandler(bot, msg);
+    }
+  } catch (err) {
+    console.error("❌ Error in bot.on('video'):", err.message);
   }
 });
 

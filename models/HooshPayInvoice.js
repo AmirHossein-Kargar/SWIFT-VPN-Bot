@@ -92,14 +92,21 @@ const hooshPayInvoiceSchema = new mongoose.Schema({
 });
 
 // ── State-transition guard ────────────────────────────────────────────────────
+// Record the persisted status when a document is hydrated so the pre-save hook
+// always knows the real source state. (`this.$__.priorDoc` is internal and not
+// reliably populated, which would make every .save() look like a transition
+// from an unknown state.)
+hooshPayInvoiceSchema.post("init", function (doc) {
+  doc.$locals.originalStatus = doc.status;
+});
+
 hooshPayInvoiceSchema.pre("save", function (next) {
+  // On a new document any initial status is allowed
+  if (this.isNew) return next();
   if (!this.isModified("status")) return next();
 
-  const from = this.$__.priorDoc?.status ?? null;
+  const from = this.$locals?.originalStatus ?? this.$__.priorDoc?.status ?? null;
   const to   = this.status;
-
-  // On new document, any initial status is allowed
-  if (this.isNew) return next();
 
   const allowed = ALLOWED_TRANSITIONS[from];
   if (!allowed) {

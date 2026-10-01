@@ -1,56 +1,505 @@
-# 🔐 VPN Bot
+# SWIFT-VPN-Bot
 
-- 🧑‍💻 A Telegram bot to manage VPN/VLESS services.
-- 🚀 Integrated with WizardXray API for automatic service provisioning.
-- 🛠️ Admin panel in Telegram group for manual provisioning, payments, and overrides.
-- ☁️ Uses MongoDB and Redis to manage user sessions and service data.
+A production Telegram bot for selling VPN (VLESS) services: wallet top-ups via
+three payment methods, automatic service provisioning through the WizardXray
+panel, and an admin panel that runs entirely inside a Telegram group.
 
-## 🎯 Main Goal
-The main goal of this project is to simplify the process of managing and delivering VPN (VLESS) services through Telegram.
-It automates user service provisioning, balance management, and integrates fallback manual tools for admins — all accessible within Telegram, making it ideal for small teams or individuals running VPN businesses.
-## ⚙️ Features
+---
 
-- Accepts plan orders, checks user balance, calls WizardXray API to create VPN services.
-- Automatically deducts user balance.
-- Stores service details (`username`, `links`, `expire_date`, `usage`, etc.) in MongoDB.
-- Fallback manual flow: Admin group can confirm or reject payment, send configs, and manually register services.
-- Redis-backed session-based flows for OTP, confirmation steps, manual processes, etc.
-##  🔧 Technical Stack
+## Table of contents
 
-- Node.js (v16+), Express or Telegram Bot API using `node-telegram-bot-api`
-- MongoDB (Atlas or local)
-- Redis (Cloud or local) for session & state management
-- Axios for HTTP requests to WizardXray API
-- Moment-jalaali for date formatting (optional)
-## 📁 Environment Variables
+1. [What it does](#1-what-it-does)
+2. [Architecture](#2-architecture)
+3. [Local development](#3-local-development)
+4. [Environment variables](#4-environment-variables)
+5. [Money-safety model](#5-money-safety-model)
+6. [Railway deployment](#6-railway-deployment)
+7. [HooshPay webhook](#7-hooshpay-webhook)
+8. [Railway scaling — one replica](#8-railway-scaling--one-replica)
+9. [Testing](#9-testing)
+10. [Production checklist](#10-production-checklist)
+11. [Operations & recovery](#11-operations--recovery)
 
-Create a `.env` file with the following variables:
+---
 
-```env
-BOT_TOKEN=your_telegram_bot_token
-VPN_API_KEY=your_wizardxray_api_key
-MONGO_URL=your_mongodb_connection_string
-NOW_PAYMENTS_API_KEY=your_nowpayments_api_key
-CARD_NUMBER=your_sheba_or_card_number
-GROUP_ID=your_admin_group_id
-ADMINS=comma_separated_admin_ids
-WIZARD_API_URL=https://robot.wizardxray.shop/bot/api/v1
-REDIS_HOST=your_redis_host
-REDIS_PORT=your_redis_port
-REDIS_PASSWORD=your_redis_password
+## 1. What it does
 
-# HooshPay Card-to-Card Payment Gateway
-HOOSHPAY_API_KEY=your_hooshpay_api_key
-HOOSHPAY_WEBHOOK_SECRET=your_hooshpay_webhook_secret
-WEBHOOK_BASE_URL=https://your-server-domain.com
-PORT=3000
+**User side**
+
+- `/start` — main menu.
+- **🛒 خرید سرویس** — pick a duration (30/60/90 days) then a plan; the plan price
+  is deducted from the wallet and a VLESS subscription is created on the panel
+  and delivered with a QR code.
+- **💰 افزایش موجودی** — top up the wallet with one of three methods:
+  - **HooshPay** — online gateway (card-to-card, automatic, webhook-confirmed)
+  - **TRX** — Tron transfer, matched automatically by a background scanner
+  - **کارت به کارت** — manual bank transfer with a receipt uploaded to the admin group
+- **📦 سرویس‌های من** — list services, view details/usage, change link, get a QR
+  code, activate/deactivate, delete.
+- **🎁 سرویس تست** — one free trial service per user.
+- **👤 پروفایل من / 📖 راهنما / 🛠 پشتیبانی** — profile, guide, support relay.
+
+**Admin side** (in the Telegram admin group)
+
+- `/panel` — admin panel: TRX wallet scan, system status, financial reports
+  (comprehensive / detailed / monthly / crypto / bank / HooshPay / users),
+  API service purchase, and messaging a user directly.
+- Receipt approval for manual bank payments (approve / reject) directly from the
+  receipt card posted to the group.
+- HooshPay invoice lookup by UID or order id, and forced re-fulfillment.
+
+---
+
+## 2. Architecture
+
+```
+                       Telegram (long polling)
+                                │
+                    ┌───────────▼───────────┐
+                    │        bot.js         │  message / callback routing
+                    └───────────┬───────────┘
+        ┌───────────────────────┼───────────────────────┐
+        ▼                       ▼                       ▼
+  handlers/               paymentHandlers/         services/
+  ─────────               ────────────────         ─────────
+  onMessage               payHoosh  ──┐            buyService/    → WizardXray
+  handleCallbackQuery     payTrx      │            manageServices/
+  admin/groupManager      payBank     │            hooshpay/      → HooshPay API
+  admin/reports           handleBankRecipt         trxWalletScanner → TronScan
+                          handleTrxAmount
+        └───────────┬───────────┴───────────┬───────────┘
+                    ▼                       ▼
+              MongoDB (mongoose)         Redis
+         authoritative money state   sessions · locks · cron exclusion
+                    ▲
+                    │
+        ┌───────────┴────────────┐
+        │      server.js         │  Express
+        │  POST /api/hooshpay/webhook
+        │  GET  /health   GET /ready
+        └────────────────────────┘
 ```
 
-### HooshPay Environment Variables
+**Components**
 
-| Variable | Description |
+| Component | Role |
 |---|---|
-| `HOOSHPAY_API_KEY` | Your HooshPay API key (from the HooshPay dashboard → Development). Format: `hp_live_xxx` |
-| `HOOSHPAY_WEBHOOK_SECRET` | Your HooshPay webhook secret used for HMAC-SHA256 signature verification |
-| `WEBHOOK_BASE_URL` | Your server's public HTTPS URL (e.g., `https://bot.example.com`). The webhook endpoint is at `/api/hooshpay/webhook` |
-| `PORT` | Express server port (default: 3000) |
+| **Telegram bot** | `node-telegram-bot-api` in **polling** mode. Started by `startBot.js`. |
+| **MongoDB** | Authoritative store for users, balances, invoices and services. All money mutations use atomic single-document writes. |
+| **Redis** | Session store (TTL'd), in-flight payment locks, cron/scanner mutual exclusion. **Never** authoritative for money. |
+| **HooshPay** | Primary online gateway. Invoice created via REST; confirmation arrives as a signed webhook. |
+| **WizardXray** | VPN panel REST API: create / find / change-link / delete / deactivate service. |
+| **TRX scanner** | Polls TronScan every 5 minutes, matches incoming TRX against unpaid invoices, credits the wallet. |
+| **Express server** | Receives HooshPay webhooks and serves health probes. Runs inside the same process as the bot. |
+
+**Process layout** — `npm start` boots one process that starts, in order:
+MongoDB → Express → Telegram polling → TRX scanner → HooshPay cron → signal handlers.
+
+---
+
+## 3. Local development
+
+**Requirements:** Node.js **20 or newer** (developed on Node 22), MongoDB, Redis.
+
+```bash
+git clone <repository-url>
+cd SWIFT-VPN-Bot
+
+npm install
+cp .env.example .env      # then fill in every REQUIRED value
+```
+
+Validate the configuration before starting:
+
+```bash
+npm run preflight         # exits non-zero if anything critical is missing
+```
+
+Run the tests and start the bot:
+
+```bash
+npm test                  # unit + integration suites
+npm start                 # starts everything (bot + webhook server)
+```
+
+| Command | What it does |
+|---|---|
+| `npm start` | Production entry point — `node bot.js` |
+| `npm test` | Full test suite (`node --test`) |
+| `npm run preflight` | Configuration / connectivity pre-deployment check |
+
+> The DB-backed integration suites need a reachable MongoDB. Point
+> `TEST_MONGO_URL` at a throwaway database whose name contains `test` (each test
+> file automatically gets its own database). When MongoDB is unreachable those
+> suites **skip** rather than fail — a green run with skips means the money-path
+> assertions did **not** execute.
+
+---
+
+## 4. Environment variables
+
+The full annotated template lives in [`.env.example`](.env.example). This is the
+authoritative list — every variable below is read somewhere in the codebase.
+
+### Required
+
+| Variable | Purpose | Example / notes |
+|---|---|---|
+| `BOT_TOKEN` | Telegram bot token from @BotFather | `123456789:AA...` |
+| `ADMINS` | Comma-separated Telegram user IDs with admin rights | `11111111,22222222`. **Fail-closed**: if empty, nobody is an admin. |
+| `GROUP_ID` | Admin group chat id (negative) | `-1001234567890`. Admin actions are only accepted from this chat. |
+| `MONGO_URL` | MongoDB connection string | `mongodb://user:pass@host:27017/swiftvpn?authSource=admin` |
+| `REDIS_HOST` | Redis host | `127.0.0.1` |
+| `REDIS_PORT` | Redis port | `6379` |
+| `WIZARD_API_URL` | VPN panel base URL, no trailing slash | `https://panel.example.com` |
+| `VPN_API_KEY` | VPN panel bearer token | |
+| `HOOSHPAY_API_KEY` | HooshPay API key | |
+| `HOOSHPAY_WEBHOOK_SECRET` | HMAC-SHA256 secret for webhook signatures | **Mandatory.** If unset, every webhook is rejected. Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+| `WEBHOOK_BASE_URL` | Public HTTPS base URL of this server, **no trailing slash** | `https://your-app.up.railway.app` |
+| `CARD_NUMBER` | 16-digit card number shown for manual transfers | |
+| `TRX_WALLET` | Tron address receiving TRX (starts with `T`, 34 chars) | |
+
+### Optional
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `REDIS_USERNAME` | `default` | Redis 6+ ACL username |
+| `REDIS_PASSWORD` | *(empty)* | Redis password |
+| `CMC_API_KEY` | fallback `0.08` | CoinMarketCap key for the TRX quote. **Strongly recommended** — without it invoices are mis-priced by the fallback rate. |
+| `PORT` | `3000` | Express port. Railway injects this — do not hardcode it there. |
+| `WEBHOOK_RATE_LIMIT_PER_MIN` | `600` | Per-IP webhook limit per 60 s window. `0` disables it. |
+| `COST_PER_DAY` | `200` | Cost per service-day (Toman) for admin profit reports |
+| `COST_PER_GB` | `300` | Cost per GB sold (Toman) for admin profit reports |
+| `TEST_MONGO_URL` | `mongodb://127.0.0.1:27017/swiftvpn_test` | Test-only. Name must contain `test`. |
+
+> **Removed:** `NOW_PAYMENTS_API_KEY` and the whole NowPayments/TON flow were
+> deleted — they were unreachable at runtime (the session step that triggered
+> them was never set anywhere).
+
+---
+
+## 5. Money-safety model
+
+This section documents exactly what happens on every money path. It is the
+behaviour the code and the test suite guarantee.
+
+### 5.1 HooshPay (automatic)
+
+```
+create invoice (HooshPay API) → persist HooshPayInvoice (status: pending)
+        │
+        ▼
+signed webhook  →  HMAC-SHA256 verify  →  amount verify  →  find invoice
+        │
+        ▼
+Phase 1  findOneAndUpdate({_id, fulfilled:false}) → {fulfilled:true, status:"paid"}
+        ▼
+Phase 2  findOneAndUpdate({_id, fulfilled:true, balanceCredited:false})
+         → {balanceCredited:true}   then  User.$inc{ balance }
+        ▼
+Telegram confirmation
+```
+
+- **Idempotent.** Both phases are single atomic MongoDB writes. A duplicate
+  webhook, a double-click on “I have paid”, or a retry all lose the race and
+  change nothing. Ten concurrent deliveries credit exactly once.
+- **Crash-safe.** A crash between Phase 1 and Phase 2 leaves
+  `{fulfilled: true, balanceCredited: false}`. The recovery cron completes it on
+  the next cycle (≤ 5 minutes) — exactly once.
+- **Redis is not authoritative.** If Redis is down the in-flight lock
+  *fails open* and the MongoDB guards still guarantee a single credit.
+- **Rejections never credit:** bad/missing signature, amount mismatch, unknown
+  invoice, or a paid webhook for an invoice already `reversed`.
+- **Reversals** (`reversed` / `refunded` / `chargedback`) move `paid → reversed`
+  and alert the admin. A later `paid` webhook for a reversed invoice is ignored.
+
+### 5.2 TRX (automatic scanner)
+
+Same two-phase pattern (`status: "unpaid" → "paid"`, then `balanceCredited`),
+plus:
+
+- `transactionHash` is a **sparse unique index** — one on-chain transaction can
+  settle at most one invoice; reuse raises `E11000` and is treated as consumed.
+- The scanner stops after the first successful match per transaction, so a single
+  deposit can never clear several pending invoices.
+- Amount matching uses a 1 % tolerance to absorb rate drift between quote and payment.
+- Wallet credit happens **before** the Telegram notification, so a user is never
+  told “paid” for money that was not added.
+
+### 5.3 Manual bank transfer
+
+A receipt is posted to the admin group with a **✅ Confirm** button.
+
+- **Admin-only.** The callback re-checks that the clicker is in `ADMINS` **and**
+  in `GROUP_ID` — a forwarded message’s buttons still deliver callbacks, so
+  identity is never inferred from the button itself.
+- **Single credit.** Confirmation is an atomic
+  `findOneAndUpdate({ paymentId, status: { $ne: "confirmed" } })`. A double-click
+  or a replayed callback credits once.
+- **Amount comes from the database**, never from `callback_data`.
+
+### 5.4 Purchasing a service (wallet → VPN)
+
+```
+1. RESERVE   User.findOneAndUpdate({telegramId, balance:{$gte:price}}, {$inc:{balance:-price}})
+2. PROVISION POST /create to the WizardXray panel
+3. COMMIT    User.updateOne({telegramId}, {$push:{services}, $inc:{totalServices:1}})
+4. ROLLBACK  on any failure → User.$inc{balance:+price}  + admin-group alert
+```
+
+- **No TOCTOU.** The reservation is atomic, so two concurrent purchases can never
+  both pass a balance check; the balance can never go negative.
+- **No lost updates.** Field-level `$inc`/`$push` replaced whole-document
+  `save()`, which could silently overwrite a balance a payment had just credited.
+- **No silent money loss.** If the panel returns an error or the request times
+  out, the reservation is refunded automatically and the user is told; the admin
+  group is alerted. If the refund *itself* fails, the group receives an explicit
+  “fix this balance manually” alert instead of failing quietly.
+- **One caveat:** if the panel creates the service but the DB commit fails, the
+  user keeps the config and is **not** refunded (they received value) — the admin
+  group is alerted to record the service manually.
+
+---
+
+## 6. Railway deployment
+
+### 6.1 Push to GitHub
+
+```bash
+git add -A
+git commit -m "chore: production readiness"
+git push origin <branch>
+```
+
+Confirm `.env` is **not** in the commit (`.gitignore` covers `.env` and `.env.*`,
+with `.env.example` explicitly kept).
+
+### 6.2 Create the Railway project
+
+1. Sign in at [railway.app](https://railway.app) → **New Project**.
+2. **Deploy from GitHub repo** → select this repository.
+3. Railway detects Node and runs `npm install` then `npm start`.
+
+### 6.3 Add the datastores
+
+- **New → Database → MongoDB** (or use an external MongoDB Atlas cluster).
+- **New → Database → Redis** (or an external Redis).
+
+Railway injects connection variables for its own plugins. Map them onto the names
+this app expects (`MONGO_URL`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`,
+`REDIS_USERNAME`) using reference variables, e.g. `${{MongoDB.MONGO_URL}}`.
+
+### 6.4 Configure environment variables
+
+Service → **Variables** → add every **Required** variable from
+[section 4](#4-environment-variables). Do not set `PORT` — Railway provides it.
+
+### 6.5 Start command and Node version
+
+| Setting | Value |
+|---|---|
+| Start command | `npm start` (equivalent to `node bot.js`) |
+| Build command | *(default)* `npm install` |
+| Node version | `>=20` (declared in `package.json` → `engines`) |
+
+### 6.6 Public domain
+
+Service → **Settings → Networking → Generate Domain**. Copy the HTTPS URL, e.g.
+`https://your-app.up.railway.app`, and set:
+
+```
+WEBHOOK_BASE_URL=https://your-app.up.railway.app
+```
+
+**No trailing slash.** Then redeploy so the value is picked up.
+
+### 6.7 Health check
+
+Service → **Settings → Deploy → Healthcheck Path** → `/health`.
+
+- `GET /health` → **200** whenever the process is alive (plus `ts`, `pid`, `uptime`).
+  Railway restarts on a non-200, so a transient MongoDB blip must not cause a
+  restart loop — dependency state is reported separately.
+- `GET /ready` → **200** only when MongoDB is connected, **503** otherwise. Use
+  this for external monitoring / uptime checks.
+
+### 6.8 Deploy and verify
+
+1. **Deploy** and watch **Logs** for:
+   ```
+   ✔ MongoDB connected successfully
+   ✔ DB Ready
+   ✔ Webhook server listening on port <PORT>
+   ✔ HooshPay Recovery Cron Started
+   🚀 TRX Wallet Scanner Started
+   ```
+2. Verify the probes:
+   ```bash
+   curl -i https://YOUR-DOMAIN/health   # expect 200 {"ok":true,...}
+   curl -i https://YOUR-DOMAIN/ready    # expect 200 {"ready":true,...}
+   ```
+3. Verify the bot: send `/start` in Telegram.
+4. Verify the webhook: create an invoice in the bot and complete a real payment,
+   then confirm “PAYMENT_SIGNATURE_VALID” → “PAYMENT_CREDITED” in the logs.
+5. **Redeployment:** pushing to the connected branch redeploys automatically.
+6. **Rollback:** Railway → Deployments → pick a previous build → **Redeploy**.
+   (Or `git revert` + push, to keep the branch honest.)
+
+---
+
+## 7. HooshPay webhook
+
+Production URL format:
+
+```
+https://YOUR-RAILWAY-DOMAIN/api/hooshpay/webhook
+```
+
+Register exactly that URL in the HooshPay dashboard and set the same secret in
+`HOOSHPAY_WEBHOOK_SECRET`.
+
+- `WEBHOOK_BASE_URL` must be the **public HTTPS origin only**, with **no trailing
+  slash** and no path. The app appends `/api/hooshpay/webhook` itself.
+- Signature verification is **mandatory**: keys are sorted (ksort), the payload is
+  re-serialised compactly, and the HMAC-SHA256 is compared with
+  `crypto.timingSafeEqual`. A missing secret rejects **all** webhooks — there is
+  no bypass.
+- The endpoint always answers **200** immediately and processes asynchronously;
+  fulfillment is idempotent and crash-safe, so an early 200 cannot lose a payment
+  (the recovery cron finishes anything interrupted).
+- Oversized payloads (> 64 KB) are rejected with **413**; per-IP rate limiting
+  defaults to 600 requests/minute (`WEBHOOK_RATE_LIMIT_PER_MIN=0` disables it).
+
+---
+
+## 8. Railway scaling — one replica
+
+> ### ⚠️ This service MUST run with exactly **1 replica**.
+
+The Telegram bot uses **long polling**. Two replicas would compete for the same
+updates and trigger `409 Conflict`, causing missed messages and erratic
+behaviour. The TRX scanner, the HooshPay cron and the Express server all live in
+that same process.
+
+Redis locks (`hoosh:cron:*`, `trx:scan:cron`) prevent duplicate *cron* and
+*scanner* execution across instances, but they cannot make long polling safe.
+
+To scale horizontally you must first migrate the bot to **Telegram webhook mode**
+(`setWebhook` + a `POST /telegram/webhook` route, with the same single-writer
+discipline for the update stream). Until then: **replicas = 1**.
+
+On Railway: Service → **Settings → Deploy → Replicas = 1**.
+
+---
+
+## 9. Testing
+
+```bash
+npm test
+```
+
+| Location | Scope | Requires MongoDB |
+|---|---|---|
+| `tests/hooshpay.test.js` | HooshPay payload contract & invoice state machine | no |
+| `tests/unit/` | Real `utils/auth.js`, real webhook signature verification, real amount validators | no |
+| `tests/integration/hooshpayFulfillment.test.js` | Real two-phase credit, duplicate & concurrent webhooks, crash recovery | yes |
+| `tests/integration/webhookHttp.test.js` | Real Express app over HTTP: signature/amount/size handling, concurrency | yes |
+| `tests/integration/purchaseFlow.test.js` | Real purchase flow with a stubbed panel: reserve/commit/**refund** | yes |
+| `tests/integration/adminBankConfirm.test.js` | Real admin callbacks: authorization, double-click, tampered amount | yes |
+| `tests/integration/trxScanner.test.js` | Real scanner claims, hash reuse, reverted transactions, recovery | yes |
+
+Expected result on a machine with MongoDB and Redis available: **154/154 passing,
+0 skipped.**
+
+```text
+# tests 154
+# pass 154
+# fail 0
+```
+
+---
+
+## 10. Production checklist
+
+**MongoDB**
+- [ ] `MONGO_URL` set and reachable; `/ready` returns 200.
+- [ ] Automated backups enabled (Atlas snapshot schedule or `mongodump` cron).
+- [ ] Indexes built on first boot (`hooshpayinvoices`, `cryptoinvoices`, `users`).
+
+**Redis**
+- [ ] `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` correct; logs show `✔ Redis connected`.
+- [ ] Persistence (AOF/RDB) enabled if you value session continuity.
+
+**Telegram**
+- [ ] `BOT_TOKEN` valid; logs show no `polling_error`.
+- [ ] `ADMINS` contains real numeric IDs — a typo locks everyone out of the panel.
+- [ ] `GROUP_ID` is the **negative** supergroup id.
+- [ ] Bot is an admin in the group (needed to read messages / delete receipts).
+
+**HooshPay**
+- [ ] `HOOSHPAY_API_KEY` valid.
+- [ ] `HOOSHPAY_WEBHOOK_SECRET` is a long random value (**not** a placeholder).
+- [ ] `WEBHOOK_BASE_URL` is the public HTTPS origin, no trailing slash.
+- [ ] Webhook URL registered in the HooshPay dashboard.
+- [ ] One real low-value payment completed end-to-end.
+
+**WizardXray**
+- [ ] `WIZARD_API_URL` / `VPN_API_KEY` valid; `/status` in the admin panel works.
+- [ ] Panel account has enough balance to provision.
+
+**TRX**
+- [ ] `TRX_WALLET` correct (starts with `T`, 34 chars).
+- [ ] `CMC_API_KEY` set (otherwise a fixed fallback price is used).
+- [ ] One real small TRX payment matched and credited.
+
+**Railway**
+- [ ] **Replicas = 1.**
+- [ ] Healthcheck path `/health`.
+- [ ] `WEBHOOK_BASE_URL` matches the generated domain exactly.
+
+**Secrets**
+- [ ] `.env` is not committed (`git log --all -- .env` is empty).
+- [ ] No token or key appears in logs or the repository.
+
+**Webhook / logs / backups**
+- [ ] `/health` and `/ready` monitored externally.
+- [ ] Alert on log patterns `PAYMENT_SIGNATURE_INVALID`, `REFUND FAILED`,
+      `REFUND`, `Balance credit FAILED`, `Cron cycle error`.
+- [ ] MongoDB backups verified by a test restore.
+
+---
+
+## 11. Operations & recovery
+
+**Health**
+```bash
+curl -s https://YOUR-DOMAIN/health   # liveness
+curl -s https://YOUR-DOMAIN/ready    # readiness (MongoDB)
+```
+
+**Stuck HooshPay payments** (Phase 1 done, Phase 2 missing) — self-healing within
+5 minutes. To force it: admin panel → HooshPay report → **ارسال مجدد موجودی**
+(for a single invoice), or inspect with:
+```
+db.hooshpayinvoices.find({ fulfilled: true, balanceCredited: false })
+```
+This set should be empty except transiently during a crash.
+
+**Stuck TRX credit** — the scanner repairs `{ status: "paid", balanceCredited: false }`
+at the start of each cycle.
+
+**Recommended log alerts**
+| Pattern | Meaning |
+|---|---|
+| `PAYMENT_SIGNATURE_INVALID` | Someone is posting unsigned/forged webhooks |
+| `Amount mismatch` | A webhook amount disagreed with the stored invoice |
+| `REFUND FAILED` | A wallet refund failed — **manual correction required** |
+| `Balance credit FAILED` | Phase-2 write failed; the flag was rolled back and will retry |
+| `Cron cycle error` | The recovery cron threw |
+
+**Graceful shutdown** — `SIGTERM`/`SIGINT` stop Telegram polling, the TRX scanner
+and the cron, then close Express, MongoDB and Redis before exiting. Railway sends
+`SIGTERM` on redeploy, so in-flight work finishes instead of being cut off.
+
+For VPS/PM2/Nginx deployment details, deeper monitoring queries and the manual
+recovery playbook, see [`DEPLOYMENT_CHECKLIST.md`](DEPLOYMENT_CHECKLIST.md).

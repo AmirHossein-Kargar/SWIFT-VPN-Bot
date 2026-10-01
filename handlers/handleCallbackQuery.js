@@ -43,23 +43,39 @@ import payTrx from "../paymentHandlers/payTrx.js";
 import { sendTrxWallet } from "../paymentHandlers/handleTrxAmount.js";
 import { payHoosh } from "../paymentHandlers/payHoosh.js";
 import { verifyHooshPayment } from "../services/hooshpay/verifyHooshPayment.js";
+import { isAdmin } from "../utils/auth.js";
 
-// ─── Helper: verify the caller is an admin in the admin group ──────────────
-function isAdmin(chatId, userId) {
-  const groupId = process.env.GROUP_ID;
-  const adminIds = (process.env.ADMINS || "")
-    .split(",")
-    .filter(Boolean)
-    .map((id) => Number(id.trim()));
-
-  if (groupId && chatId.toString() !== String(groupId)) return false;
-  if (adminIds.length > 0 && !adminIds.includes(Number(userId))) return false;
-  return true;
-}
+// ─── Authorization helpers ─────────────────────────────────────────────────
+// isAdmin comes from utils/auth.js (fail-CLOSED: no ADMINS => no admins).
+// Imported rather than re-implemented so the policy cannot drift per handler.
 
 async function denyAdmin(bot, queryId) {
   await bot.answerCallbackQuery(queryId, {
     text: "⛔️ دسترسی غیرمجاز",
+    show_alert: true,
+  });
+}
+
+/**
+ * Ownership guard for user-facing service callbacks.
+ *
+ * callback_data can reach a user who is not its originator (a message carrying
+ * an inline keyboard can be forwarded, and the forwarded buttons still fire),
+ * so "the button exists" is not proof of ownership — the server must verify
+ * that the requested service actually belongs to the caller.
+ */
+async function userOwnsService(userId, username) {
+  if (!username) return false;
+  const owner = await User.findOne({
+    telegramId: String(userId),
+    "services.username": username,
+  }).lean();
+  return Boolean(owner);
+}
+
+async function denyOwnership(bot, queryId) {
+  await bot.answerCallbackQuery(queryId, {
+    text: "⛔️ این سرویس متعلق به حساب شما نیست",
     show_alert: true,
   });
 }
@@ -84,16 +100,42 @@ const ADMIN_PANEL_KEYBOARD = {
 
 // ══════════════════════════════════════════════════════════════════════════════
 const handleCallbackQuery = async (bot, query) => {
-  const data = query.data;
-  const chatId = query.message.chat.id;
-  const messageId = query.message.message_id;
-  const userId = query.from.id;
+  const data = query?.data;
+  const chatId = query?.message?.chat?.id ?? query?.from?.id;
+  const messageId = query?.message?.message_id;
+  const userId = query?.from?.id;
+
+  // Defensive: callbacks can arrive with no data (malformed client) or from a
+  // message the bot can no longer address (deleted / too old / inline mode).
+  if (!data || !chatId) {
+    try { await bot.answerCallbackQuery(query.id); } catch { /* ignore */ }
+    return;
+  }
+  if (messageId == null) {
+    try {
+      await bot.answerCallbackQuery(query.id, {
+        text: "⚠️ این دکمه دیگر معتبر نیست. لطفاً از منوی اصلی دوباره اقدام کنید.",
+        show_alert: true,
+      });
+    } catch { /* ignore */ }
+    return;
+  }
+
   const session = await getSession(chatId);
 
   // ── hoosh_verify:<uid> — manual "I've Paid" verification ─────────────────
   if (data.startsWith("hoosh_verify:")) {
     const uid = data.split("hoosh_verify:")[1];
     if (!uid) return;
+
+    // Ownership guard: an invoice may only be verified by the user it belongs to.
+    // (Kept as a scoped lookup so an unknown uid falls through to the normal
+    // "not found" path rather than being answered twice.)
+    const ownedInvoice = await HooshPayInvoice.findOne({ uid }).select("userId").lean();
+    if (ownedInvoice && String(ownedInvoice.userId) !== String(userId)) {
+      await denyOwnership(bot, query.id);
+      return;
+    }
 
     await bot.answerCallbackQuery(query.id, { text: "⏳ در حال بررسی پرداخت..." });
 
@@ -577,13 +619,18 @@ const handleCallbackQuery = async (bot, query) => {
     }
 
     // ── Admin: API service purchase ──────────────────────────────────────────
+    // These provision paid VPN services from the panel's own account — they
+    // MUST be admin-gated here, not only inside the helper functions.
     case "admin_api_service_purchase":
+      if (!isAdmin(chatId, userId)) { await denyAdmin(bot, query.id); break; }
       await apiServicePurchase(bot, query, session);
       break;
     case "admin_create_api_service":
+      if (!isAdmin(chatId, userId)) { await denyAdmin(bot, query.id); break; }
       await createApiService(bot, query, session);
       break;
     case "admin_cancel_api_purchase":
+      if (!isAdmin(chatId, userId)) { await denyAdmin(bot, query.id); break; }
       await cancelApiPurchase(bot, query);
       break;
 
@@ -616,40 +663,77 @@ const handleCallbackQuery = async (bot, query) => {
   // ── Dynamic callback handlers (startsWith) ─────────────────────────────────
 
   if (data.startsWith("confirm_payment_")) {
-    const parts = data.split("_");
-    if (parts.length >= 5) {
-      const targetUserId = parts[2];
-      const amount = parseInt(parts[3].replace(/,/g, ""));
-      const paymentId = parts[4];
+    // ADMIN ONLY — this callback moves real money into a wallet.
+    if (!isAdmin(chatId, userId)) { await denyAdmin(bot, query.id); return; }
 
-      try {
-        const user = await User.findOneAndUpdate(
-          { telegramId: targetUserId },
-          { $inc: { balance: amount, successfulPayments: 1 } },
-          { new: true }
+    const parts = data.split("_");
+    if (parts.length < 5) return;
+    const paymentId = parts[4];
+
+    try {
+      // ── Atomic claim ────────────────────────────────────────────────────
+      // Only the first click can move the invoice into "confirmed". A rapid
+      // double-click (or a replayed callback) finds status already confirmed
+      // and is rejected, so the wallet can never be credited twice.
+      const claimed = await invoice.findOneAndUpdate(
+        { paymentId, status: { $ne: "confirmed" } },
+        { $set: { status: "confirmed", confirmedAt: new Date(), confirmedBy: String(userId) } },
+        { new: true }
+      );
+
+      if (!claimed) {
+        await bot.answerCallbackQuery(query.id, {
+          text: "⚠️ این پرداخت قبلاً تایید شده است",
+          show_alert: true,
+        });
+        await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId }).catch(() => {});
+        return;
+      }
+
+      // ── Amount and recipient come from the persisted invoice ────────────
+      // Never trust the amount embedded in callback_data.
+      const amount = Number(claimed.amount);
+      const creditedTelegramId = String(claimed.userId);
+
+      const user = await User.findOneAndUpdate(
+        { telegramId: creditedTelegramId },
+        { $inc: { balance: amount, successfulPayments: 1 } },
+        { new: true }
+      );
+
+      if (!user) {
+        // Roll the claim back so an admin can still action this receipt.
+        await invoice.findOneAndUpdate(
+          { paymentId, status: "confirmed" },
+          { $set: { status: "waiting_for_approval", confirmedAt: null, confirmedBy: null } }
         );
-        if (!user) {
-          await bot.answerCallbackQuery(query.id, { text: "❌ کاربر یافت نشد", show_alert: true });
-          return;
-        }
-        await invoice.findOneAndUpdate({ paymentId }, { status: "confirmed" });
-        await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId });
-        await bot.sendMessage(chatId, "✅ پرداخت تایید شد و موجودی کاربر افزایش یافت.");
+        await bot.answerCallbackQuery(query.id, { text: "❌ کاربر یافت نشد", show_alert: true });
+        return;
+      }
+
+      await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId }).catch(() => {});
+      await bot.sendMessage(chatId, "✅ پرداخت تایید شد و موجودی کاربر افزایش یافت.");
+      try {
         await bot.sendMessage(
-          targetUserId,
+          creditedTelegramId,
           `✅ پرداخت شما تایید شد!\n💰 مبلغ ${amount.toLocaleString("en-US")} تومان به کیف پول شما اضافه شد.`,
           { reply_markup: keyboard.reply_markup }
         );
-        await bot.answerCallbackQuery(query.id, { text: "✅ پرداخت تایید شد" });
-      } catch (err) {
-        console.error("Error confirming payment:", err);
-        await bot.answerCallbackQuery(query.id, { text: "❌ خطا در تایید پرداخت" });
+      } catch (tgErr) {
+        console.warn("[confirm_payment] user notify failed:", tgErr.message);
       }
-      return;
+      await bot.answerCallbackQuery(query.id, { text: "✅ پرداخت تایید شد" });
+    } catch (err) {
+      console.error("Error confirming payment:", err);
+      await bot.answerCallbackQuery(query.id, { text: "❌ خطا در تایید پرداخت", show_alert: true });
     }
+    return;
   }
 
   if (data.startsWith("reject_payment_")) {
+    // ADMIN ONLY
+    if (!isAdmin(chatId, userId)) { await denyAdmin(bot, query.id); return; }
+
     const rest = data.split("reject_payment_")[1];
     const underscoreIdx = rest.indexOf("_");
     if (underscoreIdx === -1) { console.error("❗ reject_payment_ missing userId"); return; }
@@ -657,14 +741,27 @@ const handleCallbackQuery = async (bot, query) => {
     const targetUserId = rest.slice(underscoreIdx + 1);
 
     try {
-      await invoice.findOneAndDelete({ paymentId });
-      await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId });
+      // Deleting is the claim: a second click finds nothing and stays silent,
+      // so the user is not spammed with duplicate rejection notices.
+      const deleted = await invoice.findOneAndDelete({ paymentId });
+
+      await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId }).catch(() => {});
+
+      if (!deleted) {
+        await bot.answerCallbackQuery(query.id, { text: "⚠️ این پرداخت قبلاً بررسی شده است", show_alert: true });
+        return;
+      }
+
       await bot.sendMessage(chatId, "❌ پرداخت رد شد.");
-      await bot.sendMessage(
-        targetUserId,
-        "❌ پرداخت شما توسط ادمین رد شد. در صورت نیاز با پشتیبانی تماس بگیرید.",
-        { reply_markup: keyboard.reply_markup }
-      );
+      try {
+        await bot.sendMessage(
+          targetUserId,
+          "❌ پرداخت شما توسط ادمین رد شد. در صورت نیاز با پشتیبانی تماس بگیرید.",
+          { reply_markup: keyboard.reply_markup }
+        );
+      } catch (tgErr) {
+        console.warn("[reject_payment] user notify failed:", tgErr.message);
+      }
       await bot.answerCallbackQuery(query.id, { text: "❌ پرداخت رد شد" });
     } catch (err) {
       console.error("Error rejecting payment:", err);
@@ -674,6 +771,9 @@ const handleCallbackQuery = async (bot, query) => {
   }
 
   if (data.startsWith("send_config_to_user_")) {
+    // ADMIN ONLY — the admin then types a config that is delivered to a user.
+    if (!isAdmin(chatId, userId)) { await denyAdmin(bot, query.id); return; }
+
     const targetUserId = data.split("send_config_to_user_")[1];
     const sentMsg = await bot.sendMessage(chatId, "📝 لطفاً کانفیگ سرویس را ارسال کنید:", {
       reply_markup: { inline_keyboard: [] },
@@ -713,6 +813,8 @@ const handleCallbackQuery = async (bot, query) => {
   }
 
   if (data.startsWith("register_vpn_id")) {
+    // ADMIN ONLY — registers a VPN service ID against a user account.
+    if (!isAdmin(chatId, userId)) { await denyAdmin(bot, query.id); return; }
     const targetTelegramId = data.split(":")[1];
     await setSession(chatId, { step: "waiting_for_vpn_id", targetTelegramId, messageId });
     await bot.editMessageText("🔑 لطفاً آیدی سرویس را وارد کنید:", { chat_id: chatId, message_id: messageId });
@@ -721,17 +823,21 @@ const handleCallbackQuery = async (bot, query) => {
 
   if (data.startsWith("show_service_")) {
     const username = data.split("show_service_")[1];
+    if (!(await userOwnsService(userId, username))) { await denyOwnership(bot, query.id); return; }
     await showServiceDetails(bot, chatId, username, messageId);
     return;
   }
 
   if (data.startsWith("change_link_")) {
+    const username = data.split("change_link_")[1];
+    if (!(await userOwnsService(userId, username))) { await denyOwnership(bot, query.id); return; }
     await changeServiceLink(bot, chatId, messageId, data, query);
     return;
   }
 
   if (data.startsWith("delete_service_")) {
     const username = data.split("delete_service_")[1];
+    if (!(await userOwnsService(userId, username))) { await denyOwnership(bot, query.id); return; }
     await bot.editMessageText("آیا می خواهید این سرویس را حذف کنید؟", {
       chat_id: chatId,
       message_id: messageId,
@@ -747,6 +853,7 @@ const handleCallbackQuery = async (bot, query) => {
 
   if (data.startsWith("confirm_delete_service_")) {
     const username = data.split("confirm_delete_service_")[1];
+    if (!(await userOwnsService(userId, username))) { await denyOwnership(bot, query.id); return; }
     const res = await deleteService(username);
     const user = await User.findOne({ telegramId: userId });
     if (user) {
@@ -763,11 +870,15 @@ const handleCallbackQuery = async (bot, query) => {
   }
 
   if (data.startsWith("qrcode_")) {
+    const username = data.split("qrcode_")[1];
+    if (!(await userOwnsService(userId, username))) { await denyOwnership(bot, query.id); return; }
     await generateQRCode(bot, chatId, messageId, data, query);
     return;
   }
 
   if (data.startsWith("deactivate_service_")) {
+    const username = data.split("deactivate_service_")[1];
+    if (!(await userOwnsService(userId, username))) { await denyOwnership(bot, query.id); return; }
     await deactivateServiceButton(bot, chatId, messageId, data, query);
     return;
   }
@@ -836,6 +947,14 @@ const handleCallbackQuery = async (bot, query) => {
     await bot.sendMessage(chatId, `✅ ${count} سفارش معلق تسویه شد.`);
     return;
   }
+
+  // ── Fallback ───────────────────────────────────────────────────────────────
+  // Unknown/stale callback data reaches here. Acknowledge so the client-side
+  // spinner is always dismissed; errors are expected when a handler already
+  // answered and are intentionally swallowed.
+  try {
+    await bot.answerCallbackQuery(query.id);
+  } catch { /* already answered */ }
 };
 
 export default handleCallbackQuery;

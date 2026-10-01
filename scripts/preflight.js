@@ -58,6 +58,7 @@ const REQUIRED = {
   // Redis
   REDIS_HOST:             { critical: true,  hint: "Redis server hostname or IP" },
   REDIS_PORT:             { critical: true,  hint: "Redis server port (default 6379)" },
+  REDIS_USERNAME:         { critical: false, hint: "Redis username (default: 'default')" },
   // HooshPay
   HOOSHPAY_API_KEY:       { critical: true,  hint: "Get from HooshPay dashboard" },
   HOOSHPAY_WEBHOOK_SECRET:{ critical: true,  hint: "Set in HooshPay webhook settings" },
@@ -218,6 +219,7 @@ if (!redisHost || !redisPort) {
     const { createClient } = await import("redis");
     const client = createClient({
       socket: { host: redisHost, port: Number(redisPort), connectTimeout: 6000 },
+      username: process.env.REDIS_USERNAME || "default",
       password: process.env.REDIS_PASSWORD || undefined,
     });
 

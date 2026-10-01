@@ -1,27 +1,14 @@
 import { createVpnService, StatusApi } from "../../api/wizardApi.js";
-import { getSession, setSession } from "../../config/sessionStore.js";
+import { setSession } from "../../config/sessionStore.js";
+import { isAdmin } from "../../utils/auth.js";
 
 const apiServicePurchase = async (bot, query, session) => {
   const chatId = query.message.chat.id;
   const messageId = query.message.message_id;
   const userId = query.from.id;
 
-  // بررسی دسترسی ادمین
-  const groupId = process.env.GROUP_ID;
-  const adminIds = (process.env.ADMINS || "")
-    .split(",")
-    .filter(Boolean)
-    .map((id) => Number(id.trim()));
-
-  if (groupId && chatId.toString() !== String(groupId)) {
-    await bot.answerCallbackQuery(query.id, {
-      text: "⛔️ این عملیات فقط در گروه ادمین قابل انجام است",
-      show_alert: true,
-    });
-    return;
-  }
-
-  if (adminIds.length > 0 && !adminIds.includes(Number(userId))) {
+  // بررسی دسترسی ادمین (fail-closed via utils/auth.js)
+  if (!isAdmin(chatId, userId)) {
     await bot.answerCallbackQuery(query.id, {
       text: "⛔️ شما دسترسی انجام این عملیات را ندارید",
       show_alert: true,

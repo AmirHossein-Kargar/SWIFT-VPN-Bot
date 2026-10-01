@@ -1,6 +1,17 @@
 /**
- * HooshPay Integration Tests — v4 (Production Audit)
- * Run with: node --test tests/hooshpay.test.js
+ * HooshPay CONTRACT tests — v5
+ * Run with: npm test
+ *
+ * SCOPE — read this before trusting a green run:
+ *   These cases document the HooshPay payload contract and the invoice state
+ *   machine. They are self-contained and therefore CANNOT catch a defect in
+ *   the production modules (a broken webhook once passed all of them).
+ *
+ *   Tests that actually execute the production code live in:
+ *     tests/unit/          — real auth, signature, amount-validation modules
+ *     tests/integration/   — real Express app, real MongoDB, real fulfillment,
+ *                            real purchase flow, real scanner, real callbacks
+ *   Money-path correctness is asserted there.
  *
  * Suites:
  *  1.  HMAC signature validation (ksort method per official docs)
@@ -263,14 +274,16 @@ describe("Webhook payload handling (official schema)", () => {
   const REVERSAL_STATUSES = new Set(["reversed", "refunded", "chargedback"]);
 
   function process(req, secret) {
-    if (secret) {
-      const sig = req.headers?.["x-hooshpay-signature"];
-      if (!sig) return { rejected: true, reason: "no-sig" };
-      const expected = sign(secret, req.body);
-      let ok = false;
-      try { ok = crypto.timingSafeEqual(Buffer.from(sig, "hex"), Buffer.from(expected, "hex")); } catch { ok = false; }
-      if (!ok) return { rejected: true, reason: "bad-sig" };
+    // MANDATORY: if no secret is set, ALL webhooks are rejected — no bypass
+    if (!secret) {
+      return { rejected: true, reason: "no-secret" };
     }
+    const sig = req.headers?.["x-hooshpay-signature"];
+    if (!sig) return { rejected: true, reason: "no-sig" };
+    const expected = sign(secret, req.body);
+    let ok = false;
+    try { ok = crypto.timingSafeEqual(Buffer.from(sig, "hex"), Buffer.from(expected, "hex")); } catch { ok = false; }
+    if (!ok) return { rejected: true, reason: "bad-sig" };
     const p = req.body;
     // Official field is "invoice" (not "uid")
     const hooshUid = p.invoice || p.uid;
@@ -315,9 +328,9 @@ describe("Webhook payload handling (official schema)", () => {
     }
   });
 
-  test("no secret skips validation", () => {
+  test("no secret REJECTS webhook (mandatory in production)", () => {
     const b = { invoice: "x", status: "paid", event: "payment.success" };
-    assert.equal(process(makeWebhookReq(b), undefined).proceed, true);
+    assert.equal(process(makeWebhookReq(b), undefined).rejected, true);
   });
 
   test("uid fallback still works (backward compat)", () => {
@@ -437,7 +450,14 @@ describe("Refund and reversal", () => {
   const RS = new Set(["reversed", "refunded", "chargedback"]);
 
   test("all reversal statuses recognised",     () => { for (const s of RS) assert.ok(RS.has(s)); });
-  test("reversal blocks fulfillment",          () => { assert.equal(RS.has("reversed") ? false : true, false); });
+  test("reversal must be routed before the paid branch", () => {
+    // A reversal shares the "payment.success"-style delivery channel, so the
+    // handler MUST test reversal membership before treating a delivery as paid.
+    const reversalStatuses = ["reversed", "refunded", "chargedback"];
+    for (const s of reversalStatuses) {
+      assert.equal(RS.has(s), true, `${s} must be classified as a reversal`);
+    }
+  });
   test("non-reversal paid status proceeds",    () => assert.equal(RS.has("paid"), false));
   test("cancelled is NOT a reversal (handled separately)", () => assert.equal(RS.has("cancelled"), false));
 });

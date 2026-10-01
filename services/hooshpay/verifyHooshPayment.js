@@ -14,7 +14,7 @@
  *
  * Redis lock failure → fail-open (MongoDB Phase-1 guard is authoritative).
  */
-import { randomUUID } from "crypto";
+import { randomUUID } from "node:crypto";
 import { verifyInvoice as apiVerify } from "./hooshpayClient.js";
 import HooshPayInvoice from "../../models/HooshPayInvoice.js";
 import { fulfillHooshOrder } from "./fulfillHooshOrder.js";

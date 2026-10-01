@@ -17,7 +17,6 @@ const showTrxScanStatus = async (bot, query, session) => {
     lines.push(
       `• اسکن خودکار: ${trxScanner.scanInterval ? "🟢 فعال" : "🔴 غیرفعال"}`
     );
-    lines.push(`• حالت تست: ${trxScanner.testMode ? "🧪 فعال" : "🚀 غیرفعال"}`);
     lines.push(`• آخرین به‌روزرسانی: ${new Date().toLocaleString("fa-IR")}`);
     lines.push("");
 
@@ -67,9 +66,7 @@ const showTrxScanStatus = async (bot, query, session) => {
     // بخش کنترل‌ها
     lines.push("🎮 <b>کنترل‌ها:</b>");
     lines.push(`• اسکن دستی: در دسترس`);
-    lines.push(`• شروع/توقف خودکار: در دسترس`);
-    lines.push(`• تغییر حالت تست: در دسترس`);
-    lines.push(`• تنظیم فاصله اسکن: در دسترس`);
+    lines.push(`• اسکن خودکار: هر 5 دقیقه (فقط یک نمونه در حال اجرا)`);
 
     const resultText = lines.join("\n");
 
@@ -82,14 +79,6 @@ const showTrxScanStatus = async (bot, query, session) => {
         inline_keyboard: [
           [
             { text: "🔄 اسکن دستی", callback_data: "admin_scan_trx_wallet" },
-            { text: "🟢 شروع خودکار", callback_data: "admin_start_trx_auto" },
-          ],
-          [
-            { text: "⏹️ توقف خودکار", callback_data: "admin_stop_trx_auto" },
-            {
-              text: "🧪 تغییر حالت تست",
-              callback_data: "admin_toggle_trx_test",
-            },
           ],
           [
             { text: "💰 موجودی", callback_data: "admin_trx_balance" },

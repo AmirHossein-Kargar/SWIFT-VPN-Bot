@@ -109,13 +109,6 @@ ${error.message}
       paymentId: paymentId, // Add payment ID to session for deletion
     });
 
-    // Debug: Log what's being stored in session
-    console.log("🔍 Session updated with:", {
-      paymentType: "trx",
-      paymentId: paymentId,
-      chatId: chatId,
-    });
-
     setTimeout(async () => {
       const walletMessage = await bot.editMessageText(
         `✅ فاکتور (<code>${paymentId}</code>) باموفقیت ایجاد شد

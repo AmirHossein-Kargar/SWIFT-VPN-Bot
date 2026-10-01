@@ -1,21 +1,19 @@
 import { StatusApi } from "../../api/wizardApi.js";
+import { isAdmin, isAdminGroup } from "../../utils/auth.js";
 
 const showStatusApi = async (bot, msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  // Get admin IDs from environment variable
-  const adminIds = process.env.ADMINS.split(",").map((id) => Number(id.trim()));
-
   // فقط در گروه ادمین
-  if (chatId.toString() !== String(process.env.GROUP_ID)) {
+  if (!isAdminGroup(chatId)) {
     await bot.sendMessage(
       chatId,
       "⛔️ این دستور فقط در گروه ادمین قابل استفاده است."
     );
     return;
   }
-  if (!adminIds.includes(userId)) {
+  if (!isAdmin(chatId, userId)) {
     await bot.sendMessage(
       chatId,
       "⛔️ فقط ادمین‌ ها به این دستور دسترسی دارند."
