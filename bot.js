@@ -30,13 +30,12 @@ import User from "./models/User.js";
 import { StatusApi } from "./api/wizardApi.js";
 import showStatusApi from "./handlers/admin/showStatusApi.js";
 
-// * 🛡️ Admins
-// Admin parsing/authorization lives in utils/auth.js (fail-closed). This module
-// no longer keeps its own copy of the admin list.
-import { getAdminIds } from "./utils/auth.js";
-if (getAdminIds().length === 0) {
-  console.error("❌ ADMINS is missing or contains no valid IDs — all admin actions are denied.");
-}
+// * ⚙️ Configuration report
+// Resolves platform-provided variable names (Railway's MONGO_URL / REDIS_URL /
+// REDISHOST / ...) and aborts with an actionable list if anything fatal is
+// missing. Admin authorization itself lives in utils/auth.js (fail-closed).
+import { assertRequiredEnv } from "./config/env.js";
+assertRequiredEnv();
 
 // * 🚀 Start Bot
 const bot = await startBot();

@@ -15,24 +15,37 @@
  *   - trxWalletScanner→ fail-OPEN  (in-process `isScanning` guard still applies)
  */
 import { createClient } from "redis";
+import { resolveRedisConfig } from "./env.js";
 
-const client = createClient({
-  username: process.env.REDIS_USERNAME || "default",
-  password: process.env.REDIS_PASSWORD || undefined,
+// Resolve through config/env.js so REDIS_URL and the platform-native names
+// (REDISHOST / REDISPORT / REDISUSER / REDISPASSWORD) all work as-is.
+const redisConfig = resolveRedisConfig();
+
+const sharedOptions = {
   // CRITICAL: do NOT queue commands issued while disconnected.
   // With the default offline queue, a command sent during a Redis outage waits
   // for a reconnect that may never come — every webhook and every cron cycle
   // would hang forever instead of taking its documented fallback path.
   disableOfflineQueue: true,
-  socket: {
-    host: process.env.REDIS_HOST,
-    port: process.env.REDIS_PORT ? Number(process.env.REDIS_PORT) : undefined,
-    connectTimeout: 5000,
-    // Keep retrying forever so the app recovers when Redis comes back,
-    // but with a capped backoff so we do not hammer a dead endpoint.
-    reconnectStrategy: (retries) => Math.min(retries * 200, 5000),
-  },
-});
+};
+
+const client = createClient(
+  redisConfig?.url
+    ? { ...sharedOptions, url: redisConfig.url }
+    : {
+        ...sharedOptions,
+        username: redisConfig?.username || "default",
+        password: redisConfig?.password || undefined,
+        socket: {
+          host: redisConfig?.host,
+          port: redisConfig?.port,
+          connectTimeout: 5000,
+          // Keep retrying forever so the app recovers when Redis comes back,
+          // but with a capped backoff so we do not hammer a dead endpoint.
+          reconnectStrategy: (retries) => Math.min(retries * 200, 5000),
+        },
+      }
+);
 
 client.on("error", (err) => {
   // node-redis emits on every retry — keep it to one concise line.

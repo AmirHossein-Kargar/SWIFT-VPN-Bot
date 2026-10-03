@@ -148,9 +148,9 @@ authoritative list — every variable below is read somewhere in the codebase.
 | `BOT_TOKEN` | Telegram bot token from @BotFather | `123456789:AA...` |
 | `ADMINS` | Comma-separated Telegram user IDs with admin rights | `11111111,22222222`. **Fail-closed**: if empty, nobody is an admin. |
 | `GROUP_ID` | Admin group chat id (negative) | `-1001234567890`. Admin actions are only accepted from this chat. |
-| `MONGO_URL` | MongoDB connection string | `mongodb://user:pass@host:27017/swiftvpn?authSource=admin` |
-| `REDIS_HOST` | Redis host | `127.0.0.1` |
-| `REDIS_PORT` | Redis port | `6379` |
+| `MONGO_URL` | MongoDB connection string | Also accepts `MONGODB_URI`, `MONGO_URI`, `DATABASE_URL`, or `MONGOHOST`+`MONGOPORT`+`MONGOUSER`+`MONGOPASSWORD`. `mongodb://user:pass@host:27017/swiftvpn?authSource=admin` |
+| `REDIS_HOST` | Redis host | Also accepts `REDISHOST`, or a full `REDIS_URL`. `127.0.0.1` |
+| `REDIS_PORT` | Redis port | Also accepts `REDISPORT`. `6379` |
 | `WIZARD_API_URL` | VPN panel base URL, no trailing slash | `https://panel.example.com` |
 | `VPN_API_KEY` | VPN panel bearer token | |
 | `HOOSHPAY_API_KEY` | HooshPay API key | |
@@ -163,8 +163,9 @@ authoritative list — every variable below is read somewhere in the codebase.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `REDIS_USERNAME` | `default` | Redis 6+ ACL username |
-| `REDIS_PASSWORD` | *(empty)* | Redis password |
+| `REDIS_USERNAME` | `default` | Redis 6+ ACL username. Also accepts `REDISUSER`. |
+| `REDIS_PASSWORD` | *(empty)* | Redis password. Also accepts `REDISPASSWORD`. |
+| `MONGO_DB_NAME` | `swiftvpn` | Database name used when the Mongo URI does not specify one |
 | `CMC_API_KEY` | fallback `0.08` | CoinMarketCap key for the TRX quote. **Strongly recommended** — without it invoices are mis-priced by the fallback rate. |
 | `PORT` | `3000` | Express port. Railway injects this — do not hardcode it there. |
 | `WEBHOOK_RATE_LIMIT_PER_MIN` | `600` | Per-IP webhook limit per 60 s window. `0` disables it. |
@@ -280,14 +281,48 @@ with `.env.example` explicitly kept).
 2. **Deploy from GitHub repo** → select this repository.
 3. Railway detects Node and runs `npm install` then `npm start`.
 
-### 6.3 Add the datastores
+### 6.3 Add the datastores and wire their variables
 
-- **New → Database → MongoDB** (or use an external MongoDB Atlas cluster).
+- **New → Database → MongoDB** (or an external MongoDB Atlas cluster).
 - **New → Database → Redis** (or an external Redis).
 
-Railway injects connection variables for its own plugins. Map them onto the names
-this app expects (`MONGO_URL`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`,
-`REDIS_USERNAME`) using reference variables, e.g. `${{MongoDB.MONGO_URL}}`.
+A Railway database service exposes its credentials to **its own** service, not to
+yours. You must add them to the **application** service as *reference variables*
+on the **Variables** tab (the reference picker autocompletes these):
+
+```text
+MONGO_URL   = ${{MongoDB.MONGO_URL}}
+REDIS_URL   = ${{Redis.REDIS_URL}}
+```
+
+That is usually enough. If you prefer discrete values instead of a URL, the
+Railway-native names are accepted **as-is** — no renaming required:
+
+```text
+REDIS_HOST      = ${{Redis.REDISHOST}}
+REDIS_PORT      = ${{Redis.REDISPORT}}
+REDIS_USERNAME  = ${{Redis.REDISUSER}}
+REDIS_PASSWORD  = ${{Redis.REDISPASSWORD}}
+```
+
+MongoDB additionally accepts `MONGODB_URI`, `MONGO_URI`, `DATABASE_URL`, or the
+discrete `MONGOHOST` / `MONGOPORT` / `MONGOUSER` / `MONGOPASSWORD`.
+
+> **A variable added to the database service is not visible to your app.**
+> Forgetting this is the single most common cause of
+> `The "uri" parameter to openUri() must be a string, got "undefined"`.
+
+After adding variables Railway creates *staged changes* — press **Deploy** to
+apply them, then confirm the startup log shows:
+
+```text
+  ✔ MongoDB   resolved from MONGO_URL
+  ✔ Redis     resolved from REDIS_URL
+  ✔ All required variables are present
+```
+
+If anything is missing the app prints exactly which variable is absent and exits
+with a non-zero code, rather than failing later with a cryptic driver error.
 
 ### 6.4 Configure environment variables
 
@@ -344,6 +379,17 @@ Service → **Settings → Deploy → Healthcheck Path** → `/health`.
 5. **Redeployment:** pushing to the connected branch redeploys automatically.
 6. **Rollback:** Railway → Deployments → pick a previous build → **Redeploy**.
    (Or `git revert` + push, to keep the branch honest.)
+
+### 6.9 Common deployment failures
+
+| Symptom in the logs | Cause | Fix |
+|---|---|---|
+| `The "uri" parameter to openUri() must be a string, got "undefined"` | `MONGO_URL` was added to the **database** service instead of the application service, or staged changes were never deployed | Add `MONGO_URL = ${{MongoDB.MONGO_URL}}` to the **app** service and press **Deploy** |
+| `❌ Redis Client Error: getaddrinfo ENOTFOUND` | Redis variables not referenced into the app service | Add `REDIS_URL = ${{Redis.REDIS_URL}}` (or the discrete names) and redeploy |
+| `❌ FATAL — these variables are missing or empty` | Required variables absent | The block lists each missing name; add them and redeploy |
+| `❌ ADMINS is missing or contains no valid IDs` | `ADMINS` empty or non-numeric | Use plain numeric Telegram IDs, comma-separated |
+| `409 Conflict` on polling | More than one replica | Set **Replicas = 1** |
+| `⚠️ npm warn config production Use --omit=dev instead` | Railway sets `NPM_CONFIG_PRODUCTION` | Harmless — informational only |
 
 ---
 

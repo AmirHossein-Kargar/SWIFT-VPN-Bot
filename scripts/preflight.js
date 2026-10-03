@@ -25,6 +25,7 @@
 import "dotenv/config";
 import crypto from "node:crypto";
 import process from "node:process";
+import { resolveMongoUrl, resolveRedisConfig } from "../config/env.js";
 
 // ── ANSI colours ─────────────────────────────────────────────────────────────
 const G = (s) => `\x1b[32m${s}\x1b[0m`;   // green
@@ -53,12 +54,6 @@ const REQUIRED = {
   BOT_TOKEN:              { critical: true,  hint: "Get from @BotFather on Telegram" },
   ADMINS:                 { critical: true,  hint: "Comma-separated Telegram user IDs" },
   GROUP_ID:               { critical: true,  hint: "Admin group chat ID (negative number)" },
-  // Database
-  MONGO_URL:              { critical: true,  hint: "MongoDB connection string" },
-  // Redis
-  REDIS_HOST:             { critical: true,  hint: "Redis server hostname or IP" },
-  REDIS_PORT:             { critical: true,  hint: "Redis server port (default 6379)" },
-  REDIS_USERNAME:         { critical: false, hint: "Redis username (default: 'default')" },
   // HooshPay
   HOOSHPAY_API_KEY:       { critical: true,  hint: "Get from HooshPay dashboard" },
   HOOSHPAY_WEBHOOK_SECRET:{ critical: true,  hint: "Set in HooshPay webhook settings" },
@@ -85,6 +80,17 @@ for (const [key, { critical, hint }] of Object.entries(REQUIRED)) {
     pass(`${key} is set`);
   }
 }
+
+// MongoDB / Redis are validated through the same resolvers the application uses,
+// so an accepted alias (MONGODB_URI, REDIS_URL, REDISHOST, ...) never produces a
+// false "missing" report here.
+const mongo = resolveMongoUrl();
+if (mongo) pass(`MongoDB connection string resolved from ${mongo.source}`);
+else fail("MongoDB is not configured", "Set MONGO_URL (or MONGODB_URI / MONGO_URI / DATABASE_URL / MONGOHOST+...)");
+
+const redis = resolveRedisConfig();
+if (redis) pass(`Redis connection resolved from ${redis.source}`);
+else warn("Redis is not configured", "Set REDIS_URL, or REDIS_HOST/REDIS_PORT (also accepts REDISHOST/REDISPORT)");
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -209,23 +215,34 @@ if (!process.env.MONGO_URL) {
 
 section("5. Redis Connection");
 
-const redisHost = process.env.REDIS_HOST;
-const redisPort = process.env.REDIS_PORT;
+const redisCfg = resolveRedisConfig();
 
-if (!redisHost || !redisPort) {
-  fail("REDIS_HOST or REDIS_PORT is not set — skipping connection test");
+if (!redisCfg) {
+  fail("Redis is not configured — skipping connection test", "Set REDIS_URL or REDIS_HOST/REDIS_PORT (also accepts REDISHOST/REDISPORT)");
 } else {
   try {
     const { createClient } = await import("redis");
-    const client = createClient({
-      socket: { host: redisHost, port: Number(redisPort), connectTimeout: 6000 },
-      username: process.env.REDIS_USERNAME || "default",
-      password: process.env.REDIS_PASSWORD || undefined,
-    });
+    const client = createClient(
+      redisCfg.url
+        ? { url: redisCfg.url, socket: { connectTimeout: 6000, reconnectStrategy: () => false } }
+        : {
+            socket: { host: redisCfg.host, port: redisCfg.port, connectTimeout: 6000, reconnectStrategy: () => false },
+            username: redisCfg.username || "default",
+            password: redisCfg.password || undefined,
+          }
+    );
 
     let redisError = null;
     client.on("error", (e) => { redisError = e; });
-    await client.connect();
+
+    // A pre-deploy check must always terminate: bound the connect attempt rather
+    // than inheriting node-redis' infinite retry behaviour.
+    await Promise.race([
+      client.connect(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("connection timed out after 10s")), 10000)
+      ),
+    ]);
 
     if (redisError) throw redisError;
 
@@ -236,7 +253,7 @@ if (!redisHost || !redisPort) {
     await client.del(testKey);
 
     if (val === "ok") {
-      pass(`Redis connected and read/write healthy (${redisHost}:${redisPort})`);
+      pass(`Redis connected and read/write healthy (via ${redisCfg.source})`);
     } else {
       fail("Redis SET/GET round-trip failed", `Expected "ok", got "${val}"`);
     }
