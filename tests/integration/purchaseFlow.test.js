@@ -61,13 +61,13 @@ after(async () => {
 
 const dbAvailable = await connectTestDB();
 
-let User, orderService;
+let User, WalletPurchase, orderService;
 if (dbAvailable) {
   ({ default: User } = await import("../../models/User.js"));
+  ({ default: WalletPurchase } = await import("../../models/WalletPurchase.js"));
   orderService = (await import("../../services/buyService/orderService.js")).default;
 }
 
-const skip = () => (dbAvailable ? false : "MongoDB not reachable");
 const PLAN = { id: "plan30_10", name: "test plan", days: 30, gig: 10, price: 18000 };
 
 async function seedUser(telegramId, balance) {
@@ -79,7 +79,7 @@ async function seedUser(telegramId, balance) {
 }
 
 describe("handlePlanOrder — money-safe purchase flow", () => {
-  test("successful purchase deducts once and records the service", skip(), async () => {
+  test("successful purchase deducts once and records the service", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     wizardMode = "ok";
     await seedUser("4001", 100000);
     const bot = makeBotStub();
@@ -92,9 +92,12 @@ describe("handlePlanOrder — money-safe purchase flow", () => {
     assert.equal(user.totalServices, 1);
     assert.ok(user.services[0].username.startsWith("stub_"));
     assert.ok(bot.sent.some((s) => s.kind === "photo"), "config delivered to the user");
+    const purchase = await WalletPurchase.findOne({ telegramId: "4001" });
+    assert.equal(purchase.status, "completed");
+    assert.equal(purchase.notificationPending, false);
   });
 
-  test("insufficient balance is rejected without calling the panel", skip(), async () => {
+  test("insufficient balance is rejected without calling the panel", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     wizardMode = "ok";
     await seedUser("4002", 100);
     const bot = makeBotStub();
@@ -107,7 +110,7 @@ describe("handlePlanOrder — money-safe purchase flow", () => {
     assert.ok(bot.texts().some((t) => t.includes("موجودی شما کافی نیست")));
   });
 
-  test("a panel ERROR refunds the reservation (no money loss)", skip(), async () => {
+  test("a panel ERROR refunds the reservation (no money loss)", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     wizardMode = "error";
     await seedUser("4003", 100000);
     const bot = makeBotStub();
@@ -117,10 +120,13 @@ describe("handlePlanOrder — money-safe purchase flow", () => {
     const user = await User.findOne({ telegramId: "4003" });
     assert.equal(user.balance, 100000, "reservation returned in full");
     assert.equal(user.services.length, 0, "no service recorded");
+    const purchase = await WalletPurchase.findOne({ telegramId: "4003" });
+    assert.equal(purchase.status, "refunded");
+    assert.ok(user.refundedPurchaseIds.includes(purchase.purchaseId));
     wizardMode = "ok";
   });
 
-  test("a panel NETWORK failure refunds the reservation", skip(), async () => {
+  test("an ambiguous panel NETWORK failure keeps the reservation for reconciliation", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     wizardMode = "destroy";
     await seedUser("4004", 100000);
     const bot = makeBotStub();
@@ -128,12 +134,16 @@ describe("handlePlanOrder — money-safe purchase flow", () => {
     await orderService(bot, 4004, 4004, PLAN);
 
     const user = await User.findOne({ telegramId: "4004" });
-    assert.equal(user.balance, 100000, "reservation returned in full after a transport error");
+    assert.equal(user.balance, 82000, "funds remain reserved until the panel result is known");
     assert.equal(user.services.length, 0);
+    const purchase = await WalletPurchase.findOne({ telegramId: "4004" });
+    assert.equal(purchase.status, "manual_review");
+    assert.equal(purchase.errorCode, "ECONNRESET");
+    assert.ok(bot.texts().some((text) => text.includes("دوباره خرید")), "user is warned not to retry");
     wizardMode = "ok";
   });
 
-  test("two CONCURRENT purchases cannot overspend or go negative", skip(), async () => {
+  test("two CONCURRENT purchases cannot overspend or go negative", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     wizardMode = "ok";
     // Balance covers exactly one plan.
     await seedUser("4005", PLAN.price);
@@ -152,7 +162,7 @@ describe("handlePlanOrder — money-safe purchase flow", () => {
     assert.equal(user.totalServices, 1);
   });
 
-  test("a purchase does not clobber a concurrent payment credit (no lost update)", skip(), async () => {
+  test("a purchase does not clobber a concurrent payment credit (no lost update)", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     wizardMode = "ok";
     await seedUser("4006", 20000);
 

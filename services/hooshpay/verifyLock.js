@@ -1,103 +1,66 @@
-/**
- * verifyLock
- * ----------
- * Redis-backed per-invoice in-flight lock using SET NX EX (atomic).
- *
- * Failure policy:
- *   If Redis is unavailable or times out, acquireVerifyLock returns TRUE
- *   (fail-open). The MongoDB Phase-1 atomic write in fulfillHooshOrder is
- *   the authoritative idempotency guard — Redis is an optimisation layer
- *   only (prevents redundant API calls). Never let Redis failure block payments.
- *
- * TTL is 30 s — covers:
- *   HooshPay API call (up to 10 s) + MongoDB writes (up to 5 s) + Telegram (up to 5 s)
- *   with 10 s headroom. The lock is released explicitly in `finally` blocks
- *   so the TTL is only a crash-safety backstop.
- */
-import client from "../../config/redisClient.js";
+import {
+  acquireRedisLease,
+  releaseRedisLease,
+  renewRedisLease,
+} from "../redisLease.js";
 
 const LOCK_PREFIX = "hoosh:lock:";
-const LOCK_TTL_SECONDS = 30;
-
-// Hard ceiling for any single Redis round-trip. Even with the offline queue
-// disabled, a half-open socket can stall a command; without this bound a Redis
-// problem would hang payment processing and the recovery cron indefinitely.
-const REDIS_OP_TIMEOUT_MS = 2000;
+const LOCK_TTL_SECONDS = 90;
+const REDIS_OP_TIMEOUT_MS = 2_000;
 
 /**
- * Reject if `promise` does not settle within `ms`.
- * Late rejections are swallowed so they cannot surface as unhandled rejections.
- */
-function withTimeout(promise, ms, label) {
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-    if (timer.unref) timer.unref();
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
-/**
- * Acquire an exclusive lock for the given invoice UID.
- *
- * @param {string} uid
- * @returns {Promise<boolean>}
- *   true  — lock acquired (proceed)
- *   false — another call holds the lock (duplicate, back off)
- *   true  — Redis error (fail-open; MongoDB guard is the fallback)
+ * MongoDB's atomic wallet-ledger update is the financial idempotency guard.
+ * Redis only avoids duplicate verification work, so an outage fails open.
  */
 export async function acquireVerifyLock(uid) {
   try {
-    const result = await withTimeout(
-      client.set(`${LOCK_PREFIX}${uid}`, "1", { NX: true, EX: LOCK_TTL_SECONDS }),
-      REDIS_OP_TIMEOUT_MS,
-      "acquireVerifyLock"
+    const lease = await acquireRedisLease(
+      `${LOCK_PREFIX}${uid}`,
+      LOCK_TTL_SECONDS,
+      { timeoutMs: REDIS_OP_TIMEOUT_MS }
     );
-    return result === "OK";
-  } catch (err) {
-    // Redis unavailable or timed out — fail open so the payment is not lost.
-    // The MongoDB findOneAndUpdate({fulfilled:false}) is the safety net.
-    console.warn(
-      `[HooshPay Lock] Redis acquire failed for uid=${uid} — failing open: ${err.message}`
-    );
-    return true;
+    return { acquired: Boolean(lease), lease };
+  } catch (error) {
+    console.warn(`[HooshPay Lock] Redis lock unavailable (${error?.name || "RedisError"}); using MongoDB idempotency`);
+    return { acquired: true, lease: null, redisUnavailable: true };
   }
 }
 
-/**
- * Release the lock for a given invoice UID.
- * Always call in a finally block. Errors are swallowed — TTL handles cleanup.
- *
- * @param {string} uid
- */
-export async function releaseVerifyLock(uid) {
+export async function releaseVerifyLock(lock) {
+  if (!lock?.lease) return;
   try {
-    await withTimeout(client.del(`${LOCK_PREFIX}${uid}`), REDIS_OP_TIMEOUT_MS, "releaseVerifyLock");
-  } catch (err) {
-    // Non-fatal — key will auto-expire via TTL.
-    console.warn(`[HooshPay Lock] Redis release failed for uid=${uid}: ${err.message}`);
+    await releaseRedisLease(lock.lease, { timeoutMs: REDIS_OP_TIMEOUT_MS });
+  } catch (error) {
+    console.warn(`[HooshPay Lock] Redis lock release failed (${error?.name || "RedisError"}); lease will expire`);
   }
 }
 
-/**
- * Distributed cron lock — prevents multiple PM2 workers from running
- * the recovery cron simultaneously.
- *
- * @param {string} jobName  - unique job identifier (e.g. "recovery-cron")
- * @param {number} ttlSeconds - how long to hold the lock (should exceed job runtime)
- * @returns {Promise<boolean>} true if this worker won the cron slot
- */
-export async function acquireCronLock(jobName, ttlSeconds = 270) {
-  // 270 s = 4.5 min — just under the 5-min cron interval
+/** Cron locks fail closed: skip recovery work rather than run duplicate sweeps. */
+export async function acquireCronLock(jobName, ttlSeconds = 600) {
   try {
-    const result = await withTimeout(
-      client.set(`hoosh:cron:${jobName}`, process.pid.toString(), { NX: true, EX: ttlSeconds }),
-      REDIS_OP_TIMEOUT_MS,
-      "acquireCronLock"
-    );
-    return result === "OK";
-  } catch (err) {
-    console.warn(`[HooshPay Cron] Redis cron lock failed for ${jobName} — skipping run: ${err.message}`);
-    return false; // fail-closed for cron: skip rather than risk double-run
+    return await acquireRedisLease(`hoosh:cron:${jobName}`, ttlSeconds, {
+      timeoutMs: REDIS_OP_TIMEOUT_MS,
+    });
+  } catch (error) {
+    console.warn(`[HooshPay Cron] Redis lock unavailable for ${jobName} (${error?.name || "RedisError"}); skipping cycle`);
+    return null;
+  }
+}
+
+export async function renewCronLock(lease) {
+  try {
+    return await renewRedisLease(lease, lease?.ttlSeconds, { timeoutMs: REDIS_OP_TIMEOUT_MS });
+  } catch (error) {
+    console.warn(`[HooshPay Cron] Redis lock renewal failed (${error?.name || "RedisError"})`);
+    return false;
+  }
+}
+
+export async function releaseCronLock(lease) {
+  if (!lease) return;
+  try {
+    await releaseRedisLease(lease, { timeoutMs: REDIS_OP_TIMEOUT_MS });
+  } catch (error) {
+    console.warn(`[HooshPay Cron] Redis lock release failed (${error?.name || "RedisError"}); lease will expire`);
   }
 }

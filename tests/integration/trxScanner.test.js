@@ -26,7 +26,6 @@ after(async () => {
   await disconnectTestDB();
 });
 
-const skip = () => (dbAvailable ? false : "MongoDB not reachable");
 
 async function seedInvoice({ telegramId, amount = 50000, cryptoAmount = 12.5, invoiceId }) {
   await User.updateOne(
@@ -51,7 +50,7 @@ async function seedInvoice({ telegramId, amount = 50000, cryptoAmount = 12.5, in
 const tx = (hash) => ({ hash, confirmed: true, contractRet: "SUCCESS", revert: false });
 
 describe("TRX invoice confirmation", () => {
-  test("a confirmed transaction credits the wallet once", skip(), async () => {
+  test("a confirmed transaction credits the wallet once", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const inv = await seedInvoice({ telegramId: "6001", amount: 50000 });
     const claimed = await trxScanner.confirmInvoice(inv, tx("hash_a_1"));
     assert.equal(claimed, true);
@@ -65,7 +64,7 @@ describe("TRX invoice confirmation", () => {
     assert.equal(stored.transactionHash, "hash_a_1");
   });
 
-  test("processing the same transaction twice credits only once", skip(), async () => {
+  test("processing the same transaction twice credits only once", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const inv = await seedInvoice({ telegramId: "6002", amount: 70000 });
 
     await trxScanner.confirmInvoice(inv, tx("hash_a_2"));
@@ -76,7 +75,7 @@ describe("TRX invoice confirmation", () => {
     assert.equal(user.successfulPayments, 1);
   });
 
-  test("10 CONCURRENT confirmations credit only once", skip(), async () => {
+  test("10 CONCURRENT confirmations credit only once", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const inv = await seedInvoice({ telegramId: "6003", amount: 123000 });
 
     const results = await Promise.all(
@@ -88,7 +87,7 @@ describe("TRX invoice confirmation", () => {
     assert.equal(user.balance, 123000);
   });
 
-  test("one on-chain transaction cannot settle two different invoices", skip(), async () => {
+  test("one on-chain transaction cannot settle two different invoices", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const first = await seedInvoice({ telegramId: "6004", amount: 20000, cryptoAmount: 5, invoiceId: "TRXUNIQ1" });
     const second = await seedInvoice({ telegramId: "6005", amount: 20000, cryptoAmount: 5, invoiceId: "TRXUNIQ2" });
 
@@ -104,7 +103,7 @@ describe("TRX invoice confirmation", () => {
     assert.equal(u2.balance, 0, "the second invoice was not settled by a reused hash");
   });
 
-  test("a reverted transaction rejects the invoice and never credits", skip(), async () => {
+  test("a reverted transaction rejects the invoice and never credits", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const inv = await seedInvoice({ telegramId: "6006", amount: 30000 });
 
     const rejected = await trxScanner.rejectInvoice(inv, {
@@ -122,12 +121,12 @@ describe("TRX invoice confirmation", () => {
     assert.equal(stored.status, "rejected");
   });
 
-  test("a crash between claim and credit is repaired exactly once", skip(), async () => {
+  test("a crash between claim and credit is repaired exactly once", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const inv = await seedInvoice({ telegramId: "6007", amount: 44000 });
 
     // Simulate: Phase-1 committed, process died before Phase-2.
     await CryptoInvoice.findByIdAndUpdate(inv._id, {
-      $set: { status: "paid", transactionHash: "hash_crash_1", confirmedAt: new Date() },
+      $set: { status: "paid", transactionHash: "hash_crash_1", confirmedAt: new Date(), creditLedgerVersion: 2 },
     });
 
     const stuck = await CryptoInvoice.findById(inv._id);
@@ -147,7 +146,7 @@ describe("TRX invoice confirmation", () => {
 });
 
 describe("TRX invoice matching", () => {
-  test("matches within 1% tolerance and rejects larger deviations", skip(), async () => {
+  test("matches within 1% tolerance and rejects larger deviations", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     await seedInvoice({ telegramId: "7001", amount: 10000, cryptoAmount: 100, invoiceId: "TRXMATCH1" });
 
     const close = await trxScanner.findMatchingInvoices(100.5); // 0.5% off
@@ -157,7 +156,7 @@ describe("TRX invoice matching", () => {
     assert.equal(far.length, 0, "20% deviation does not match");
   });
 
-  test("already-paid invoices are never matched again", skip(), async () => {
+  test("already-paid invoices are never matched again", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const inv = await seedInvoice({ telegramId: "7002", amount: 10000, cryptoAmount: 55.5, invoiceId: "TRXPAID1" });
     await trxScanner.confirmInvoice(inv, tx("hash_paid_1"));
 

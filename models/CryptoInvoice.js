@@ -40,6 +40,12 @@ const cryptoInvoiceSchema = new mongoose.Schema({
   // Phase-2 tracking (mirrors models/HooshPayInvoice.js)
   balanceCredited: { type: Boolean, default: false },
   balanceCreditedAt: { type: Date, default: null },
+  // Legacy paid invoices without a version are deliberately not auto-replayed.
+  creditLedgerVersion: { type: Number },
+  legacyReviewAlertedAt: { type: Date, default: null },
+  notificationPending: { type: Boolean, default: false },
+  notificationClaimedAt: { type: Date, default: null },
+  notifiedAt: { type: Date, default: null },
 
   createdAt: { type: Date, default: Date.now },
 });

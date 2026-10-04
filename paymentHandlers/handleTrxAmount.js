@@ -1,3 +1,4 @@
+import { randomInt, randomUUID } from "node:crypto";
 import validationAmountTrx from "../utils/validationAmountTrx.js";
 import { getSession, setSession } from "../config/sessionStore.js";
 import { USDPrice } from "../api/USDPrice.js";
@@ -6,7 +7,7 @@ import CryptoInvoice from "../models/CryptoInvoice.js";
 
 export default async function handleTrxAmount(bot, msg, session) {
   const chatId = msg.chat.id;
-  const text = msg.text.trim();
+  const text = typeof msg?.text === "string" ? msg.text.trim() : "";
 
   // Delete the user's message to keep the chat clean
   await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
@@ -49,13 +50,9 @@ export default async function handleTrxAmount(bot, msg, session) {
     usdRate = await USDPrice();
     trxRate = await TRXPrice();
   } catch (error) {
-    console.error("Error fetching rates:", error);
+    console.error("TRX quote unavailable:", error?.name || "RateProviderError");
     await bot.editMessageText(
-      `❌ خطا در دریافت نرخ ارز
-
-${error.message}
-
-🔙 لطفاً دوباره تلاش کنید یا از روش‌های دیگر پرداخت استفاده کنید.`,
+      `❌ در حال حاضر دریافت نرخ لحظه‌ای TRX ممکن نیست.\n\n🔙 لطفاً چند دقیقه دیگر دوباره تلاش کنید یا از روش دیگری استفاده کنید.`,
       {
         chat_id: chatId,
         message_id: botMessageId,
@@ -76,10 +73,22 @@ ${error.message}
     return;
   }
   const trxWallet = process.env.TRX_WALLET;
+  if (!Number.isFinite(usdRate) || usdRate <= 0 || !Number.isFinite(trxRate) || trxRate <= 0) {
+    await bot.editMessageText("❌ نرخ دریافتی معتبر نیست؛ فاکتور ساخته نشد. لطفاً بعداً دوباره تلاش کنید.", {
+      chat_id: chatId,
+      message_id: botMessageId,
+      reply_markup: { inline_keyboard: [[{ text: "🔙 بازگشت به روش‌های پرداخت", callback_data: "back_to_topup" }]] },
+    });
+    await setSession(chatId, { ...sessionData, step: null });
+    return;
+  }
 
   const usdAmount = amount / usdRate;
-  const finalTrxAmount = usdAmount / trxRate;
-  const paymentId = Math.random().toString(36).slice(2, 8).toUpperCase();
+  const baseMicroTrx = Math.ceil((usdAmount / trxRate) * 1_000_000);
+  // A tiny per-invoice fractional amount helps distinguish same-price invoices.
+  // The bot displays all six TRX decimals so the customer can copy the exact quote.
+  const finalTrxAmount = (baseMicroTrx + randomInt(1, 51)) / 1_000_000;
+  const paymentId = randomUUID().replaceAll("-", "").slice(0, 16).toUpperCase();
 
   // Show success message
   await bot.editMessageText(
@@ -99,6 +108,7 @@ ${error.message}
       cryptoAmount: finalTrxAmount,
       currency: "TRX",
       paymentType: "trx",
+      creditLedgerVersion: 2,
     });
 
     // Update session immediately after creating invoice
@@ -109,8 +119,10 @@ ${error.message}
       paymentId: paymentId, // Add payment ID to session for deletion
     });
 
-    setTimeout(async () => {
-      const walletMessage = await bot.editMessageText(
+    setTimeout(() => {
+      void (async () => {
+        try {
+          await bot.editMessageText(
         `✅ فاکتور (<code>${paymentId}</code>) باموفقیت ایجاد شد
 
 📊 قیمت ترون: <code>${trxRate}</code>
@@ -118,11 +130,11 @@ ${error.message}
 🔗 آدرس ولت:
 <code>${trxWallet}</code>
 
-💲 مبلغ تراکنش: <code>${finalTrxAmount.toFixed(2)}</code> TRX
+💲 مبلغ تراکنش: <code>${finalTrxAmount.toFixed(6)}</code> TRX
 
 📌 پس از پرداخت مبلغ <code>${amount.toLocaleString()}</code> تومان به موجودیتان اضافه میشود.
 
-- - 
+- -
 🔄 تایید تراکنش بصورت اتوماتیک حداکثر 5 دقیقه بعد از واریز رمز ارز به مشخصات بالا(آدرس و..)  انجام میگردد.
 نحوه خرید TRX: <a href="https://t.me/swift_shield/18">کلیک کنید</a>
 `,
@@ -150,18 +162,18 @@ ${error.message}
         step: null,
         paymentType: "trx",
         paymentId: paymentId,
-        walletMessageId: botMessageId, // ذخیره message ID برای حذف بعدی
+        walletMessageId: botMessageId,
       });
+        } catch (error) {
+          console.error("TRX invoice message delivery failed:", error?.name || "TelegramError");
+        }
+      })();
     }, 1000);
   } catch (error) {
-    console.error("Error processing TRX payment:", error);
+    console.error("TRX invoice persistence failed:", error?.name || "DatabaseError");
 
     await bot.editMessageText(
-      `❌ خطا در پردازش پرداخت TRX
-
-${error.message}
-
-🔙 لطفاً دوباره تلاش کنید یا از روش‌های دیگر پرداخت استفاده کنید.`,
+      `❌ در حال حاضر امکان ثبت فاکتور TRX وجود ندارد.\n\n🔙 لطفاً دوباره تلاش کنید یا از روش دیگری استفاده کنید.`,
       {
         chat_id: chatId,
         message_id: botMessageId,

@@ -1,40 +1,34 @@
-/**
- * MongoDB connection.
- *
- * The URI is resolved through config/env.js so that platform-provided names
- * (MONGO_URL, MONGODB_URI, MONGOHOST/MONGOPORT/...) all work without renaming.
- *
- * Failing here is fatal by design: without a database the bot cannot serve
- * anyone, so we exit non-zero with an actionable message rather than starting a
- * half-working process. Credentials are never logged.
- */
 import mongoose from "mongoose";
 import { resolveMongoUrl } from "./env.js";
 
-async function connectDB() {
-  const resolved = resolveMongoUrl();
+const DEFAULT_TIMEOUT_MS = 10_000;
 
+/** Connect and ping MongoDB. Configuration/driver errors never include a URI. */
+export async function connectDB({ timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  const resolved = resolveMongoUrl();
   if (!resolved) {
-    console.error("");
-    console.error("❌ MongoDB is not configured — cannot start.");
-    console.error("   Set MONGO_URL (or MONGODB_URI / MONGO_URI / DATABASE_URL),");
-    console.error("   or provide MONGOHOST + MONGOPORT + MONGOUSER + MONGOPASSWORD.");
-    console.error("   On Railway: Variables → MONGO_URL = ${{MongoDB.MONGO_URL}}");
-    console.error("");
-    process.exit(1);
+    throw new Error("MongoDB is not configured; set MONGO_URL or the Railway MongoDB connection variables.");
   }
 
   try {
     await mongoose.connect(resolved.url, {
-      serverSelectionTimeoutMS: 15000,
+      serverSelectionTimeoutMS: timeoutMs,
+      connectTimeoutMS: timeoutMs,
+      maxPoolSize: 20,
+      minPoolSize: 0,
+      autoIndex: process.env.NODE_ENV !== "production",
     });
-    console.log("\x1b[32m%s\x1b[0m", `✔ MongoDB connected successfully (via ${resolved.source})`);
-  } catch (err) {
-    // err.message may contain the host — never print the full URI (credentials).
-    console.error("\x1b[41m\x1b[37m❌ MongoDB connection error:\x1b[0m", err.message);
-    console.error(`   Source: ${resolved.source}`);
-    console.error("   Check that the database service is running and reachable from this service.");
-    process.exit(1);
+    await mongoose.connection.db.command({ ping: 1 });
+    // Create missing indexes without dropping existing ones. Unique user IDs,
+    // payment IDs, and on-chain transaction hashes are part of the money-safety
+    // model, so production must not silently run without them.
+    await Promise.all(mongoose.modelNames().map((name) => mongoose.model(name).createIndexes()));
+    console.log(`MongoDB connected and indexes checked (configuration: ${resolved.source})`);
+    return mongoose.connection;
+  } catch (error) {
+    await mongoose.disconnect().catch(() => {});
+    const code = typeof error?.code === "string" || typeof error?.code === "number" ? `, code ${error.code}` : "";
+    throw new Error(`MongoDB connection failed (${resolved.source}${code}). Check Railway service networking and credentials.`);
   }
 }
 

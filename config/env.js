@@ -1,24 +1,13 @@
 /**
- * Runtime configuration resolution & validation.
- *
- * Why this exists
- * ---------------
- * Hosting platforms name their injected variables differently from this app's
- * own convention. Railway's MongoDB service exposes MONGO_URL and the Redis
- * service exposes REDIS_URL / REDISHOST / REDISPORT / REDISUSER / REDISPASSWORD
- * (see https://docs.railway.com/databases/redis), which do NOT match
- * REDIS_HOST / REDIS_PORT / ... . Without aliasing, a correctly provisioned
- * database still looks "undefined" to the app.
- *
- * This module resolves the accepted aliases in one place and produces a
- * human-readable report of anything missing, so a misconfigured deployment fails
- * fast with an actionable message instead of a mongoose stack trace.
+ * Environment resolution and validation shared by startup and preflight.
+ * Values are never included in validation output: several settings are secrets.
  */
 
-/** First non-empty value among `names`, with the name that supplied it. */
-function firstSet(names) {
+const DEFAULT_MONGO_DB = "swiftvpn";
+
+function firstSet(names, env = process.env) {
   for (const name of names) {
-    const raw = process.env[name];
+    const raw = env[name];
     if (raw !== undefined && raw !== null && String(raw).trim() !== "") {
       return { name, value: String(raw).trim() };
     }
@@ -26,204 +15,312 @@ function firstSet(names) {
   return null;
 }
 
-const DEFAULT_MONGO_DB = process.env.MONGO_DB_NAME || "swiftvpn";
+function databaseName(env = process.env) {
+  const value = firstSet(["MONGO_DB_NAME"], env)?.value || DEFAULT_MONGO_DB;
+  if (!/^[A-Za-z0-9._-]{1,63}$/.test(value)) {
+    throw new Error("MONGO_DB_NAME must be 1–63 letters, digits, dot, underscore, or hyphen");
+  }
+  return value;
+}
+
+function withDatabaseName(uri, env = process.env) {
+  if (typeof uri !== "string" || /[\s#]/.test(uri)) {
+    throw new Error("MongoDB URI is malformed");
+  }
+  const match = uri.match(/^(mongodb(?:\+srv)?:\/\/[^/?#]+)(?:\/([^?#]*))?(\?[^#]*)?$/i);
+  if (!match) throw new Error("MongoDB URI must use mongodb:// or mongodb+srv:// and include a host");
+
+  const [, authority, rawPath = "", query = ""] = match;
+  const path = rawPath.replace(/^\/+/, "");
+  if (path && path.includes("/")) throw new Error("MongoDB URI must contain at most one database path segment");
+  return path ? uri : `${authority}/${databaseName(env)}${query}`;
+}
 
 /**
- * Resolve the MongoDB connection string.
- *
- * Accepted, in priority order:
- *   1. MONGO_URL / MONGODB_URI / MONGO_URI / DATABASE_URL   (full URI)
- *   2. MONGOHOST + MONGOPORT + MONGOUSER + MONGOPASSWORD    (Railway parts)
- *
- * A database name is appended when the URI does not carry one, so the target
- * database is deterministic instead of driver-dependent.
- *
- * @returns {{ url: string, source: string } | null}
+ * Resolve Railway's MongoDB URI aliases or discrete host credentials.
+ * @returns {{url:string, source:string}|null}
  */
-export function resolveMongoUrl() {
-  const direct = firstSet(["MONGO_URL", "MONGODB_URI", "MONGO_URI", "DATABASE_URL"]);
+export function resolveMongoUrl(env = process.env) {
+  const direct = firstSet(["MONGO_URL", "MONGODB_URI", "MONGO_URI"], env);
+  if (direct) return { url: withDatabaseName(direct.value, env), source: direct.name };
 
-  if (direct) {
-    return { url: withDatabaseName(direct.value), source: direct.name };
+  // Railway and adjacent services often provide DATABASE_URL for PostgreSQL;
+  // treat it as Mongo only when it explicitly uses a MongoDB URI scheme.
+  const genericDatabaseUrl = firstSet(["DATABASE_URL"], env);
+  if (genericDatabaseUrl && /^mongodb(?:\+srv)?:\/\//i.test(genericDatabaseUrl.value)) {
+    return { url: withDatabaseName(genericDatabaseUrl.value, env), source: genericDatabaseUrl.name };
   }
 
-  const host = firstSet(["MONGOHOST", "MONGO_HOST"]);
-  if (!host) return null;
+  const hostValue = firstSet(["MONGOHOST", "MONGO_HOST"], env);
+  if (!hostValue) return null;
+  const host = hostValue.value;
+  if (/[\s/@?#]/.test(host)) throw new Error("MONGOHOST is malformed");
 
-  const port = firstSet(["MONGOPORT", "MONGO_PORT"])?.value || "27017";
-  const user = firstSet(["MONGOUSER", "MONGO_USER"])?.value;
-  const pass = firstSet(["MONGOPASSWORD", "MONGO_PASSWORD"])?.value;
+  const portValue = firstSet(["MONGOPORT", "MONGO_PORT"], env)?.value || "27017";
+  const port = Number(portValue);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error("MONGOPORT must be an integer between 1 and 65535");
+  }
 
-  const credentials = user
-    ? `${encodeURIComponent(user)}:${encodeURIComponent(pass ?? "")}@`
-    : "";
+  const user = firstSet(["MONGOUSER", "MONGO_USER"], env)?.value;
+  const password = firstSet(["MONGOPASSWORD", "MONGO_PASSWORD"], env)?.value;
+  if (user && !password) throw new Error("MONGOPASSWORD is required when MONGOUSER is set");
+  if (!user && password) throw new Error("MONGOUSER is required when MONGOPASSWORD is set");
+
+  const authorityHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  const credentials = user ? `${encodeURIComponent(user)}:${encodeURIComponent(password)}@` : "";
+  const configuredDb = databaseName(env);
+  const portName = firstSet(["MONGOPORT", "MONGO_PORT"], env)?.name;
+  const source = [hostValue.name, portName, user ? "MONGOUSER" : null, password ? "MONGOPASSWORD" : null]
+    .filter(Boolean)
+    .join("+");
 
   return {
-    url: `mongodb://${credentials}${host.value}:${port}/${DEFAULT_MONGO_DB}?authSource=admin`,
-    source: "MONGOHOST/MONGOPORT/MONGOUSER/MONGOPASSWORD",
+    url: `mongodb://${credentials}${authorityHost}:${port}/${configuredDb}?authSource=admin`,
+    source,
   };
 }
 
-/** Append a database name when the URI has none (ignores the ?query part). */
-function withDatabaseName(uri) {
-  const queryIndex = uri.indexOf("?");
-  const base = queryIndex >= 0 ? uri.slice(0, queryIndex) : uri;
-  const query = queryIndex >= 0 ? uri.slice(queryIndex) : "";
-
-  // The path segment after "host[:port]" is the database name.
-  const afterScheme = base.replace(/^mongodb(\+srv)?:\/\//, "");
-  const hasDb = afterScheme.includes("/") && afterScheme.split("/").slice(1).join("/").length > 0;
-
-  return hasDb ? uri : `${base}/${DEFAULT_MONGO_DB}${query}`;
-}
-
 /**
- * Resolve Redis connection options.
- *
- * Accepted, in priority order:
- *   1. REDIS_URL                (e.g. redis://default:pass@host:port)
- *   2. REDIS_HOST  | REDISHOST  + port / password / username
- *
- * @returns {{ url?: string, username: string, password?: string, host?: string,
- *             port?: number, source: string } | null}
+ * Resolve Railway Redis URL or discrete host settings. Do not log `url`, since
+ * it may contain credentials.
+ * @returns {{url?:string, username:string, password?:string, host?:string, port?:number, tls?:boolean, source:string}|null}
  */
-export function resolveRedisConfig() {
-  const url = firstSet(["REDIS_URL"]);
-  if (url) {
-    return { url: url.value, username: "default", source: "REDIS_URL" };
+export function resolveRedisConfig(env = process.env) {
+  const direct = firstSet(["REDIS_URL"], env);
+  if (direct) {
+    let parsed;
+    try {
+      parsed = new URL(direct.value);
+    } catch {
+      throw new Error("REDIS_URL is malformed");
+    }
+    if (!["redis:", "rediss:"].includes(parsed.protocol) || !parsed.hostname) {
+      throw new Error("REDIS_URL must use redis:// or rediss:// and include a host");
+    }
+    if (parsed.port && (!/^\d+$/.test(parsed.port) || Number(parsed.port) < 1 || Number(parsed.port) > 65535)) {
+      throw new Error("REDIS_URL contains an invalid port");
+    }
+    return {
+      url: direct.value,
+      username: decodeURIComponent(parsed.username || "default"),
+      source: direct.name,
+    };
   }
 
-  const host = firstSet(["REDIS_HOST", "REDISHOST"]);
-  if (!host) return null;
+  const hostValue = firstSet(["REDIS_HOST", "REDISHOST"], env);
+  if (!hostValue) return null;
+  if (/[\s/@?#]/.test(hostValue.value)) throw new Error("REDIS_HOST is malformed");
 
-  const port = firstSet(["REDIS_PORT", "REDISPORT"])?.value;
-  const password = firstSet(["REDIS_PASSWORD", "REDISPASSWORD"])?.value;
-  const username = firstSet(["REDIS_USERNAME", "REDISUSER"])?.value || "default";
+  const portValue = firstSet(["REDIS_PORT", "REDISPORT"], env)?.value || "6379";
+  const port = Number(portValue);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error("REDIS_PORT must be an integer between 1 and 65535");
+  }
+  const tlsValue = firstSet(["REDIS_TLS"], env)?.value;
+  if (tlsValue && !["true", "false", "1", "0"].includes(tlsValue.toLowerCase())) {
+    throw new Error("REDIS_TLS must be true or false");
+  }
 
-  const parts = [
-    firstSet(["REDIS_HOST", "REDISHOST"])?.name,
-    firstSet(["REDIS_PORT", "REDISPORT"])?.name,
-  ].filter(Boolean);
-
+  const password = firstSet(["REDIS_PASSWORD", "REDISPASSWORD"], env)?.value;
+  const username = firstSet(["REDIS_USERNAME", "REDISUSER"], env)?.value || "default";
+  const portName = firstSet(["REDIS_PORT", "REDISPORT"], env)?.name;
   return {
-    host: host.value,
-    port: port ? Number(port) : 6379,
+    host: hostValue.value,
+    port,
     password,
     username,
-    source: [...new Set(parts)].join("+"),
+    tls: tlsValue ? ["true", "1"].includes(tlsValue.toLowerCase()) : false,
+    source: [hostValue.name, portName].filter(Boolean).join("+"),
   };
 }
 
-// ── Required configuration ───────────────────────────────────────────────────
-// `fatal: true` means the process cannot do its job at all without it.
-// Everything else degrades a single feature and is reported as a warning, so a
-// missing optional integration can never cause a restart loop.
+function isLoopback(host) {
+  const normalized = String(host || "").toLowerCase().replace(/^\[|\]$/g, "");
+  return normalized === "localhost" || normalized === "::1" || normalized === "0.0.0.0" || normalized.startsWith("127.");
+}
 
-const CHECKS = [
-  { key: "BOT_TOKEN", fatal: true, hint: "Telegram bot token from @BotFather" },
-  { key: "__MONGO__", fatal: true, hint: "MongoDB connection string (MONGO_URL)" },
-  { key: "ADMINS", fatal: false, hint: "Comma-separated Telegram user IDs — without it NOBODY can use the admin panel" },
-  { key: "GROUP_ID", fatal: false, hint: "Admin group chat id (negative) — required for the admin panel and receipt approval" },
-  { key: "__REDIS__", fatal: false, hint: "Redis host/url — without it sessions and locks degrade (payments still settle correctly)" },
-  { key: "WIZARD_API_URL", fatal: false, hint: "VPN panel base URL" },
-  { key: "VPN_API_KEY", fatal: false, hint: "VPN panel API key" },
-  { key: "HOOSHPAY_API_KEY", fatal: false, hint: "HooshPay API key" },
-  { key: "HOOSHPAY_WEBHOOK_SECRET", fatal: false, hint: "HMAC secret — without it EVERY HooshPay webhook is rejected" },
-  { key: "WEBHOOK_BASE_URL", fatal: false, hint: "Public HTTPS origin, no trailing slash" },
-  { key: "CARD_NUMBER", fatal: false, hint: "16-digit card number for manual transfers" },
-  { key: "TRX_WALLET", fatal: false, hint: "Tron address (starts with T, 34 chars)" },
+function hostFromMongoUrl(url) {
+  const authority = url.match(/^mongodb(?:\+srv)?:\/\/([^/]+)/i)?.[1];
+  if (!authority) return "";
+  return authority.slice(authority.lastIndexOf("@") + 1).split(",")[0].replace(/:\d+$/, "");
+}
+
+function validatePublicHttps(value, name, { allowHttp = false, allowLoopback = false } = {}) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return `${name} must be a valid URL`;
+  }
+  const allowedProtocols = allowHttp ? ["https:", "http:"] : ["https:"];
+  if (!allowedProtocols.includes(parsed.protocol)) return `${name} must use HTTPS`;
+  if (!parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    return `${name} must be an origin/base URL without credentials, query, or fragment`;
+  }
+  if (!allowLoopback && isLoopback(parsed.hostname)) return `${name} cannot point to localhost or a loopback address`;
+  return null;
+}
+
+const REQUIRED = [
+  { key: "BOT_TOKEN", hint: "Telegram token from @BotFather" },
+  { key: "__MONGO__", hint: "MongoDB URI or Railway MongoDB connection parts" },
+  { key: "__REDIS__", hint: "Redis URL or Railway Redis connection parts" },
+  { key: "ADMINS", hint: "Comma-separated numeric Telegram admin user IDs" },
+  { key: "GROUP_ID", hint: "Negative Telegram admin-group chat ID" },
+  { key: "WIZARD_API_URL", hint: "Wizard panel base URL" },
+  { key: "VPN_API_KEY", hint: "Wizard panel bearer token" },
+  { key: "HOOSHPAY_API_KEY", hint: "HooshPay API key" },
+  { key: "HOOSHPAY_WEBHOOK_SECRET", hint: "HooshPay HMAC-SHA256 webhook secret (32+ characters)" },
+  { key: "WEBHOOK_BASE_URL", hint: "Public HTTPS base URL for the webhook" },
+  { key: "CARD_NUMBER", hint: "16-digit card-to-card payment number" },
+  { key: "TRX_WALLET", hint: "TRON wallet address for TRX deposits" },
 ];
 
-/**
- * Inspect the environment and return a report.
- * @returns {{ missing: Array<{key:string,fatal:boolean,hint:string}>, fatalCount: number,
- *             mongo: object|null, redis: object|null }}
- */
-export function inspectEnv() {
-  const mongo = resolveMongoUrl();
-  const redis = resolveRedisConfig();
-
+/** Inspect required and malformed settings without returning secret values. */
+export function inspectEnv(env = process.env) {
   const missing = [];
-  for (const check of CHECKS) {
+  const invalid = [];
+  let mongo = null;
+  let redis = null;
+
+  for (const check of REQUIRED) {
     if (check.key === "__MONGO__") {
-      if (!mongo) missing.push(check);
+      try {
+        const resolved = resolveMongoUrl(env);
+        if (resolved) {
+          mongo = { source: resolved.source, configured: true };
+          if (env.NODE_ENV === "production" && isLoopback(hostFromMongoUrl(resolved.url))) {
+            invalid.push({ key: "MONGO_URL", fatal: true, hint: "Production MongoDB must not use a loopback/localhost host" });
+          }
+        } else {
+          missing.push({ ...check, fatal: true });
+        }
+      } catch (error) {
+        invalid.push({ key: "MONGO_URL", fatal: true, hint: error.message });
+      }
       continue;
     }
     if (check.key === "__REDIS__") {
-      if (!redis) missing.push(check);
+      try {
+        const resolved = resolveRedisConfig(env);
+        if (resolved) {
+          redis = { source: resolved.source, configured: true };
+          const redisHost = resolved.host || (() => {
+            try { return new URL(resolved.url).hostname; } catch { return ""; }
+          })();
+          if (env.NODE_ENV === "production" && isLoopback(redisHost)) {
+            invalid.push({ key: "REDIS_URL", fatal: true, hint: "Production Redis must not use a loopback/localhost host" });
+          }
+        } else {
+          missing.push({ ...check, fatal: true });
+        }
+      } catch (error) {
+        invalid.push({ key: "REDIS_URL", fatal: true, hint: error.message });
+      }
       continue;
     }
-    const found = firstSet([check.key]);
-    if (!found) missing.push(check);
+    if (!firstSet([check.key], env)) missing.push({ ...check, fatal: true });
+  }
+
+  const botToken = firstSet(["BOT_TOKEN"], env)?.value;
+  if (botToken && !/^\d+:[A-Za-z0-9_-]{20,}$/.test(botToken)) {
+    invalid.push({ key: "BOT_TOKEN", fatal: true, hint: "Expected the numeric-id:secret format from @BotFather" });
+  }
+
+  const admins = (firstSet(["ADMINS"], env)?.value || "").split(",").map((item) => item.trim()).filter(Boolean);
+  if (admins.length && admins.some((id) => !/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id)))) {
+    invalid.push({ key: "ADMINS", fatal: true, hint: "Every admin ID must be a positive safe integer" });
+  }
+
+  const groupId = firstSet(["GROUP_ID"], env)?.value;
+  if (groupId && (!/^-\d+$/.test(groupId) || !Number.isSafeInteger(Number(groupId)))) {
+    invalid.push({ key: "GROUP_ID", fatal: true, hint: "GROUP_ID must be a negative integer chat ID" });
+  }
+
+  const allowHttp = env.NODE_ENV !== "production";
+  const wizardUrl = firstSet(["WIZARD_API_URL"], env)?.value;
+  if (wizardUrl) {
+    const issue = validatePublicHttps(wizardUrl, "WIZARD_API_URL", {
+      allowHttp,
+      allowLoopback: env.NODE_ENV !== "production",
+    });
+    if (issue) invalid.push({ key: "WIZARD_API_URL", fatal: true, hint: issue });
+  }
+
+  const hooshBaseUrl = firstSet(["HOOSHPAY_API_BASE_URL"], env)?.value;
+  if (hooshBaseUrl) {
+    const issue = validatePublicHttps(hooshBaseUrl, "HOOSHPAY_API_BASE_URL", {
+      allowHttp,
+      allowLoopback: env.NODE_ENV !== "production",
+    });
+    if (issue) invalid.push({ key: "HOOSHPAY_API_BASE_URL", fatal: true, hint: issue });
+  }
+
+  const webhookUrl = firstSet(["WEBHOOK_BASE_URL"], env)?.value;
+  if (webhookUrl) {
+    const issue = validatePublicHttps(webhookUrl, "WEBHOOK_BASE_URL");
+    if (issue) invalid.push({ key: "WEBHOOK_BASE_URL", fatal: true, hint: issue });
+    else if (webhookUrl.endsWith("/")) invalid.push({ key: "WEBHOOK_BASE_URL", fatal: true, hint: "Remove the trailing slash" });
+  }
+
+  const secret = firstSet(["HOOSHPAY_WEBHOOK_SECRET"], env)?.value;
+  if (secret && secret.length < 32) {
+    invalid.push({ key: "HOOSHPAY_WEBHOOK_SECRET", fatal: true, hint: "Use at least 32 characters of random secret material" });
+  }
+
+  const cardNumber = firstSet(["CARD_NUMBER"], env)?.value;
+  if (cardNumber && !/^\d{16}$/.test(cardNumber.replace(/[\s-]/g, ""))) {
+    invalid.push({ key: "CARD_NUMBER", fatal: true, hint: "Use a 16-digit card number (spaces and hyphens are allowed)" });
+  }
+
+  const trxWallet = firstSet(["TRX_WALLET"], env)?.value;
+  if (trxWallet && !/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(trxWallet)) {
+    invalid.push({ key: "TRX_WALLET", fatal: true, hint: "Use a valid 34-character Base58 TRON address" });
+  }
+
+  const port = firstSet(["PORT"], env)?.value;
+  if (port && (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535)) {
+    invalid.push({ key: "PORT", fatal: true, hint: "PORT must be an integer between 1 and 65535" });
+  }
+
+  const rateLimit = firstSet(["WEBHOOK_RATE_LIMIT_PER_MIN"], env)?.value;
+  if (rateLimit && (!/^\d+$/.test(rateLimit) || Number(rateLimit) > 100000)) {
+    invalid.push({ key: "WEBHOOK_RATE_LIMIT_PER_MIN", fatal: true, hint: "Use an integer from 0 to 100000" });
   }
 
   return {
     missing,
-    fatalCount: missing.filter((m) => m.fatal).length,
+    invalid,
+    fatalCount: missing.filter((item) => item.fatal).length + invalid.filter((item) => item.fatal).length,
     mongo,
     redis,
   };
 }
 
-/**
- * Log a readable configuration report.
- * @param {{ exitOnFatal?: boolean }} [opts]
- * @returns {boolean} true when there are no fatal problems
- */
+/** Print safe diagnostics and optionally exit on missing/invalid critical config. */
 export function assertRequiredEnv({ exitOnFatal = true } = {}) {
-  const { missing, fatalCount, mongo, redis } = inspectEnv();
-
+  const report = inspectEnv();
   console.log("─────────────── configuration ───────────────");
-  console.log(
-    mongo
-      ? `  ✔ MongoDB   resolved from ${mongo.source}`
-      : "  ✖ MongoDB   NOT CONFIGURED"
-  );
-  console.log(
-    redis
-      ? `  ✔ Redis     resolved from ${redis.source}`
-      : "  ✖ Redis     NOT CONFIGURED (degraded mode)"
-  );
+  console.log(report.mongo ? `  ✔ MongoDB   resolved from ${report.mongo.source}` : "  ✖ MongoDB   NOT CONFIGURED");
+  console.log(report.redis ? `  ✔ Redis     resolved from ${report.redis.source}` : "  ✖ Redis     NOT CONFIGURED");
 
-  if (missing.length === 0) {
-    console.log("  ✔ All required variables are present");
-    console.log("─────────────────────────────────────────────");
-    return true;
+  for (const item of report.missing) {
+    console.error(`  ✖ ${item.key.padEnd(28)} ${item.hint}`);
+  }
+  for (const item of report.invalid) {
+    console.error(`  ✖ ${item.key.padEnd(28)} ${item.hint}`);
   }
 
-  const fatal = missing.filter((m) => m.fatal);
-  const rest = missing.filter((m) => !m.fatal);
-
-  if (fatal.length > 0) {
-    console.error("");
-    console.error("❌ FATAL — these variables are missing or empty:");
-    for (const m of fatal) console.error(`     • ${m.key.padEnd(24)} ${m.hint}`);
+  if (report.fatalCount === 0) {
+    console.log("  ✔ Required variables are present and structurally valid");
+  } else {
+    console.error(`  ❌ ${report.fatalCount} required configuration problem(s); values were not printed`);
+    if (exitOnFatal) process.exit(1);
   }
-  if (rest.length > 0) {
-    console.warn("");
-    console.warn("⚠️  Missing optional variables (features will be disabled):");
-    for (const m of rest) console.warn(`     • ${m.key.padEnd(24)} ${m.hint}`);
-  }
-
-  console.log("");
-  console.log("  On Railway: Service → Variables → add each one. Database values are");
-  console.log("  reference variables, e.g.");
-  console.log("      MONGO_URL        = ${{MongoDB.MONGO_URL}}");
-  console.log("      REDIS_URL        = ${{Redis.REDIS_URL}}");
-  console.log("      REDIS_HOST       = ${{Redis.REDISHOST}}");
-  console.log("      REDIS_PORT       = ${{Redis.REDISPORT}}");
-  console.log("      REDIS_USERNAME   = ${{Redis.REDISUSER}}");
-  console.log("      REDIS_PASSWORD   = ${{Redis.REDISPASSWORD}}");
-  console.log("  (The raw names REDISHOST / REDISPORT / REDISUSER / REDISPASSWORD are");
-  console.log("   also accepted directly — no renaming needed.)");
-  console.log("  See .env.example for the full list.");
+  console.log("  See .env.example and DEPLOYMENT_CHECKLIST.md for Railway variable mapping.");
   console.log("─────────────────────────────────────────────");
-
-  if (fatal.length > 0 && exitOnFatal) {
-    console.error("❌ Startup aborted — fix the FATAL variables above and redeploy.");
-    process.exit(1);
-  }
-  return fatal.length === 0;
+  return report.fatalCount === 0;
 }
 
 export default { resolveMongoUrl, resolveRedisConfig, inspectEnv, assertRequiredEnv };

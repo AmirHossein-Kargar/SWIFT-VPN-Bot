@@ -2,10 +2,10 @@ import connectDB from "./config/db.js";
 import TelegramBot from "node-telegram-bot-api";
 import trxScanner from "./services/trxWalletScanner.js";
 import { setBotInstance } from "./config/botInstance.js";
-import app, { PORT } from "./server.js";
+import app, { PORT, setRuntimeReadiness } from "./server.js";
 import { startHooshpayRecoveryCron, stopHooshpayRecoveryCron } from "./services/hooshpay/hooshpayRecoveryCron.js";
 import mongoose from "mongoose";
-import redisClient from "./config/redisClient.js";
+import { connectRedis, closeRedis } from "./config/redisClient.js";
 
 // ── Process-level safety net ─────────────────────────────────────────────────
 // Registered inside startBot() so that simply importing this module (in tests,
@@ -25,8 +25,8 @@ function installGlobalErrorHandlers() {
         service: "process",
         level: "error",
         message: "Unhandled promise rejection",
-        error: reason instanceof Error ? reason.message : String(reason),
-        stack: reason instanceof Error ? reason.stack : undefined,
+        errorType: reason instanceof Error ? reason.name : "UnhandledRejection",
+        code: typeof reason?.code === "string" || typeof reason?.code === "number" ? reason.code : undefined,
       })
     );
   });
@@ -40,8 +40,8 @@ function installGlobalErrorHandlers() {
         service: "process",
         level: "error",
         message: "Uncaught exception — exiting",
-        error: err?.message,
-        stack: err?.stack,
+        errorType: err?.name || "Error",
+        code: typeof err?.code === "string" || typeof err?.code === "number" ? err.code : undefined,
       })
     );
     process.exit(1);
@@ -51,39 +51,85 @@ function installGlobalErrorHandlers() {
 export default async function startBot() {
   installGlobalErrorHandlers();
 
-  // 1. Connect to MongoDB
-  await connectDB();
-  console.log("\x1b[32m%s\x1b[0m", "✔ DB Ready");
-
-  // 2. Start Express webhook server
-  const httpServer = app.listen(PORT, () => {
-    console.log("\x1b[32m%s\x1b[0m", `✔ Webhook server listening on port ${PORT}`);
-  });
+  // Bind HTTP before external dependencies so /health and /livez remain
+  // independent probes and /ready can report which critical dependency failed.
+  const httpServer = app.listen(PORT, "0.0.0.0");
   httpServer.on("error", (err) => {
-    console.error("\x1b[41m\x1b[37m❌ HTTP server error:\x1b[0m", err.message);
+    console.error(JSON.stringify({
+      ts: new Date().toISOString(),
+      service: "http",
+      level: "fatal",
+      message: "HTTP server failed",
+      errorType: err?.name || "Error",
+      code: typeof err?.code === "string" ? err.code : undefined,
+    }));
     process.exit(1);
   });
+  await new Promise((resolve, reject) => {
+    httpServer.once("listening", resolve);
+    httpServer.once("error", reject);
+  });
+  setRuntimeReadiness({ http: true, telegram: false });
+  console.log("\x1b[32m%s\x1b[0m", `✔ Webhook server listening on port ${PORT}`);
 
-  // 3. Create Telegram bot (polling mode)
+  // The HTTP listener is already available while these bounded dependency
+  // checks run; fatal errors are surfaced without printing connection secrets.
+  try {
+    await connectDB();
+    console.log("\x1b[32m%s\x1b[0m", "✔ DB Ready");
+    await connectRedis();
+    console.log("\x1b[32m%s\x1b[0m", "✔ Redis Ready");
+  } catch (error) {
+    console.error(JSON.stringify({
+      ts: new Date().toISOString(),
+      service: "startup",
+      level: "fatal",
+      message: "Critical database dependency failed",
+      errorType: error?.name || "StartupError",
+      code: typeof error?.code === "string" || typeof error?.code === "number" ? error.code : undefined,
+    }));
+    throw new Error("Critical MongoDB/Redis startup dependency failed; check /ready and Railway networking.");
+  }
+
+  // Create Telegram bot (polling mode)
   if (!process.env.BOT_TOKEN) {
-    console.error("\x1b[41m\x1b[37m❌ BOT_TOKEN is not set — cannot start Telegram bot\x1b[0m");
-    process.exit(1);
+    throw new Error("BOT_TOKEN is not set; Telegram bot cannot start");
   }
   const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
   // Telegram transports errors via events. Without listeners an emitted 'error'
   // is re-thrown by EventEmitter and crashes the process.
   bot.on("error", (err) => {
-    console.error("\x1b[31m%s\x1b[0m", `⚠️  Telegram client error: ${err.message}`);
+    console.error(JSON.stringify({ service: "telegram", level: "error", event: "client_error", errorType: err?.name || "Error", code: typeof err?.code === "string" ? err.code : undefined }));
   });
   bot.on("polling_error", (err) => {
     // 409 = another instance is polling with the same token (see README: 1 replica).
-    const detail = err?.response?.body?.description || err.message;
-    console.error("\x1b[31m%s\x1b[0m", `⚠️  Telegram polling error: ${detail}`);
+    setRuntimeReadiness({ telegram: false });
+    console.error(JSON.stringify({
+      service: "telegram",
+      level: "error",
+      event: "polling_error",
+      errorType: err?.name || "TelegramError",
+      code: typeof err?.code === "string" ? err.code : undefined,
+      status: Number.isInteger(err?.response?.statusCode) ? err.response.statusCode : undefined,
+    }));
   });
 
-  // 4. Register shared bot instance so server.js webhook can send messages
+  // Register the instance before an incoming signed callback can be processed.
   setBotInstance(bot);
+  try {
+    await Promise.race([
+      bot.getMe(),
+      new Promise((_, reject) => {
+        const timer = setTimeout(() => reject(new Error("Telegram API startup check timed out")), 10_000);
+        timer.unref?.();
+      }),
+    ]);
+    setRuntimeReadiness({ telegram: true });
+  } catch (error) {
+    await bot.stopPolling().catch(() => {});
+    throw new Error(`Telegram startup check failed (${error?.name || "TelegramError"})`);
+  }
 
   // 5. Start TRX wallet auto-scanner
   try {
@@ -94,7 +140,7 @@ export default async function startBot() {
     console.error(
       "\x1b[31m%s\x1b[0m",
       "❌ Failed to start TRX Wallet Scanner:",
-      error.message
+      error?.name || "Error"
     );
   }
 
@@ -106,7 +152,7 @@ export default async function startBot() {
     console.error(
       "\x1b[31m%s\x1b[0m",
       "❌ Failed to start HooshPay Recovery Cron:",
-      error.message
+      error?.name || "Error"
     );
   }
 
@@ -117,13 +163,14 @@ export default async function startBot() {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`\n\x1b[33m%s\x1b[0m`, `⚠️  ${signal} received — shutting down gracefully...`);
+    setRuntimeReadiness({ http: false, telegram: false });
 
     // 7a. Stop Telegram polling (prevents new message handlers)
     try {
       await bot.stopPolling();
       console.log("\x1b[32m%s\x1b[0m", "✔ Telegram polling stopped");
     } catch (e) {
-      console.error("⚠️  Telegram polling stop error:", e.message);
+      console.error("⚠️  Telegram polling stop error:", e?.name || "Error");
     }
 
     // 7b. Stop TRX scanner interval
@@ -131,7 +178,7 @@ export default async function startBot() {
       trxScanner.stopAutoScan();
       console.log("\x1b[32m%s\x1b[0m", "✔ TRX scanner stopped");
     } catch (e) {
-      console.error("⚠️  TRX scanner stop error:", e.message);
+      console.error("⚠️  TRX scanner stop error:", e?.name || "Error");
     }
 
     // 7c. Stop HooshPay recovery cron
@@ -139,7 +186,7 @@ export default async function startBot() {
       stopHooshpayRecoveryCron();
       console.log("\x1b[32m%s\x1b[0m", "✔ HooshPay cron stopped");
     } catch (e) {
-      console.error("⚠️  HooshPay cron stop error:", e.message);
+      console.error("⚠️  HooshPay cron stop error:", e?.name || "Error");
     }
 
     // 7d. Close Express HTTP server
@@ -147,7 +194,7 @@ export default async function startBot() {
       await new Promise((resolve) => httpServer.close(() => resolve()));
       console.log("\x1b[32m%s\x1b[0m", "✔ Express server closed");
     } catch (e) {
-      console.error("⚠️  Express close error:", e.message);
+      console.error("⚠️  Express close error:", e?.name || "Error");
     }
 
     // 7e. Close MongoDB connection
@@ -155,15 +202,15 @@ export default async function startBot() {
       await mongoose.disconnect();
       console.log("\x1b[32m%s\x1b[0m", "✔ MongoDB disconnected");
     } catch (e) {
-      console.error("⚠️  MongoDB disconnect error:", e.message);
+      console.error("⚠️  MongoDB disconnect error:", e?.name || "Error");
     }
 
     // 7f. Close Redis connection
     try {
-      await redisClient.quit();
+      await closeRedis();
       console.log("\x1b[32m%s\x1b[0m", "✔ Redis disconnected");
     } catch (e) {
-      console.error("⚠️  Redis disconnect error:", e.message);
+      console.error("⚠️  Redis disconnect error:", e?.name || "Error");
     }
 
     console.log("\x1b[32m%s\x1b[0m", "✔ Graceful shutdown complete");

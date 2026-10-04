@@ -20,5 +20,12 @@
     "mongoose": "^8.15.2",
     "node-telegram-bot-api": "^0.66.0",
     "redis": "^5.6.0"
+  },
+  "overrides": {
+    "request": "npm:@cypress/request@3.0.10",
+    "uuid": "11.1.1",
+    "qs": "6.16.0",
+    "form-data": "4.0.6",
+    "tough-cookie": "5.1.2"
   }
 }

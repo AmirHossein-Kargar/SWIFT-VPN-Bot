@@ -1,197 +1,261 @@
-/**
- * fulfillHooshOrder
- * -----------------
- * Central idempotent fulfillment — two-phase write with crash recovery.
- *
- * Phase 1 — Acquire the fulfillment lock (atomic single-document write):
- *   findOneAndUpdate({ _id, fulfilled: false }) → flip fulfilled=true
- *   MongoDB guarantees only one concurrent caller wins this write.
- *
- * Phase 2 — Credit the user's balance (idempotent):
- *   Uses findOneAndUpdate({ _id, balanceCredited: false }) as a second
- *   atomic guard so concurrent recovery workers cannot double-credit.
- *   After User.balance is incremented, sets balanceCredited=true.
- *
- * Recovery path (crash between Phase 1 and Phase 2):
- *   The recovery cron finds { fulfilled:true, balanceCredited:false }
- *   and calls fulfillHooshOrder again. Phase 1 returns null (already locked),
- *   then the code detects the crash-recovery case and jumps to Phase 2.
- *
- * Called by:
- *   - POST /api/hooshpay/webhook
- *   - verifyHooshPayment() (manual fallback)
- *   - admin_hoosh_run_pending
- *   - hooshpayRecoveryCron
- */
 import { randomUUID } from "node:crypto";
 import HooshPayInvoice from "../../models/HooshPayInvoice.js";
 import User from "../../models/User.js";
 import keyboard from "../../keyboards/mainKeyboard.js";
+import { creditWalletOnce } from "../walletCredit.js";
 
-// ── Structured logger ────────────────────────────────────────────────────────
 function log(level, message, meta = {}) {
   console[level === "error" ? "error" : level === "warn" ? "warn" : "log"](
-    JSON.stringify({
-      ts: new Date().toISOString(),
-      service: "hooshpay",
-      level,
-      message,
-      ...meta,
-    })
+    JSON.stringify({ ts: new Date().toISOString(), service: "hooshpay", level, message, ...meta })
   );
 }
 
-// ── Admin alert (best-effort Telegram message to GROUP_ID) ───────────────────
-async function _alertAdmin(bot, message) {
+function html(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[character]);
+}
+
+async function alertAdmin(bot, message) {
   const groupId = process.env.GROUP_ID;
-  if (!groupId || !bot) return;
+  if (!groupId || !bot?.sendMessage) return;
   try {
-    await bot.sendMessage(groupId, `🚨 <b>HooshPay Alert</b>\n\n${message}`, {
-      parse_mode: "HTML",
-    });
-  } catch (err) {
-    log("warn", "Admin alert failed", { error: err.message });
+    await bot.sendMessage(groupId, `🚨 <b>HooshPay Alert</b>\n\n${message}`, { parse_mode: "HTML" });
+  } catch (error) {
+    log("warn", "Admin alert failed", { errorType: error?.name || "TelegramError" });
   }
 }
 
-/**
- * @param {object}  params.invoice  - Mongoose doc or plain object with _id, uid, userId, amount
- * @param {object}  [params.bot]    - node-telegram-bot-api instance (null-safe)
- * @param {number}  [params.chatId] - Falls back to invoice.userId
- * @param {string}  [params.correlationId] - Trace ID for logs
- */
-export async function fulfillHooshOrder({ invoice, bot, chatId, correlationId }) {
-  const cid = correlationId ?? randomUUID();
-  const targetChatId = chatId ?? invoice.userId;
-
-  // ── Phase 1: Acquire the fulfillment lock ──────────────────────────────────
-  const locked = await HooshPayInvoice.findOneAndUpdate(
-    { _id: invoice._id, fulfilled: false },
+async function notifyUserOnce({ invoice, bot, user }) {
+  if (!invoice.notificationPending || !bot?.sendMessage) return false;
+  const now = new Date();
+  const staleClaim = new Date(now.getTime() - 5 * 60_000);
+  const claim = await HooshPayInvoice.findOneAndUpdate(
     {
-      $set: {
-        fulfilled: true,
-        fulfilledAt: new Date(),
-        status: "paid",
-        paidAt: new Date(),
-      },
+      _id: invoice._id,
+      status: "paid",
+      balanceCredited: true,
+      notificationPending: true,
+      $or: [
+        { notificationClaimedAt: null },
+        { notificationClaimedAt: { $lt: staleClaim } },
+      ],
     },
+    { $set: { notificationClaimedAt: now } },
     { new: true }
   );
+  if (!claim) return false;
 
-  if (!locked) {
-    // Phase 1 already ran. Check if Phase 2 still needs to run (crash recovery).
-    const current = await HooshPayInvoice.findById(invoice._id).lean();
-    if (current?.fulfilled && !current?.balanceCredited && current?.status === "paid") {
-      log("warn", "Crash recovery: Phase-1 done but Phase-2 missing — re-running credit", {
-        cid, uid: current.uid,
-      });
-      return _creditBalance({ invoice: current, bot, targetChatId, cid });
-    }
-    // Already fully completed — genuine duplicate call.
-    log("info", "Duplicate fulfillment blocked", { cid, uid: invoice.uid ?? invoice._id });
-    return;
+  const amount = Number(invoice.amount).toLocaleString("en-US");
+  const balance = user?.balance == null ? null : Number(user.balance).toLocaleString("en-US");
+  const trackingLine = invoice.trackingCode
+    ? `🔢 <b>کد پیگیری:</b> <code>${html(invoice.trackingCode)}</code>\n`
+    : "";
+  const balanceLine = balance
+    ? `💳 <b>موجودی جدید:</b> <code>${balance}</code> تومان\n\n`
+    : "";
+  const message =
+    `✅ <b>پرداخت شما تأیید شد!</b>\n\n` +
+    `🧾 <b>شناسه فاکتور:</b> <code>${html(invoice.uid)}</code>\n` +
+    trackingLine +
+    `💰 <b>مبلغ شارژ:</b> <code>${amount}</code> تومان\n` +
+    balanceLine +
+    `🎉 <b>موجودی کیف پول شما شارژ شد.</b>`;
+
+  try {
+    await bot.sendMessage(invoice.userId, message, {
+      parse_mode: "HTML",
+      reply_markup: keyboard.reply_markup,
+    });
+    await HooshPayInvoice.findOneAndUpdate(
+      { _id: invoice._id, notificationClaimedAt: now, notificationPending: true },
+      { $set: { notificationPending: false, notifiedAt: new Date() }, $unset: { notificationClaimedAt: 1 } }
+    );
+    return true;
+  } catch (error) {
+    // Keep the claim for five minutes. Telegram timeouts can be ambiguous (it
+    // may have accepted a message before the connection failed), so retrying
+    // immediately could duplicate a notification.
+    log("warn", "Telegram payment notification failed; retry is delayed", {
+      uid: invoice.uid,
+      errorType: error?.name || "TelegramError",
+    });
+    return false;
   }
-
-  log("info", "PAYMENT_VERIFIED — Phase-1 lock acquired", {
-    cid, uid: locked.uid, userId: locked.userId, amount: locked.amount,
-  });
-  return _creditBalance({ invoice: locked, bot, targetChatId, cid });
 }
 
 /**
- * Phase 2: credit balance atomically and mark balanceCredited.
- * Uses a second findOneAndUpdate to prevent concurrent recovery workers
- * from crediting the same invoice twice.
+ * Idempotent, crash-recoverable HooshPay wallet fulfillment.
+ * A durable User.appliedPaymentKeys entry is written atomically with the wallet
+ * credit; the invoice completion flag is written afterwards. This closes the
+ * old crash window where the invoice was marked credited before User.balance.
  */
-async function _creditBalance({ invoice, bot, targetChatId, cid }) {
-  // ── Atomic Phase-2 guard ───────────────────────────────────────────────────
-  // This is the safety net for concurrent recovery workers (PM2 cluster, etc.).
-  // Only the first worker to execute this write will proceed.
-  const phase2Lock = await HooshPayInvoice.findOneAndUpdate(
-    { _id: invoice._id, fulfilled: true, balanceCredited: false },
-    { $set: { balanceCredited: true, balanceCreditedAt: new Date() } },
-    { new: true }
-  );
-
-  if (!phase2Lock) {
-    // Another worker already completed Phase 2, or it was pre-flagged.
-    log("info", "Phase-2 already completed by another worker", { cid, uid: invoice.uid });
-    return;
+export async function fulfillHooshOrder({ invoice, bot, chatId, correlationId, paidAt }) {
+  const cid = correlationId || randomUUID();
+  if (!invoice?._id || !invoice?.uid) throw new TypeError("A persisted HooshPay invoice is required");
+  if (!Number.isSafeInteger(Number(invoice.userId)) || Number(invoice.userId) <= 0) {
+    throw new Error("HooshPay invoice has an invalid Telegram user ID");
+  }
+  if (!Number.isSafeInteger(Number(invoice.amount)) || Number(invoice.amount) <= 0) {
+    throw new Error("HooshPay invoice has an invalid amount");
   }
 
-  // ── Credit user balance ────────────────────────────────────────────────────
-  let user;
-  try {
-    user = await User.findOneAndUpdate(
-      { telegramId: String(invoice.userId) },
-      { $inc: { balance: invoice.amount, successfulPayments: 1 } },
+  let current = invoice;
+  let newlyClaimed = false;
+
+  if (!invoice.fulfilled) {
+    const safePaidAt = paidAt ? new Date(paidAt) : new Date();
+    const phaseOne = await HooshPayInvoice.findOneAndUpdate(
+      {
+        _id: invoice._id,
+        fulfilled: false,
+        status: { $in: ["pending", "expired", "cancelled", "failed", "paid"] },
+      },
+      {
+        $set: {
+          fulfilled: true,
+          fulfilledAt: new Date(),
+          status: "paid",
+          paidAt: Number.isNaN(safePaidAt.getTime()) ? new Date() : safePaidAt,
+          creditLedgerVersion: 2,
+        },
+      },
       { new: true }
     );
-  } catch (dbErr) {
-    // Phase-2 flag is already set — roll it back so the cron can retry.
-    await HooshPayInvoice.findByIdAndUpdate(invoice._id, {
-      $set: { balanceCredited: false, balanceCreditedAt: null },
-    });
-    log("error", "DB error crediting balance — Phase-2 flag rolled back", {
-      cid, uid: invoice.uid, error: dbErr.message,
-    });
-    await _alertAdmin(
-      bot,
-      `❌ <b>Balance credit FAILED</b>\n` +
-      `UID: <code>${invoice.uid}</code>\n` +
-      `کاربر: <code>${invoice.userId}</code>\n` +
-      `مبلغ: <code>${invoice.amount.toLocaleString()}</code> تومان\n` +
-      `خطا: <code>${dbErr.message}</code>\n` +
-      `لطفاً دستی بررسی کنید.`
-    );
-    throw dbErr;
-  }
-
-  if (!user) {
-    log("warn", "User not found — balance credit skipped", {
-      cid, uid: invoice.uid, userId: invoice.userId,
-    });
-    await _alertAdmin(
-      bot,
-      `⚠️ <b>کاربر یافت نشد — موجودی اضافه نشد</b>\n` +
-      `UID: <code>${invoice.uid}</code>\n` +
-      `کاربر: <code>${invoice.userId}</code>\n` +
-      `مبلغ: <code>${invoice.amount.toLocaleString()}</code> تومان`
-    );
-  }
-
-  const newBalance = user?.balance ?? null;
-  const fmtAmount = Number(invoice.amount).toLocaleString("en-US");
-  const fmtBalance = newBalance !== null ? newBalance.toLocaleString("en-US") : "نامشخص";
-
-  log("info", "PAYMENT_CREDITED — Phase-2 complete", {
-    cid, uid: invoice.uid, userId: invoice.userId,
-    amount: invoice.amount, newBalance,
-  });
-
-  // ── Notify user ────────────────────────────────────────────────────────────
-  if (bot) {
-    const trackingLine = invoice.trackingCode
-      ? `🔢 <b>کد پیگیری:</b> <code>${invoice.trackingCode}</code>\n`
-      : "";
-
-    const msg =
-      `✅ <b>پرداخت شما تأیید شد!</b>\n\n` +
-      `🧾 <b>شناسه فاکتور:</b> <code>${invoice.uid}</code>\n` +
-      trackingLine +
-      `💰 <b>مبلغ شارژ:</b> <code>${fmtAmount}</code> تومان\n` +
-      `💳 <b>موجودی جدید:</b> <code>${fmtBalance}</code> تومان\n\n` +
-      `🎉 <b>موجودی کیف پول شارژ شد. می‌توانید سرویس خود را خریداری کنید.</b>`;
-
-    try {
-      await bot.sendMessage(targetChatId, msg, {
-        parse_mode: "HTML",
-        reply_markup: keyboard.reply_markup,
+    if (phaseOne) {
+      newlyClaimed = true;
+      current = phaseOne;
+      log("info", "PAYMENT_VERIFIED — fulfillment claim acquired", {
+        cid, uid: current.uid, userId: current.userId, amount: current.amount,
       });
-    } catch (tgErr) {
-      log("warn", "Telegram confirmation failed — non-fatal", {
-        cid, uid: invoice.uid, chatId: targetChatId, error: tgErr.message,
-      });
+    } else {
+      current = await HooshPayInvoice.findById(invoice._id).lean();
     }
+  } else {
+    current = await HooshPayInvoice.findById(invoice._id).lean();
   }
+
+  if (!current) throw new Error("HooshPay invoice disappeared during fulfillment");
+  if (current.status === "reversed") {
+    log("warn", "Reversed invoice cannot be credited", { cid, uid: current.uid });
+    return { credited: false, reversed: true };
+  }
+  if (!current.fulfilled || current.status !== "paid") {
+    return { credited: false, notPaid: true };
+  }
+
+  // Existing invoices with fulfilled=true but no ledger version were processed
+  // by the older pre-ledger code. It could have crashed after incrementing the
+  // balance but before reporting success. Do not risk a second credit: send the
+  // invoice to manual reconciliation instead of guessing.
+  if (!current.balanceCredited && current.creditLedgerVersion !== 2) {
+    const alertClaim = await HooshPayInvoice.findOneAndUpdate(
+      {
+        _id: current._id,
+        balanceCredited: false,
+        creditLedgerVersion: { $ne: 2 },
+        legacyReviewAlertedAt: null,
+      },
+      { $set: { legacyReviewAlertedAt: new Date() } },
+      { new: true }
+    );
+    if (alertClaim) {
+      await alertAdmin(
+        bot,
+        `⚠️ <b>پرداخت قدیمی نیازمند تطبیق دستی است</b>\n` +
+        `UID: <code>${html(current.uid)}</code>\n` +
+        `کاربر: <code>${html(current.userId)}</code>\n` +
+        `مبلغ: <code>${Number(current.amount).toLocaleString("en-US")}</code> تومان\n` +
+        `برای جلوگیری از شارژ تکراری، این فاکتور خودکار تسویه نشد.`
+      );
+    }
+    log("error", "Legacy HooshPay credit requires manual reconciliation", {
+      cid, uid: current.uid,
+    });
+    return { credited: false, manualReviewRequired: true };
+  }
+
+  let walletResult = null;
+  if (!current.balanceCredited) {
+    try {
+      walletResult = await creditWalletOnce({
+        telegramId: current.userId,
+        amount: Number(current.amount),
+        creditKey: `hooshpay:${current.uid}`,
+      });
+    } catch (error) {
+      log("error", "Atomic wallet credit failed", {
+        cid, uid: current.uid, errorType: error?.name || "DatabaseError",
+        code: typeof error?.code === "string" || typeof error?.code === "number" ? error.code : undefined,
+      });
+      await alertAdmin(
+        bot,
+        `❌ <b>شارژ کیف پول ناموفق</b>\n` +
+        `UID: <code>${html(current.uid)}</code>\n` +
+        `کاربر: <code>${html(current.userId)}</code>\n` +
+        `لطفاً اتصال دیتابیس و کاربر را بررسی کنید.`
+      );
+      throw error;
+    }
+
+    if (!walletResult.user) {
+      log("error", "Wallet owner not found; payment remains recoverable", {
+        cid, uid: current.uid, userId: current.userId,
+      });
+      await alertAdmin(
+        bot,
+        `⚠️ <b>کاربر پرداخت HooshPay یافت نشد</b>\n` +
+        `UID: <code>${html(current.uid)}</code>\n` +
+        `کاربر: <code>${html(current.userId)}</code>\n` +
+        `مبلغ: <code>${Number(current.amount).toLocaleString("en-US")}</code> تومان`
+      );
+      throw new Error("HooshPay invoice owner is missing; credit remains pending");
+    }
+
+    const finalized = await HooshPayInvoice.findOneAndUpdate(
+      { _id: current._id, status: "paid", balanceCredited: false, creditLedgerVersion: 2 },
+      {
+        $set: {
+          balanceCredited: true,
+          balanceCreditedAt: new Date(),
+          notificationPending: true,
+        },
+      },
+      { new: true }
+    );
+    if (finalized) {
+      current = finalized.toObject ? finalized.toObject() : finalized;
+    } else {
+      current = await HooshPayInvoice.findById(current._id).lean();
+      if (!current?.balanceCredited) {
+        throw new Error("Wallet credit is durable but invoice completion could not be recorded");
+      }
+    }
+
+    log("info", "PAYMENT_CREDITED — atomic wallet ledger committed", {
+      cid,
+      uid: current.uid,
+      userId: current.userId,
+      amount: current.amount,
+      newlyCredited: walletResult.credited,
+      recovered: !newlyClaimed || walletResult.alreadyCredited,
+    });
+  } else {
+    walletResult = {
+      user: await User.findOne({ telegramId: String(current.userId) }).select("balance").lean(),
+      credited: false,
+      alreadyCredited: true,
+    };
+  }
+
+  let notified = Boolean(current.notifiedAt);
+  if (current.notificationPending) {
+    notified = await notifyUserOnce({ invoice: current, bot, user: walletResult?.user }) || notified;
+  }
+
+  return {
+    credited: Boolean(walletResult?.credited),
+    alreadyCredited: Boolean(walletResult?.alreadyCredited),
+    notified,
+  };
 }

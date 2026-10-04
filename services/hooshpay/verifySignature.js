@@ -1,89 +1,38 @@
-/**
- * HooshPay webhook signature verification.
- *
- * Extracted into its own module so the exact production implementation can be
- * unit-tested directly (rather than a re-implementation in the test file).
- *
- * Per the official HooshPay documentation the signature is computed over the
- * JSON payload with keys sorted alphabetically (PHP `ksort`), re-serialised
- * with compact separators and no ASCII escaping, then HMAC-SHA256'd:
- *
- *   ksort($payload);
- *   $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
- *   $sig  = hash_hmac('sha256', $body, $secret);
- *
- * In Node, `JSON.stringify` with default separators (",", ":") and the default
- * (non-ASCII-escaping) behaviour reproduces that byte-for-byte.
- */
 import crypto from "node:crypto";
 
 /**
- * Recursively sort object keys so nested objects are canonicalised too.
- * Arrays keep their order (only object keys are sorted).
- *
- * @param {*} value
- * @returns {*}
- */
-function sortKeysDeep(value) {
-  if (Array.isArray(value)) return value.map(sortKeysDeep);
-  if (value && typeof value === "object" && !(value instanceof Date)) {
-    const out = {};
-    for (const key of Object.keys(value).sort()) {
-      out[key] = sortKeysDeep(value[key]);
-    }
-    return out;
-  }
-  return value;
-}
-
-/**
- * Build the canonical string that HooshPay signs.
- *
- * @param {object} payload - parsed JSON body
- * @returns {string}
+ * HooshPay documents sorting the top-level associative-array keys with ksort()
+ * before compact JSON encoding. Nested objects retain their received key order;
+ * arrays always retain order. This mirrors that PHP contract exactly.
  */
 export function canonicalPayload(payload) {
-  return JSON.stringify(sortKeysDeep(payload));
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new TypeError("Webhook payload must be a JSON object");
+  }
+  const sorted = Object.create(null);
+  for (const key of Object.keys(payload).sort()) {
+    Object.defineProperty(sorted, key, {
+      value: payload[key],
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
+  return JSON.stringify(sorted);
 }
 
-/**
- * Verify a HooshPay webhook signature.
- *
- * @param {object} payload   - parsed JSON body
- * @param {string} signature - hex HMAC-SHA256 from the X-HooshPay-Signature header
- * @param {string} secret    - webhook secret
- * @returns {boolean} true only when the signature is present, well-formed and matches
- */
 export function verifyHooshPaySignature(payload, signature, secret) {
-  if (!secret || typeof secret !== "string") return false;
-  if (!signature || typeof signature !== "string") return false;
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  if (typeof secret !== "string" || secret.length === 0) return false;
+  if (typeof signature !== "string" || !/^[0-9a-f]{64}$/i.test(signature)) return false;
 
-  let expectedSig;
+  let expected;
   try {
-    expectedSig = crypto
-      .createHmac("sha256", secret)
-      .update(canonicalPayload(payload))
-      .digest("hex");
+    expected = crypto.createHmac("sha256", secret).update(canonicalPayload(payload), "utf8").digest();
   } catch {
     return false;
   }
-
-  // Reject anything that is not pure hex before decoding — Buffer.from(..,"hex")
-  // silently truncates on invalid input, which would weaken the comparison.
-  if (!/^[0-9a-f]+$/i.test(signature)) return false;
-
-  const receivedBuf = Buffer.from(signature, "hex");
-  const expectedBuf = Buffer.from(expectedSig, "hex");
-
-  // timingSafeEqual throws on length mismatch, so guard first.
-  if (receivedBuf.length !== expectedBuf.length) return false;
-
-  try {
-    return crypto.timingSafeEqual(receivedBuf, expectedBuf);
-  } catch {
-    return false;
-  }
+  const received = Buffer.from(signature, "hex");
+  return received.length === expected.length && crypto.timingSafeEqual(received, expected);
 }
 
 export default { verifyHooshPaySignature, canonicalPayload };

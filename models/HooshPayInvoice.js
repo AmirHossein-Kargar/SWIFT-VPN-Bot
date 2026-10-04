@@ -44,6 +44,7 @@ const hooshPayInvoiceSchema = new mongoose.Schema({
   orderId:    { type: String, required: true, unique: true },
   userId:     { type: Number, required: true },
   amount:     { type: Number, required: true },
+  currency:   { type: String, enum: ["TOMAN"], default: "TOMAN" },
 
   // Fee / payable fields from HooshPay API response
   feeMode:       { type: String, enum: ["seller", "buyer", "split"], default: "buyer" },
@@ -67,6 +68,7 @@ const hooshPayInvoiceSchema = new mongoose.Schema({
     enum: ["pending", "paid", "expired", "cancelled", "failed", "reversed"],
     default: "pending",
   },
+  reversedAt: { type: Date, default: null },
 
   // Tracking code returned by verify endpoint
   trackingCode: { type: String, default: null },
@@ -78,6 +80,16 @@ const hooshPayInvoiceSchema = new mongoose.Schema({
   // Phase-2 completion
   balanceCredited:   { type: Boolean, default: false },
   balanceCreditedAt: { type: Date, default: null },
+  // Version 2 means wallet credits use User.appliedPaymentKeys atomically.
+  // Omitted on legacy invoices so ambiguous old crash windows are not blindly replayed.
+  creditLedgerVersion: { type: Number },
+  legacyReviewAlertedAt: { type: Date, default: null },
+
+  // New-format notification outbox. Legacy invoices default to false so a
+  // deployment does not replay notifications for already-settled payments.
+  notificationPending: { type: Boolean, default: false },
+  notificationClaimedAt: { type: Date, default: null },
+  notifiedAt: { type: Date, default: null },
 
   createdAt: { type: Date, default: Date.now },
   paidAt:    { type: Date, default: null },
