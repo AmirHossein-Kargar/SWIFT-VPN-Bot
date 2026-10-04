@@ -12,7 +12,7 @@ export class AdminServiceError extends Error {
 
 export function assertAdminUser(actorId) {
   if (!isAdminUser(actorId)) {
-    throw new AdminServiceError("Admin access is required.", { status: 403, code: "forbidden" });
+    throw new AdminServiceError("دسترسی مدیر لازم است.", { status: 403, code: "forbidden" });
   }
   return String(actorId);
 }
@@ -25,14 +25,14 @@ export function isAuthorizedTelegramAdmin({ chatId, userId, chatType }) {
 
 export function assertTelegramAdmin({ chatId, userId, chatType }) {
   if (!isAuthorizedTelegramAdmin({ chatId, userId, chatType })) {
-    throw new AdminServiceError("Only an allowlisted admin can use this panel.", { status: 403, code: "forbidden" });
+    throw new AdminServiceError("فقط مدیران مجاز می‌توانند از این پنل استفاده کنند.", { status: 403, code: "forbidden" });
   }
   return String(userId);
 }
 
 export function assertOperationId(operationId) {
   if (typeof operationId !== "string" || !/^[A-Za-z0-9_-]{16,80}$/.test(operationId)) {
-    throw new AdminServiceError("A valid idempotency key is required.", { status: 400, code: "invalid_idempotency_key" });
+    throw new AdminServiceError("کلید عملیات معتبر لازم است.", { status: 400, code: "invalid_idempotency_key" });
   }
   return operationId;
 }

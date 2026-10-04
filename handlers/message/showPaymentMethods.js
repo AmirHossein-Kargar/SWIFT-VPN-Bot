@@ -1,6 +1,9 @@
 import { setSession } from "../../config/sessionStore.js";
 
-// * This function sends payment method options to the user
+// * This function sends payment method options to the user.
+// * HooshPay is the primary online payment method; direct card-to-card was
+// * removed from the customer-facing flow (admin reconciliation of historical
+// * bank receipts remains available in the admin panel).
 const showPaymentMethods = async (bot, chatId) => {
   // * Main message shown to the user
   const message = `
@@ -16,7 +19,6 @@ const showPaymentMethods = async (bot, chatId) => {
       inline_keyboard: [
         [{ text: "💳 پرداخت آنلاین (HooshPay)", callback_data: "pay_hoosh" }],
         [{ text: "💸 پرداخت با ترون (TRX)", callback_data: "pay_trx" }],
-        [{ text: "🏦 کارت‌ به‌ کارت", callback_data: "pay_bank" }],
         [{ text: "🔙 بازگشت", callback_data: "back_to_home" }],
       ],
     },

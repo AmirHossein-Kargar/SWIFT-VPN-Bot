@@ -1,18 +1,22 @@
 // * This function handles the "Buy Service" feature.
-// * It sends a message with a list of available plans,
-// * each shown as an inline button the user can tap to select.
+// * Duration groups are derived from the Admin Panel product catalog (the
+// * authoritative source), with the shipped 30/60/90 groups as fallback.
+import { getAvailableDurations } from "../plans.js";
+
+const DURATION_ICONS = { 30: "🔹", 60: "🔸", 90: "🔷" };
 
 const handleBuyService = async (bot, chatId) => {
   const message = `🛒 در 2 مرحله سرویس اختصاصی بگیرید ..
 
 🔻 ابتدا مدت زمان سرویس را انتخاب کنید:`;
 
+  const durations = await getAvailableDurations();
   const durationButtons = {
     reply_markup: {
       inline_keyboard: [
-        [{ text: "🔹 30 روزه", callback_data: "duration_30" }],
-        [{ text: "🔸 60 روزه", callback_data: "duration_60" }],
-        [{ text: "🔷 90 روزه", callback_data: "duration_90" }],
+        ...durations.map((days) => [
+          { text: `${DURATION_ICONS[days] || "▫️"} ${days} روزه`, callback_data: `duration_${days}` },
+        ]),
         [{ text: "🔙 بازگشت", callback_data: "buy_service_back_to_main" }],
       ],
     },

@@ -158,7 +158,6 @@ authoritative list — every variable below is read somewhere in the codebase.
 | `HOOSHPAY_API_KEY` | HooshPay API key | |
 | `HOOSHPAY_WEBHOOK_SECRET` | HMAC-SHA256 secret for webhook signatures | **Mandatory.** If unset, every webhook is rejected. Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
 | `WEBHOOK_BASE_URL` | Public HTTPS base URL of this server, **no trailing slash** | `https://your-app.up.railway.app` |
-| `CARD_NUMBER` | 16-digit card number shown for manual transfers | |
 | `TRX_WALLET` | Tron address receiving TRX (starts with `T`, 34 chars) | |
 
 ### Optional
@@ -175,6 +174,11 @@ authoritative list — every variable below is read somewhere in the codebase.
 | `COST_PER_GB` | `300` | Cost per GB sold (Toman) for admin profit reports |
 | `TEST_MONGO_URL` | `mongodb://127.0.0.1:27017/swiftvpn_test` | Test-only. Name must contain `test`. |
 | `ADMIN_SESSION_TTL_SECONDS` | `28800` | Web admin session lifetime (900–86400 s). |
+| `SUPPORT_CONTACT` | *(empty)* | Support contact shown to users (Telegram ID or @username). If empty, the support buttons are hidden instead of showing a hardcoded account. |
+| `OWNER_TELEGRAM_ID` | first `ADMINS` entry | Explicit owner for the multi-admin registry. Owners always keep full access and cannot be removed from the panel. |
+| `ADMIN_CACHE_TTL_SECONDS` | `60` | How long the admin allowlist cache (env + database admins) is kept before refresh. |
+| `WIZARD_STATUS_TTL_SECONDS` | `90` | Live WizardXray status cache TTL for «سرویس‌های من» and admin views; `0` forces a fresh panel lookup. |
+| `CARD_NUMBER` | *(empty)* | **Legacy.** Direct card-to-card was removed from the purchase flow; the value is only validated if still set. No longer required. |
 
 > **Removed:** `NOW_PAYMENTS_API_KEY` and the whole NowPayments/TON flow were
 > deleted — they were unreachable at runtime (the session step that triggered

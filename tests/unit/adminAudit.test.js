@@ -129,7 +129,7 @@ describe("runAuditedAction", () => {
     const model = makeFakeModel();
     await assert.rejects(
       () => runAuditedAction({ ...base, execute: async () => { throw Object.assign(new Error("boom"), { code: "WIZARD_DOWN" }); }, auditModel: model }),
-      (error) => error.code === "WIZARD_DOWN" && /could not be completed safely/.test(error.message)
+      (error) => error.code === "WIZARD_DOWN" && /به صورت امن قابل انجام نشد/.test(error.message)
     );
     assert.equal(model.docs.get(base.operationId).status, "failed");
     assert.equal(model.docs.get(base.operationId).errorCode, "WIZARD_DOWN");

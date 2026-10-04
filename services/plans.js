@@ -26,6 +26,13 @@ export const plans90 = [
 ];
 
 const defaultPlans = [...plans30, ...plans60, ...plans90];
+const DEFAULT_DURATIONS = [30, 60, 90];
+
+// Test seam: unit tests inject an in-memory model so the shop catalog logic
+// can be verified without MongoDB (integration tests use the real model).
+let injectedProductModel = null;
+export function setProductModelForTests(model) { injectedProductModel = model; }
+function productModel() { return injectedProductModel || AdminProduct; }
 
 function productToPlan(product) {
   return {
@@ -59,13 +66,14 @@ export async function seedDefaultProducts() {
       upsert: true,
     },
   }));
-  const result = await AdminProduct.bulkWrite(operations, { ordered: false });
+  const result = await productModel().bulkWrite(operations, { ordered: false });
   return Number(result.upsertedCount || 0);
 }
 
 /**
  * The Telegram shop reads from the same product collection used by the Admin
- * Panel. The static catalog remains a safe fallback for tests/development and
+ * Panel — this is the authoritative source of purchasable products and their
+ * prices. The static catalog remains a safe fallback for tests/development and
  * lets a DB outage never turn the existing checkout into an empty menu.
  */
 export async function getActiveProducts({ durationDays } = {}) {
@@ -73,8 +81,8 @@ export async function getActiveProducts({ durationDays } = {}) {
     const query = { enabled: true };
     if (Number.isSafeInteger(durationDays)) query.durationDays = durationDays;
     const [products, catalogSize] = await Promise.all([
-      AdminProduct.find(query).sort({ displayOrder: 1, productId: 1 }).lean(),
-      AdminProduct.countDocuments({}),
+      productModel().find(query).sort({ displayOrder: 1, productId: 1 }).lean(),
+      productModel().countDocuments({}),
     ]);
     if (catalogSize > 0) return products.map(productToPlan);
   } catch {
@@ -87,12 +95,17 @@ export async function getActiveProducts({ durationDays } = {}) {
   return selected.map(productToPlan);
 }
 
+/**
+ * The authoritative price/product lookup for checkout. When the catalog is
+ * populated, a product that is missing or disabled there returns null —
+ * stale hardcoded prices can never override database products.
+ */
 export async function getActiveProductById(productId) {
   if (typeof productId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(productId)) return null;
   try {
     const [product, catalogSize] = await Promise.all([
-      AdminProduct.findOne({ productId, enabled: true }).lean(),
-      AdminProduct.countDocuments({}),
+      productModel().findOne({ productId, enabled: true }).lean(),
+      productModel().countDocuments({}),
     ]);
     if (product) return productToPlan(product);
     if (catalogSize > 0) return null;
@@ -100,6 +113,24 @@ export async function getActiveProductById(productId) {
     // Fall through to the compatibility catalog if Mongo is unavailable.
   }
   return defaultPlans.find((plan) => plan.id === productId) || null;
+}
+
+/**
+ * Duration groups offered by the shop, derived from the active catalog so a
+ * product created in the admin panel appears in the shop automatically.
+ * Falls back to the shipped 30/60/90 groups when the catalog is empty or the
+ * database is unreachable.
+ */
+export async function getAvailableDurations() {
+  try {
+    const products = await getActiveProducts();
+    const durations = [...new Set(products.map((plan) => Number(plan.days)).filter(Number.isSafeInteger))]
+      .sort((a, b) => a - b);
+    if (durations.length) return durations;
+  } catch {
+    // fall through to shipped durations
+  }
+  return DEFAULT_DURATIONS;
 }
 
 export { defaultPlans, productToPlan };

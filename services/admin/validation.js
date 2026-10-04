@@ -3,7 +3,7 @@ import { AdminServiceError } from "./authorization.js";
 export function parsePositiveInteger(value, { name = "value", min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
   const number = typeof value === "number" ? value : Number(String(value ?? "").trim());
   if (!Number.isSafeInteger(number) || number < min || number > max) {
-    throw new AdminServiceError(`${name} must be a whole number from ${min} to ${max}.`, { status: 400, code: `invalid_${name.toLowerCase().replace(/[^a-z0-9]+/g, "_")}` });
+    throw new AdminServiceError(`«${name}» باید عددی صحیح بین ${min} تا ${max} باشد.`, { status: 400, code: `invalid_${name.toLowerCase().replace(/[^a-z0-9]+/g, "_")}` });
   }
   return number;
 }
@@ -11,14 +11,14 @@ export function parsePositiveInteger(value, { name = "value", min = 1, max = Num
 export function requireTelegramId(value) {
   const id = String(value ?? "").trim();
   if (!/^[1-9]\d{0,19}$/.test(id) || !Number.isSafeInteger(Number(id))) {
-    throw new AdminServiceError("A valid Telegram user ID is required.", { status: 400, code: "invalid_user_id" });
+    throw new AdminServiceError("شناسه تلگرام معتبر لازم است.", { status: 400, code: "invalid_user_id" });
   }
   return id;
 }
 
 export function requireServiceUsername(value) {
   const username = String(value ?? "").trim();
-  if (!/^[A-Za-z0-9_.-]{1,128}$/.test(username)) throw new AdminServiceError("A valid VPN service ID is required.", { status: 400, code: "invalid_service_id" });
+  if (!/^[A-Za-z0-9_.-]{1,128}$/.test(username)) throw new AdminServiceError("شناسه سرویس VPN معتبر لازم است.", { status: 400, code: "invalid_service_id" });
   return username;
 }
 
@@ -38,7 +38,7 @@ export function parsePagination(query = {}) {
 export function requireReason(value, { min = 5, max = 240, name = "reason" } = {}) {
   const reason = String(value ?? "").trim().replace(/[\u0000-\u001f\u007f]/g, " ");
   if (reason.length < min || reason.length > max) {
-    throw new AdminServiceError(`A ${name} between ${min} and ${max} characters is required.`, { status: 400, code: `invalid_${name}` });
+    throw new AdminServiceError(`«${name}» باید بین ${min} تا ${max} نویسه باشد.`, { status: 400, code: `invalid_${name}` });
   }
   return reason;
 }

@@ -13,6 +13,7 @@ import { previewBroadcast, createBroadcast, getBroadcastStatus, requestBroadcast
 import { getAnalytics } from "../services/admin/analytics.js";
 import { getSystemHealth } from "../services/admin/monitoring.js";
 import { listAuditLogs } from "../services/admin/audit.js";
+import { listAdmins, addAdmin, removeAdmin } from "../services/admin/adminRegistry.js";
 import { default as botInstance } from "../config/botInstance.js";
 import { attachAdminSession, requireAdminSession, requireCsrfToken, rateLimitMiddleware, clientIp, sessionCookieOptions, adminApiErrorHandler } from "./adminMiddleware.js";
 
@@ -125,6 +126,41 @@ router.get("/auth/session", (req, res) => {
 router.use(requireAdminSession);
 router.use(requireCsrfToken);
 router.use(rateLimitMiddleware({ limit: 300 }));
+
+// Admin management (owner-only mutations, audited; owner is resolved from env)
+router.get("/admins", async (req, res, next) => {
+  try { res.json({ ok: true, data: await listAdmins({ actorId: req.adminActorId }) }); }
+  catch (error) { next(error); }
+});
+
+router.post("/admins", requireBody(), async (req, res, next) => {
+  try {
+    res.json({
+      ok: true,
+      data: await addAdmin({
+        actorId: req.adminActorId,
+        operationId: parseOperationId(req.body),
+        telegramId: req.body?.telegramId,
+        displayName: req.body?.displayName,
+        ipAddress: clientIp(req),
+      }),
+    });
+  } catch (error) { next(error); }
+});
+
+router.delete("/admins/:telegramId", requireBody(), async (req, res, next) => {
+  try {
+    res.json({
+      ok: true,
+      data: await removeAdmin({
+        actorId: req.adminActorId,
+        operationId: parseOperationId(req.body),
+        telegramId: req.params.telegramId,
+        ipAddress: clientIp(req),
+      }),
+    });
+  } catch (error) { next(error); }
+});
 
 // Dashboard
 router.get("/dashboard", async (req, res, next) => {

@@ -1,18 +1,13 @@
 import { getSession, setSession } from "../../config/sessionStore.js";
+import { getSupportMessage, getSupportDirectButton } from "../../messages/supportContact.js";
 
 const handleSupport = async (bot, chatId, userId) => {
-  const supportMessage = `▫️ جهت ارتباط به صورت مستقیم:
-🔰 @Swift_servicebot
-
-‼️ قبل از ارسال پیام به پشتیبانی، قوانین و مقررات سرویس‌ دهی را مطالعه کنید.
-
-📝 لطفاً پیام پشتیبانی خود را در همین چت تایپ و ارسال کنید.
-
-✅ فایل‌های مجاز: متن، عکس، فیلم`;
+  const supportMessage = getSupportMessage();
 
   const supportKeyboard = {
     reply_markup: {
       inline_keyboard: [
+        ...getSupportDirectButton(),
         [{ text: "🏠 بازگشت به منوی اصلی", callback_data: "back_to_home" }],
       ],
     },

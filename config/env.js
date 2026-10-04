@@ -173,7 +173,6 @@ const REQUIRED = [
   { key: "HOOSHPAY_API_KEY", hint: "HooshPay API key" },
   { key: "HOOSHPAY_WEBHOOK_SECRET", hint: "HooshPay HMAC-SHA256 webhook secret (32+ characters)" },
   { key: "WEBHOOK_BASE_URL", hint: "Public HTTPS base URL for the webhook" },
-  { key: "CARD_NUMBER", hint: "16-digit card-to-card payment number" },
   { key: "TRX_WALLET", hint: "TRON wallet address for TRX deposits" },
 ];
 

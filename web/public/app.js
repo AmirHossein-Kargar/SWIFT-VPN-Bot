@@ -220,6 +220,7 @@
     { id: "broadcast", label: "Broadcast", icon: "megaphone", section: "Engage" },
     { id: "referrals", label: "Referrals", icon: "gift", section: "Engage" },
     { id: "audit", label: "Audit Log", icon: "scroll", section: "System" },
+    { id: "admins", label: "Admins", icon: "shield", section: "System" },
     { id: "system", label: "System", icon: "wrench", section: "System" },
   ];
 
@@ -1470,6 +1471,102 @@
   }
 
   // ── System ─────────────────────────────────────────────────────────────────
+  // ── Admins (multi-admin management) ────────────────────────────────────────
+  async function pageAdmins() {
+    $("#content").innerHTML = `
+      <div class="card">
+        <div class="card-head"><h3>Admin access</h3><span class="sub">owner-managed allowlist — environment + database</span>
+          <span class="spacer"></span>
+          <button class="btn primary sm" id="adm-add" style="display:none">${icon("plus")} Add admin</button>
+          <button class="btn sm" id="adm-refresh">${icon("refresh")} Refresh</button>
+        </div>
+        <div id="admins-body">${loading()}</div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="card-head"><h3>How access works</h3></div>
+        <div class="card-pad" style="color:var(--text-dim);font-size:13px;line-height:1.75">
+          • Owners come from the <span class="mono">ADMINS</span> environment variable and always keep full access — they cannot be removed here.<br/>
+          • Admins added here are stored in the database, enforced server-side for the Telegram panel and this web console, and every change is audited.<br/>
+          • Only the owner can add or remove admins; extra admins cannot elevate themselves or edit other admins.<br/>
+          • Database admins are cached briefly, so a removal takes effect within a short TTL.
+        </div>
+      </div>`;
+    $("#adm-refresh").onclick = () => loadAdmins();
+    $("#adm-add").onclick = openAddAdminModal;
+    await loadAdmins();
+  }
+
+  async function loadAdmins() {
+    const target = $("#admins-body");
+    if (!target) return;
+    let data;
+    try { data = (await GET("/admins")).data; }
+    catch (error) { target.innerHTML = errorBox(error); return; }
+    const isOwner = data.some((a) => String(a.telegramId) === String(state.actorId) && a.role === "owner");
+    const addButton = $("#adm-add");
+    if (addButton) addButton.style.display = isOwner ? "" : "none";
+    if (!data.length) { target.innerHTML = `<div class="empty">${icon("shield")} No admins are configured.</div>`; return; }
+    target.innerHTML = `
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>Telegram ID</th><th>Name</th><th>Role</th><th>Source</th><th>Added</th><th></th></tr></thead>
+        <tbody>${data.map((admin) => {
+          const removable = isOwner && admin.source === "database" && admin.role !== "owner";
+          return `
+          <tr>
+            <td class="mono">${esc(admin.telegramId)}${String(admin.telegramId) === String(state.actorId) ? ' <span class="pill blue"><span class="dot"></span>you</span>' : ""}</td>
+            <td>${esc(admin.displayName || "—")}</td>
+            <td>${pill(admin.role === "owner" ? "owner" : "admin")}</td>
+            <td>${esc(admin.source === "environment" ? "env (ADMINS)" : "database")}</td>
+            <td>${admin.addedAt ? dateFmt(admin.addedAt) : "—"}</td>
+            <td>${removable ? `<button class="btn sm danger" data-remove-admin="${esc(admin.telegramId)}">Remove</button>` : ""}</td>
+          </tr>`;
+        }).join("")}
+        </tbody></table></div>`;
+    $$("[data-remove-admin]").forEach((button) => {
+      button.onclick = () => confirmRemoveAdmin(button.dataset.removeAdmin);
+    });
+  }
+
+  function openAddAdminModal() {
+    openModal({
+      title: "Add admin",
+      bodyHtml: `
+        ${fieldHtml("TELEGRAM ID", "telegramId", { placeholder: "e.g. 123456789", hint: "Numeric Telegram user ID of the new admin." })}
+        ${fieldHtml("DISPLAY NAME (OPTIONAL)", "displayName", { placeholder: "Label shown in the admins list" })}`,
+      confirmText: "Add admin",
+      onConfirm: async (values) => {
+        if (!/^\d{5,20}$/.test(values.telegramId.trim())) { toast("error", "Enter a numeric Telegram ID."); return; }
+        try {
+          const result = (await POST("/admins", {
+            operationId: newOperationId(),
+            telegramId: values.telegramId.trim(),
+            displayName: values.displayName.trim() || null,
+          })).data;
+          toast("success", result?.alreadyPresent ? "This admin already has access." : "Admin added.");
+          closeModal();
+          loadAdmins();
+        } catch (error) { apiErrorToast(error); }
+      },
+    });
+  }
+
+  function confirmRemoveAdmin(telegramId) {
+    openModal({
+      title: "Remove admin",
+      bodyHtml: `<p style="margin:0;color:var(--text-dim);font-size:13.5px;line-height:1.7">Remove admin access for <span class="mono">${esc(telegramId)}</span>? Their sessions stay valid until expiry, but they immediately lose panel access on the next request.</p>`,
+      confirmText: "Remove",
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await api("DELETE", `/admins/${encodeURIComponent(telegramId)}`, { operationId: newOperationId() });
+          toast("success", "Admin removed.");
+          closeModal();
+          loadAdmins();
+        } catch (error) { apiErrorToast(error); }
+      },
+    });
+  }
+
   async function pageSystem() {
     $("#content").innerHTML = `
       <div class="card">
@@ -1510,9 +1607,10 @@
     payments: { title: "Payments", render: pagePayments },
     recovery: { title: "Payment Recovery", render: pageRecovery },
     products: { title: "Products", render: pageProducts },
-    broadcast: { title: "Broadcast", render: pageBroadcast },
+    broadcast: { title: "Broadcast — ارسال پیام همگانی", render: pageBroadcast },
     referrals: { title: "Referrals", render: pageReferrals },
     audit: { title: "Audit Log", render: pageAudit },
+    admins: { title: "Admins", render: pageAdmins },
     system: { title: "System", render: pageSystem },
   };
 

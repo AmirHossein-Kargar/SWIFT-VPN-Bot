@@ -22,17 +22,17 @@ function log(level, message, meta = {}) {
 
 function normalizeButtons(buttons) {
   if (buttons == null) return [];
-  if (!Array.isArray(buttons) || buttons.length > 4) throw new AdminServiceError("At most 4 buttons are allowed.", { status: 400, code: "invalid_broadcast_buttons" });
+  if (!Array.isArray(buttons) || buttons.length > 4) throw new AdminServiceError("حداکثر ۴ دکمه مجاز است.", { status: 400, code: "invalid_broadcast_buttons" });
   return buttons.map((button) => {
-    if (!button || typeof button !== "object") throw new AdminServiceError("Invalid broadcast button.", { status: 400, code: "invalid_broadcast_buttons" });
+    if (!button || typeof button !== "object") throw new AdminServiceError("دکمه پیام همگانی نامعتبر است.", { status: 400, code: "invalid_broadcast_buttons" });
     const text = String(button.text ?? "").trim();
     const url = String(button.url ?? "").trim();
-    if (!text || text.length > 64) throw new AdminServiceError("Button text must contain 1 to 64 characters.", { status: 400, code: "invalid_broadcast_button_text" });
+    if (!text || text.length > 64) throw new AdminServiceError("متن دکمه باید ۱ تا ۶۴ نویسه باشد.", { status: 400, code: "invalid_broadcast_button_text" });
     let parsed;
-    try { parsed = new URL(url); } catch { throw new AdminServiceError("Button URL must be a valid t.me link.", { status: 400, code: "invalid_broadcast_button_url" }); }
+    try { parsed = new URL(url); } catch { throw new AdminServiceError("آدرس دکمه باید یک لینک معتبر t.me باشد.", { status: 400, code: "invalid_broadcast_button_url" }); }
     const host = parsed.hostname.toLowerCase();
     if (!["t.me", "telegram.me", "telegram.dog"].includes(host) || parsed.username || parsed.password || !/^https:$/.test(parsed.protocol)) {
-      throw new AdminServiceError("Buttons may only link to t.me URLs.", { status: 400, code: "invalid_broadcast_button_url" });
+      throw new AdminServiceError("دکمه‌ها فقط می‌توانند به آدرس‌های t.me لینک شوند.", { status: 400, code: "invalid_broadcast_button_url" });
     }
     return { text, url: parsed.toString() };
   });
@@ -91,8 +91,8 @@ async function resolveAudienceCount({ audience, customTelegramIds, now }) {
     return { total: ids.length, query: { telegramId: { $in: ids } } };
   }
   const ids = [...new Set((customTelegramIds || []).map((id) => String(id).trim()).filter((id) => /^[1-9]\d{0,19}$/.test(id)))];
-  if (!ids.length) throw new AdminServiceError("Select at least one recipient for a custom broadcast.", { status: 400, code: "empty_custom_audience" });
-  if (ids.length > 10_000) throw new AdminServiceError("Custom broadcasts are limited to 10,000 recipients.", { status: 400, code: "custom_audience_too_large" });
+  if (!ids.length) throw new AdminServiceError("برای ارسال به فهرست دلخواه، حداقل یک گیرنده انتخاب کنید.", { status: 400, code: "empty_custom_audience" });
+  if (ids.length > 10_000) throw new AdminServiceError("ارسال به فهرست دلخواه حداکثر ۱۰,۰۰۰ گیرنده را پوشش می‌دهد.", { status: 400, code: "custom_audience_too_large" });
   return { total: await User.countDocuments({ telegramId: { $in: ids }, isBanned: { $ne: true } }), query: { telegramId: { $in: ids }, isBanned: { $ne: true } } };
 }
 
@@ -101,7 +101,7 @@ const runningBroadcasts = new Map();
 export async function createBroadcast({ actorId, operationId, message, audience, customTelegramIds, buttons, ipAddress, now = new Date() } = {}) {
   assertAdminUser(actorId);
   const text = requireReason(message, { min: 1, max: 4096, name: "message" });
-  if (!AUDIENCES.includes(audience)) throw new AdminServiceError("Unsupported broadcast audience.", { status: 400, code: "invalid_broadcast_audience" });
+  if (!AUDIENCES.includes(audience)) throw new AdminServiceError("گروه مخاطبان پشتیبانی نشده است.", { status: 400, code: "invalid_broadcast_audience" });
   const parsedButtons = normalizeButtons(buttons);
   const { result } = await runAuditedAction({
     actorTelegramId: actorId,
@@ -117,7 +117,7 @@ export async function createBroadcast({ actorId, operationId, message, audience,
       let broadcast = await AdminBroadcast.findOne({ operationId });
       if (!broadcast) {
         const audienceInfo = await resolveAudienceCount({ audience, customTelegramIds, now });
-        if (!audienceInfo.total) throw new AdminServiceError("The selected audience is currently empty.", { status: 409, code: "empty_audience" });
+        if (!audienceInfo.total) throw new AdminServiceError("گروه مخاطبان انتخاب‌شده در حال حاضر خالی است.", { status: 409, code: "empty_audience" });
         broadcast = await AdminBroadcast.create({
           operationId,
           adminTelegramId: String(actorId),
@@ -134,7 +134,7 @@ export async function createBroadcast({ actorId, operationId, message, audience,
       if (runningBroadcasts.has(operationId)) return { broadcast, alreadyRunning: true, auditSummary: { status: broadcast.status } };
 
       const lease = await acquireRedisLease(ACTIVE_BROADCAST_LOCK, 300).catch(() => null);
-      if (!lease) throw new AdminServiceError("Another broadcast is still delivering. Wait for it to finish or cancel it first.", { status: 409, code: "broadcast_already_running" });
+      if (!lease) throw new AdminServiceError("یک ارسال همگانی دیگر هنوز در حال انجام است. ابتدا پایان آن را منتظر بمانید یا آن را لغو کنید.", { status: 409, code: "broadcast_already_running" });
 
       await AdminBroadcast.updateOne({ _id: broadcast._id }, { $set: { status: "running", startedAt: new Date() } });
       broadcast.status = "running";
@@ -234,7 +234,7 @@ async function runBroadcast(broadcast, { actorId, operationId }) {
 export async function requestBroadcastCancel({ actorId, operationId, ipAddress } = {}) {
   assertAdminUser(actorId);
   const broadcast = await AdminBroadcast.findOne({ operationId }).lean();
-  if (!broadcast) throw new AdminServiceError("Broadcast not found.", { status: 404, code: "broadcast_not_found" });
+  if (!broadcast) throw new AdminServiceError("پیام همگانی یافت نشد.", { status: 404, code: "broadcast_not_found" });
   // Each cancel request is its own audited event (fresh idempotency key); the
   // guarded update below makes the state change itself safe to repeat.
   const { result } = await runAuditedAction({
@@ -271,7 +271,7 @@ export async function requestBroadcastCancel({ actorId, operationId, ipAddress }
 export async function getBroadcastStatus({ actorId, operationId } = {}) {
   assertAdminUser(actorId);
   const broadcast = await AdminBroadcast.findOne({ operationId }).lean();
-  if (!broadcast) throw new AdminServiceError("Broadcast not found.", { status: 404, code: "broadcast_not_found" });
+  if (!broadcast) throw new AdminServiceError("پیام همگانی یافت نشد.", { status: 404, code: "broadcast_not_found" });
   return {
     operationId: broadcast.operationId,
     status: broadcast.status,

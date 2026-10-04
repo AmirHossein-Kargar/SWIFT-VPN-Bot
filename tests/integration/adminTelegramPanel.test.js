@@ -39,7 +39,7 @@ describe("authorization", () => {
     const bot = makeBotStub();
     await handleAdminPanelCallbacks(bot, query(bot, "adm:home", { userId: 111 }));
     const answers = bot.sent.filter((entry) => entry.kind === "answer");
-    assert.ok(answers.some((entry) => /denied/i.test(entry.opts?.text || "")));
+    assert.ok(answers.some((entry) => /دسترسی مدیر تأیید نشد/.test(entry.opts?.text || "")));
     assert.equal(bot.sent.some((entry) => entry.kind === "edit"), false, "no panel rendered");
   });
 
@@ -48,7 +48,7 @@ describe("authorization", () => {
     const bot = makeBotStub();
     await handleAdminPanelCallbacks(bot, query(bot, "adm:home", { chatType: "group", chatId: -100111 }));
     const answers = bot.sent.filter((entry) => entry.kind === "answer");
-    assert.ok(answers.some((entry) => /denied/i.test(entry.opts?.text || "")));
+    assert.ok(answers.some((entry) => /دسترسی مدیر تأیید نشد/.test(entry.opts?.text || "")));
     process.env.GROUP_ID = "";
   });
 
@@ -56,7 +56,7 @@ describe("authorization", () => {
     process.env.GROUP_ID = "-100999";
     const bot = makeBotStub();
     await handleAdminPanelCallbacks(bot, query(bot, "adm:home", { chatType: "supergroup", chatId: -100999, userId: 111 }));
-    assert.ok(bot.sent.some((entry) => entry.kind === "answer" && /denied/i.test(entry.opts?.text || "")));
+    assert.ok(bot.sent.some((entry) => entry.kind === "answer" && /دسترسی مدیر تأیید نشد/.test(entry.opts?.text || "")));
     process.env.GROUP_ID = "";
   });
 });
@@ -66,9 +66,9 @@ describe("navigation", () => {
     const bot = makeBotStub();
     await handleAdminPanelCommand(bot, { chat: { id: 555 }, from: { id: ADMIN } });
     const message = bot.sent.find((entry) => entry.kind === "message");
-    assert.match(message.text, /SWIFT ADMIN/);
+    assert.match(message.text, /پنل مدیریت سویفت/);
     const buttons = JSON.stringify(message.opts.reply_markup);
-    for (const label of ["Dashboard", "Users", "Payments", "VPN Services", "Products", "Broadcast", "Referrals", "Recovery", "Audit Logs", "System"]) {
+    for (const label of ["داشبورد", "کاربران", "پرداخت‌ها", "سرویس‌های VPN", "محصولات", "ارسال پیام همگانی", "معرفی‌ها", "بازیابی پرداخت‌ها", "گزارش عملیات", "وضعیت سیستم", "مدیریت مدیران"]) {
       assert.ok(buttons.includes(label), `missing button: ${label}`);
     }
   });
@@ -77,14 +77,14 @@ describe("navigation", () => {
     const bot = makeBotStub();
     await handleAdminPanelCallbacks(bot, query(bot, "adm:home"));
     const edit = bot.sent.find((entry) => entry.kind === "edit");
-    assert.match(edit.text, /SWIFT ADMIN/);
+    assert.match(edit.text, /پنل مدیریت سویفت/);
   });
 
   test("adm:sys renders system health without any dependency", async () => {
     const bot = makeBotStub();
     await handleAdminPanelCallbacks(bot, query(bot, "adm:sys"));
     const edit = bot.sent.find((entry) => entry.kind === "edit");
-    assert.match(edit.text, /System health/);
+    assert.match(edit.text, /وضعیت سیستم/);
     assert.match(edit.text, /mongodb/);
     assert.match(edit.text, /redis/);
     assert.doesNotMatch(edit.text, /BOT_TOKEN|VPN_API_KEY|mongodb:\/\//);
@@ -94,15 +94,15 @@ describe("navigation", () => {
     const bot = makeBotStub();
     await handleAdminPanelCallbacks(bot, query(bot, "adm:dash"));
     const edit = bot.sent.find((entry) => entry.kind === "edit");
-    assert.match(edit.text, /Dashboard/);
-    assert.match(edit.text, /Users/);
+    assert.match(edit.text, /داشبورد مدیریت/);
+    assert.match(edit.text, /کاربران/);
   });
 
   skip("adm:pay renders the recovery tab first", async () => {
     const bot = makeBotStub();
     await handleAdminPanelCallbacks(bot, query(bot, "adm:pay:recovery-required:1"));
     const edit = bot.sent.find((entry) => entry.kind === "edit");
-    assert.match(edit.text, /Payments — recovery-required/);
+    assert.match(edit.text, /پرداخت‌ها — 🚨 نیاز به بررسی/);
   });
 
   skip("adm:prod lists the shared product catalog", async () => {
@@ -111,7 +111,7 @@ describe("navigation", () => {
     const bot = makeBotStub();
     await handleAdminPanelCallbacks(bot, query(bot, "adm:prod"));
     const edit = bot.sent.find((entry) => entry.kind === "edit");
-    assert.match(edit.text, /Products/);
+    assert.match(edit.text, /محصولات/);
   });
 });
 

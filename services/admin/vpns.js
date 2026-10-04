@@ -111,9 +111,9 @@ export async function listVpns({ actorId, query = {}, now = new Date() } = {}) {
 
 async function getOwner(username) {
   const user = await User.findOne({ "services.username": username }).select("telegramId username firstName lastName services").lean();
-  if (!user) throw new AdminServiceError("VPN service was not found in the local user registry.", { status: 404, code: "service_not_found" });
+  if (!user) throw new AdminServiceError("سرویس VPN در فهرست کاربران یافت نشد.", { status: 404, code: "service_not_found" });
   const service = (user.services || []).find((item) => item.username === username);
-  if (!service) throw new AdminServiceError("VPN service was not found in the local user registry.", { status: 404, code: "service_not_found" });
+  if (!service) throw new AdminServiceError("سرویس VPN در فهرست کاربران یافت نشد.", { status: 404, code: "service_not_found" });
   const purchase = service.purchaseId
     ? await WalletPurchase.findOne({ purchaseId: service.purchaseId }).lean()
     : await WalletPurchase.findOne({ serviceUsername: username }).lean();
@@ -188,8 +188,8 @@ export async function getVpnDetail({ actorId, username } = {}) {
 export async function performVpnAction({ actorId, operationId, username, action, reason, ipAddress, bot } = {}) {
   assertAdminUser(actorId);
   const clientId = requireServiceUsername(username);
-  if (!SUPPORTED_ACTIONS.has(action)) throw new AdminServiceError("Unsupported VPN action.", { status: 400, code: "invalid_vpn_action" });
-  if (["revoke", "disable"].includes(action) && !reason) throw new AdminServiceError("A confirmation reason is required.", { status: 400, code: "confirmation_required" });
+  if (!SUPPORTED_ACTIONS.has(action)) throw new AdminServiceError("عملیات پشتیبانی نشده است.", { status: 400, code: "invalid_vpn_action" });
+  if (["revoke", "disable"].includes(action) && !reason) throw new AdminServiceError("دلیل انجام عملیات الزامی است.", { status: 400, code: "confirmation_required" });
   const safeReason = reason ? requireReason(reason) : null;
   const actionNames = {
     "change-link": "VPN_LINK_CHANGED",
@@ -209,18 +209,18 @@ export async function performVpnAction({ actorId, operationId, username, action,
     metadata: { reason: safeReason },
     execute: async () => {
       if (["extend-time", "increase-traffic", "regenerate-config"].includes(action)) {
-        throw new AdminServiceError("This operation is unavailable: the configured WizardXray client has no safe endpoint for it.", { status: 501, code: "wizard_action_unavailable" });
+        throw new AdminServiceError("این عملیات در دسترس نیست: کلاینت WizardXray تنظیم‌شده نقطه پایانی امنی برای آن ندارد.", { status: 501, code: "wizard_action_unavailable" });
       }
       const owner = await getOwner(clientId);
       let lease;
       try {
         lease = await acquireRedisLease(`admin:vpn:${clientId}`, 120);
-        if (!lease) throw new AdminServiceError("Another operation on this VPN is still in progress.", { status: 409, code: "vpn_action_in_progress" });
+        if (!lease) throw new AdminServiceError("عملیات دیگری روی این VPN در حال انجام است.", { status: 409, code: "vpn_action_in_progress" });
         if (action === "change-link") {
           const response = await changeLinkService(clientId);
           const link = response?.result?.new_sub_link;
           if (typeof link !== "string" || link.length > 4096 || !/^https:\/\//i.test(link)) {
-            throw new AdminServiceError("WizardXray did not return a valid replacement link.", { status: 502, code: "wizard_invalid_response" });
+            throw new AdminServiceError("WizardXray لینک جایگزین معتبری برنگرداند.", { status: 502, code: "wizard_invalid_response" });
           }
           await User.updateOne({ telegramId: String(owner.user.telegramId), "services.username": clientId }, { $set: { "services.$.sub_link": link } });
           if (owner.purchase?._id) await WalletPurchase.updateOne({ _id: owner.purchase._id }, { $set: { serviceLink: link } });
@@ -230,19 +230,19 @@ export async function performVpnAction({ actorId, operationId, username, action,
           const current = await findService(clientId);
           const mode = current?.result?.online_info?.status;
           if (mode === "disabled" || mode === "inactive") return { ok: true, alreadyDisabled: true, auditSummary: { alreadyDisabled: true } };
-          if (mode !== "active") throw new AdminServiceError("Current WizardXray state is not clear; no toggle was applied.", { status: 409, code: "wizard_state_unknown" });
+          if (mode !== "active") throw new AdminServiceError("وضعیت فعلی در WizardXray مشخص نیست؛ تغییری اعمال نشد.", { status: 409, code: "wizard_state_unknown" });
           const response = await deactiveService(clientId);
           let newMode = response?.result?.new_mode;
           if (!newMode) {
             const confirmed = await findService(clientId);
             newMode = confirmed?.result?.online_info?.status;
           }
-          if (!["disabled", "inactive"].includes(newMode)) throw new AdminServiceError("WizardXray did not confirm the requested disabled state.", { status: 502, code: "wizard_state_not_confirmed" });
+          if (!["disabled", "inactive"].includes(newMode)) throw new AdminServiceError("WizardXray وضعیت غیرفعال درخواستی را تأیید نکرد.", { status: 502, code: "wizard_state_not_confirmed" });
           return { ok: true, disabled: true, auditSummary: { disabled: true } };
         }
         if (action === "revoke") {
           const response = await deleteService(clientId);
-          if (response?.ok !== true) throw new AdminServiceError("WizardXray did not confirm VPN revocation.", { status: 502, code: "wizard_revoke_not_confirmed" });
+          if (response?.ok !== true) throw new AdminServiceError("WizardXray حذف VPN را تأیید نکرد.", { status: 502, code: "wizard_revoke_not_confirmed" });
           await User.updateOne(
             { telegramId: String(owner.user.telegramId), "services.username": clientId },
             { $pull: { services: { username: clientId } } }
@@ -253,7 +253,7 @@ export async function performVpnAction({ actorId, operationId, username, action,
           }
           return { ok: true, revoked: true, auditSummary: { revoked: true } };
         }
-        throw new AdminServiceError("Unsupported VPN action.", { status: 400, code: "invalid_vpn_action" });
+        throw new AdminServiceError("عملیات پشتیبانی نشده است.", { status: 400, code: "invalid_vpn_action" });
       } catch (error) {
         if (error instanceof AdminServiceError) throw error;
         const safe = new AdminServiceError(safeWizardError(error), { status: error?.ambiguous ? 503 : 502, code: error?.code || "wizard_api_failed" });

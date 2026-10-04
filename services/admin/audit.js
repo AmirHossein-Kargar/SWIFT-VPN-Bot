@@ -66,7 +66,7 @@ export async function runAuditedAction({
   const actor = assertAdminUser(actorTelegramId);
   const opId = assertOperationId(operationId);
   if (typeof action !== "string" || !/^[A-Z][A-Z0-9_]{1,79}$/.test(action)) {
-    throw new AdminServiceError("Invalid admin action.", { status: 400, code: "invalid_action" });
+    throw new AdminServiceError("عملیات مدیریت نامعتبر است.", { status: 400, code: "invalid_action" });
   }
   if (typeof execute !== "function") throw new TypeError("An audited action requires an execute function");
 
@@ -86,14 +86,14 @@ export async function runAuditedAction({
   try {
     audit = await auditModel.create(fields);
   } catch (error) {
-    if (error?.code !== 11000) throw new AdminServiceError("Audit logging is unavailable; the action was not executed.", { status: 503, code: "audit_unavailable" });
+    if (error?.code !== 11000) throw new AdminServiceError("سیستم گزارش عملیات در دسترس نیست؛ عملیات اجرا نشد.", { status: 503, code: "audit_unavailable" });
     audit = await auditModel.findOne({ operationId: opId });
     if (!audit || String(audit.actorTelegramId) !== actor || audit.action !== action) {
-      throw new AdminServiceError("This idempotency key has already been used.", { status: 409, code: "idempotency_conflict" });
+      throw new AdminServiceError("این کلید عملیات قبلاً استفاده شده است.", { status: 409, code: "idempotency_conflict" });
     }
     if (audit.status === "succeeded") return { result: audit.result, replayed: true };
     if (audit.status !== "started" || !resumeStarted) {
-      throw new AdminServiceError("This action is already being processed or requires review.", { status: 409, code: "action_in_progress" });
+      throw new AdminServiceError("این عملیات در حال انجام است یا نیازمند بررسی دستی است.", { status: 409, code: "action_in_progress" });
     }
     resumed = true;
   }
@@ -121,7 +121,7 @@ export async function runAuditedAction({
     }
     logFailure(error, { action, operationId: opId, actorTelegramId: actor });
     if (error instanceof AdminServiceError) throw error;
-    throw new AdminServiceError("The requested operation could not be completed safely.", {
+    throw new AdminServiceError("عملیات درخواستی به صورت امن قابل انجام نشد.", {
       status: Number.isInteger(error?.status) ? error.status : 503,
       code,
     });
@@ -134,7 +134,7 @@ export async function listAuditLogs({ page = 1, pageSize = 25, action, actorTele
   const query = {};
   if (action != null && action !== "") {
     if (!/^[A-Z][A-Z0-9_]{1,79}$/.test(action)) {
-      throw new AdminServiceError("Invalid audit action filter.", { status: 400, code: "invalid_action_filter" });
+      throw new AdminServiceError("فیلتر گزارش عملیات نامعتبر است.", { status: 400, code: "invalid_action_filter" });
     }
     query.action = action;
   }
