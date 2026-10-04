@@ -140,7 +140,7 @@ export async function getUserDetail({ actorId, telegramId, now = new Date() } = 
   assertAdminUser(actorId);
   const id = requireTelegramId(telegramId);
   const user = await User.findOne({ telegramId: id }).select("telegramId username firstName lastName balance successfulPayments totalServices services createdAt lastActivityAt isBanned blockedAt blockedBy blockReason referralCode referredByTelegramId").lean();
-  if (!user) throw new AdminServiceError("User not found.", { status: 404, code: "user_not_found" });
+  if (!user) throw new AdminServiceError("کاربر یافت نشد.", { status: 404, code: "user_not_found" });
   const [spendRows, tracked, referralCount, purchases, hoosh, bank, crypto] = await Promise.all([
     WalletPurchase.aggregate([
       { $match: { telegramId: id, status: "completed" } },
@@ -212,7 +212,7 @@ export async function changeUserBalance({ actorId, operationId, telegramId, amou
   assertAdminUser(actorId);
   const id = requireTelegramId(telegramId);
   const value = parsePositiveInteger(amount, { name: "amount", min: 1, max: 2_000_000_000 });
-  if (!["add", "remove"].includes(direction)) throw new AdminServiceError("Choose add or remove balance.", { status: 400, code: "invalid_balance_action" });
+  if (!["add", "remove"].includes(direction)) throw new AdminServiceError("نوع عملیات موجودی را انتخاب کنید (افزایش یا کاهش).", { status: 400, code: "invalid_balance_action" });
   const safeReason = requireReason(reason);
   const action = direction === "add" ? "USER_BALANCE_ADDED" : "USER_BALANCE_REMOVED";
   const { result } = await runAuditedAction({
@@ -234,11 +234,11 @@ export async function changeUserBalance({ actorId, operationId, telegramId, amou
       const user = await User.findOneAndUpdate(query, update, { new: true }).select("telegramId balance").lean();
       if (user) return { ok: true, balance: Number(user.balance), auditSummary: { balance: Number(user.balance), amount: value, direction } };
       const existing = await User.findOne({ telegramId: id }).select("balance appliedAdminBalanceKeys").lean();
-      if (!existing) throw new AdminServiceError("User not found.", { status: 404, code: "user_not_found" });
+      if (!existing) throw new AdminServiceError("کاربر یافت نشد.", { status: 404, code: "user_not_found" });
       if (Array.isArray(existing.appliedAdminBalanceKeys) && existing.appliedAdminBalanceKeys.includes(operationId)) {
         return { ok: true, balance: Number(existing.balance), alreadyApplied: true, auditSummary: { balance: Number(existing.balance), amount: value, direction, alreadyApplied: true } };
       }
-      throw new AdminServiceError("The balance is too low for this adjustment.", { status: 409, code: "insufficient_balance" });
+      throw new AdminServiceError("موجودی برای این کاهش کافی نیست.", { status: 409, code: "insufficient_balance" });
     },
   });
   return result;
@@ -247,7 +247,7 @@ export async function changeUserBalance({ actorId, operationId, telegramId, amou
 export async function setUserBlocked({ actorId, operationId, telegramId, blocked, reason, ipAddress } = {}) {
   assertAdminUser(actorId);
   const id = requireTelegramId(telegramId);
-  if (typeof blocked !== "boolean") throw new AdminServiceError("A block state is required.", { status: 400, code: "invalid_block_state" });
+  if (typeof blocked !== "boolean") throw new AdminServiceError("وضعیت مسدودسازی باید مشخص باشد.", { status: 400, code: "invalid_block_state" });
   const safeReason = blocked ? requireReason(reason) : null;
   const action = blocked ? "USER_BLOCKED" : "USER_UNBLOCKED";
   const { result } = await runAuditedAction({
@@ -265,7 +265,7 @@ export async function setUserBlocked({ actorId, operationId, telegramId, blocked
         ? { $set: { isBanned: true, blockedAt: new Date(), blockedBy: String(actorId), blockReason: safeReason } }
         : { $set: { isBanned: false, blockedAt: null, blockedBy: null, blockReason: null } };
       const user = await User.findOneAndUpdate({ telegramId: id }, update, { new: true }).select("telegramId isBanned blockedAt").lean();
-      if (!user) throw new AdminServiceError("User not found.", { status: 404, code: "user_not_found" });
+      if (!user) throw new AdminServiceError("کاربر یافت نشد.", { status: 404, code: "user_not_found" });
       return { ok: true, telegramId: id, isBanned: Boolean(user.isBanned), auditSummary: { isBanned: Boolean(user.isBanned) } };
     },
   });

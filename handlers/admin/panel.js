@@ -1,13 +1,14 @@
 /**
- * SWIFT Telegram Admin Panel
- * --------------------------
+ * SWIFT Telegram Admin Panel (Persian)
+ * ------------------------------------
  * Inline-keyboard admin UI running on the SAME admin services as the web
  * dashboard (services/admin/*). Callback data uses short "adm:" prefixes —
  * Telegram caps callback_data at 64 bytes, so long IDs are kept in the chat
  * session and referenced by index.
  *
- * Authorization: private chats require the clicker to be in ADMINS; group
- * chats additionally require the configured GROUP_ID (utils/auth.js policy).
+ * Authorization: private chats require the clicker to be in ADMINS (or the
+ * database-backed admin registry); group chats additionally require the
+ * configured GROUP_ID (utils/auth.js policy).
  */
 import { randomUUID } from "node:crypto";
 import { getSession, setSession, clearSession } from "../../config/sessionStore.js";
@@ -19,30 +20,30 @@ import { listVpns, getVpnDetail, performVpnAction } from "../../services/admin/v
 import { listPayments, getPaymentDetail, retryPayment, resolvePaymentRecovery } from "../../services/admin/payments.js";
 import { getRecoveryQueue, retrySafeRecoveryItems } from "../../services/admin/recovery.js";
 import { listProducts, setProductEnabled } from "../../services/admin/products.js";
-import { getAnalytics } from "../../services/admin/analytics.js";
 import { getSystemHealth } from "../../services/admin/monitoring.js";
 import { listAuditLogs } from "../../services/admin/audit.js";
 import { createBroadcast, getBroadcastStatus } from "../../services/admin/broadcast.js";
+import { listAdmins, addAdmin, removeAdmin, isOwnerUser } from "../../services/admin/adminRegistry.js";
 
 const PAGE_SIZE = 5;
 const PAY_STATUSES = [
-  { id: "recovery-required", label: "🚨 Recovery" },
-  { id: "pending", label: "⏳ Pending" },
-  { id: "paid", label: "💳 Paid" },
-  { id: "fulfilled", label: "✅ Fulfilled" },
-  { id: "failed", label: "❌ Failed" },
+  { id: "recovery-required", label: "🚨 نیاز به بررسی" },
+  { id: "pending", label: "⏳ در انتظار" },
+  { id: "paid", label: "💳 پرداخت‌شده" },
+  { id: "fulfilled", label: "✅ تحویل‌شده" },
+  { id: "failed", label: "❌ ناموفق" },
 ];
 
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
-const money = (value) => (value == null ? "—" : Number(value).toLocaleString("en-US") + " T");
+const money = (value) => (value == null ? "—" : Number(value).toLocaleString("en-US") + " تومان");
 const num = (value) => (value == null ? "—" : Number(value).toLocaleString("en-US"));
-const when = (value) => (value ? new Date(value).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—");
+const when = (value) => (value ? new Date(value).toLocaleString("fa-IR", { year: "2-digit", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
 
-const HOME_BTN = { text: "🏠 Home", callback_data: "adm:home" };
-const BACK_BTN = { text: "⬅️ Back", callback_data: "adm:home" };
-const REFRESH_BTN = { text: "🔄 Refresh", callback_data: "adm:refresh" };
+const HOME_BTN = { text: "🏠 خانه", callback_data: "adm:home" };
+const BACK_BTN = { text: "⬅️ بازگشت", callback_data: "adm:home" };
+const REFRESH_BTN = { text: "🔄 بروزرسانی", callback_data: "adm:refresh" };
 
 function authorized(query) {
   const chatId = query?.message?.chat?.id;
@@ -53,7 +54,7 @@ function authorized(query) {
 }
 
 async function deny(bot, query) {
-  await bot.answerCallbackQuery(query.id, { text: "⛔️ Admin access denied.", show_alert: true }).catch(() => {});
+  await bot.answerCallbackQuery(query.id, { text: "⛔️ دسترسی مدیر تأیید نشد.", show_alert: true }).catch(() => {});
 }
 
 async function editOrSend(bot, chatId, messageId, text, keyboard) {
@@ -71,37 +72,38 @@ async function editOrSend(bot, chatId, messageId, text, keyboard) {
 function mainMenuKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: "📊 Dashboard", callback_data: "adm:dash" }, { text: "👥 Users", callback_data: "adm:us" }],
-      [{ text: "💳 Payments", callback_data: "adm:pay:recovery-required:1" }, { text: "🌐 VPN Services", callback_data: "adm:vpns" }],
-      [{ text: "📦 Products", callback_data: "adm:prod" }, { text: "📢 Broadcast", callback_data: "adm:bcast" }],
-      [{ text: "🎁 Referrals", callback_data: "adm:ref" }, { text: "📋 Recovery", callback_data: "adm:rec" }],
-      [{ text: "📜 Audit Logs", callback_data: "adm:audit:1" }, { text: "⚙️ System", callback_data: "adm:sys" }],
+      [{ text: "📊 داشبورد", callback_data: "adm:dash" }, { text: "👥 کاربران", callback_data: "adm:us" }],
+      [{ text: "💳 پرداخت‌ها", callback_data: "adm:pay:recovery-required:1" }, { text: "🌐 سرویس‌های VPN", callback_data: "adm:vpns" }],
+      [{ text: "📦 محصولات", callback_data: "adm:prod" }, { text: "📢 ارسال پیام همگانی", callback_data: "adm:bcast" }],
+      [{ text: "🎁 معرفی‌ها", callback_data: "adm:ref" }, { text: "📋 بازیابی پرداخت‌ها", callback_data: "adm:rec" }],
+      [{ text: "📜 گزارش عملیات", callback_data: "adm:audit:1" }, { text: "⚙️ وضعیت سیستم", callback_data: "adm:sys" }],
+      [{ text: "🛡 مدیریت مدیران", callback_data: "adm:admins" }],
     ],
   };
 }
 
 function mainMenuText() {
-  return "👑 <b>SWIFT ADMIN</b>\n\nSelect a section to manage the platform. All actions here run through the same audited admin services as the web dashboard.";
+  return "👑 <b>پنل مدیریت سویفت</b>\n\nیک بخش را برای مدیریت انتخاب کنید. همه عملیات این پنل از همان سرویس‌های امن و ثبت‌شده در گزارش استفاده می‌کنند که پنل وب نیز از آن‌ها بهره می‌برد.";
 }
 
 async function screenDashboard(bot, chatId, messageId) {
   const data = await getDashboardMetrics({ actorId: bot.__adminActorId });
   const m = data.metrics;
   const text =
-    `👑 <b>SWIFT ADMIN — Dashboard</b>\n\n` +
-    `👥 Users: <b>${num(m.totalUsers)}</b> (active ${num(m.activeUsers)})\n` +
-    `🟢 Active VPNs: <b>${m.activeVpns == null ? num(m.trackedActiveVpns) + "*" : num(m.activeVpns)}</b>\n` +
-    `💰 Today: <b>${money(m.revenue.today)}</b>\n` +
-    `🛒 Orders today: <b>${num(m.orders.today)}</b>\n` +
-    `⏳ Pending payments: <b>${num(m.pendingPayments)}</b>\n` +
-    `❌ Failed payments: <b>${num(m.failedPayments)}</b>\n` +
-    `⚠️ Failed provisioning: <b>${num(m.failedProvisioning)}</b>\n` +
-    `🆘 Recovery queue: <b>${num((await getRecoveryQueue({ actorId: bot.__adminActorId, pageSize: 1 })).total)}</b>\n\n` +
-    `<i>${m.activeVpns == null ? "*local tracked count (WizardXray status unavailable)\n" : ""}Updated ${when(new Date())}</i>`;
+    `👑 <b>داشبورد مدیریت</b>\n\n` +
+    `👥 کاربران: <b>${num(m.totalUsers)}</b> (فعال: ${num(m.activeUsers)})\n` +
+    `🟢 VPN های فعال: <b>${m.activeVpns == null ? num(m.trackedActiveVpns) + "*" : num(m.activeVpns)}</b>\n` +
+    `💰 درآمد امروز: <b>${money(m.revenue.today)}</b>\n` +
+    `🛒 سفارش‌های امروز: <b>${num(m.orders.today)}</b>\n` +
+    `⏳ پرداخت‌های در انتظار: <b>${num(m.pendingPayments)}</b>\n` +
+    `❌ پرداخت‌های ناموفق: <b>${num(m.failedPayments)}</b>\n` +
+    `⚠️ خطاهای ساخت سرویس: <b>${num(m.failedProvisioning)}</b>\n` +
+    `🆘 صف بازیابی: <b>${num((await getRecoveryQueue({ actorId: bot.__adminActorId, pageSize: 1 })).total)}</b>\n\n` +
+    `<i>${m.activeVpns == null ? "*شمار داخلی (وضعیت WizardXray در دسترس نیست)\n" : ""}آخرین بروزرسانی: ${when(new Date())}</i>`;
   await editOrSend(bot, chatId, messageId, text, {
     inline_keyboard: [
-      [{ text: "👥 Users", callback_data: "adm:us" }, { text: "💳 Payments", callback_data: "adm:pay:recovery-required:1" }],
-      [{ text: "🌐 VPNs", callback_data: "adm:vpns" }, { text: "📋 Recovery", callback_data: "adm:rec" }],
+      [{ text: "👥 کاربران", callback_data: "adm:us" }, { text: "💳 پرداخت‌ها", callback_data: "adm:pay:recovery-required:1" }],
+      [{ text: "🌐 سرویس‌ها", callback_data: "adm:vpns" }, { text: "📋 بازیابی", callback_data: "adm:rec" }],
       [REFRESH_BTN, HOME_BTN],
     ],
   });
@@ -110,7 +112,7 @@ async function screenDashboard(bot, chatId, messageId) {
 async function screenUserSearch(bot, chatId, messageId) {
   await setSession(chatId, { step: "admin_panel_user_search" });
   await editOrSend(bot, chatId, messageId,
-    "👥 <b>User management</b>\n\nSend the <b>Telegram ID</b> or <b>@username</b> of the user you want to manage.",
+    "👥 <b>مدیریت کاربران</b>\n\n<b>شناسه عددی تلگرام</b> یا <b>@یوزرنیم</b> کاربر مورد نظر را ارسال کنید.",
     { inline_keyboard: [[BACK_BTN]] });
 }
 
@@ -118,25 +120,25 @@ async function showUserProfile(bot, chatId, messageId, telegramId) {
   const data = await getUserDetail({ actorId: bot.__adminActorId, telegramId });
   const user = data.user;
   const text =
-    `👤 <b>User</b>\n\n` +
-    `🆔 ID: <code>${esc(user.telegramId)}</code>\n` +
-    `🔗 Username: ${user.username ? "@" + esc(user.username) : "—"}\n` +
-    `📛 Name: ${esc(user.name || "—")}\n` +
-    `💳 Balance: <b>${money(user.balance)}</b>\n` +
-    `💸 Total spent: <b>${money(data.totalSpent)}</b>\n` +
-    `🛒 Orders: <b>${num(data.orderCount)}</b>\n` +
-    `🌐 Active VPNs: <b>${num(data.activeVpns)}</b> (expired ${num(data.expiredVpns)})\n` +
-    `✅ Payments: ${num(data.payments.length)} shown\n` +
-    `🎁 Referrals: ${num(data.referral.referralCount)}\n` +
-    `🚫 Status: ${user.isBanned ? "BLOCKED" : "active"}`;
+    `👤 <b>پروفایل کاربر</b>\n\n` +
+    `🆔 شناسه: <code>${esc(user.telegramId)}</code>\n` +
+    `🔗 یوزرنیم: ${user.username ? "@" + esc(user.username) : "—"}\n` +
+    `📛 نام: ${esc(user.name || "—")}\n` +
+    `💳 موجودی: <b>${money(user.balance)}</b>\n` +
+    `💸 مجموع خرید: <b>${money(data.totalSpent)}</b>\n` +
+    `🛒 سفارش‌ها: <b>${num(data.orderCount)}</b>\n` +
+    `🌐 VPN های فعال: <b>${num(data.activeVpns)}</b> (منقضی: ${num(data.expiredVpns)})\n` +
+    `✅ پرداخت‌ها: ${num(data.payments.length)} مورد\n` +
+    `🎁 معرفی‌ها: ${num(data.referral.referralCount)}\n` +
+    `🚫 وضعیت: ${user.isBanned ? "مسدود" : "فعال"}`;
   await setSession(chatId, { step: null, adminPanelUser: String(user.telegramId) });
   await editOrSend(bot, chatId, messageId, text, {
     inline_keyboard: [
-      [{ text: "🌐 VPNs", callback_data: "adm:usvpns" }, { text: "💳 Payments", callback_data: "adm:uspay" }],
-      [{ text: "➕ Add Balance", callback_data: "adm:bal:add" }, { text: "➖ Remove Balance", callback_data: "adm:bal:remove" }],
+      [{ text: "🌐 سرویس‌ها", callback_data: "adm:usvpns" }, { text: "💳 پرداخت‌ها", callback_data: "adm:uspay" }],
+      [{ text: "➕ افزایش موجودی", callback_data: "adm:bal:add" }, { text: "➖ کاهش موجودی", callback_data: "adm:bal:remove" }],
       user.isBanned
-        ? [{ text: "🔓 Unblock", callback_data: "adm:blk:no" }]
-        : [{ text: "🚫 Block", callback_data: "adm:blk:yes" }],
+        ? [{ text: "🔓 رفع مسدودی", callback_data: "adm:blk:no" }]
+        : [{ text: "🚫 مسدودسازی", callback_data: "adm:blk:yes" }],
       [REFRESH_BTN, BACK_BTN],
     ],
   });
@@ -148,9 +150,9 @@ async function screenUserPayments(bot, chatId, messageId, session) {
   const data = await getUserDetail({ actorId: bot.__adminActorId, telegramId });
   const lines = data.payments.slice(0, 8).map((payment) =>
     `• <code>${esc(String(payment.id).slice(0, 20))}</code> · ${esc(payment.provider)} · ${money(payment.amount)} · ${esc(payment.status)}`);
-  const text = `💳 <b>Payments — user ${esc(telegramId)}</b>\n\n${lines.join("\n") || "No payments recorded."}`;
+  const text = `💳 <b>پرداخت‌های کاربر ${esc(telegramId)}</b>\n\n${lines.join("\n") || "پرداختی ثبت نشده است."}`;
   await editOrSend(bot, chatId, messageId, text, {
-    inline_keyboard: [[{ text: "👤 Profile", callback_data: "adm:usback" }], [BACK_BTN]],
+    inline_keyboard: [[{ text: "👤 پروفایل", callback_data: "adm:usback" }], [BACK_BTN]],
   });
 }
 
@@ -159,22 +161,22 @@ async function screenUserVpns(bot, chatId, messageId, session) {
   if (!telegramId) return screenUserSearch(bot, chatId, messageId);
   const data = await listVpns({ actorId: bot.__adminActorId, query: { search: telegramId, status: "all", pageSize: 10 } });
   if (!data.items.length) {
-    return editOrSend(bot, chatId, messageId, `🌐 <b>No VPN services found for ${esc(telegramId)}.</b>`, {
-      inline_keyboard: [[{ text: "👤 Profile", callback_data: "adm:usback" }], [BACK_BTN]],
+    return editOrSend(bot, chatId, messageId, `🌐 <b>سرویسی برای کاربر ${esc(telegramId)} یافت نشد.</b>`, {
+      inline_keyboard: [[{ text: "👤 پروفایل", callback_data: "adm:usback" }], [BACK_BTN]],
     });
   }
   const keys = data.items.map((item) => item.clientId);
   await setSession(chatId, { step: null, adminPanelUser: telegramId, adminVpnKeys: keys });
   const lines = data.items.slice(0, 8).map((vpn, index) =>
-    `${index + 1}. <code>${esc(vpn.clientId)}</code> · ${vpn.status === "active" ? "🟢" : vpn.status === "expired" ? "🟡" : "🔴"} ${esc(vpn.status)} · exp ${when(vpn.expiresAt)}`);
+    `${index + 1}. <code>${esc(vpn.clientId)}</code> · ${vpn.status === "active" ? "🟢" : vpn.status === "expired" ? "🟡" : "🔴"} ${esc(vpn.status)} · انقضا ${when(vpn.expiresAt)}`);
   const keyboard = {
     inline_keyboard: [
       ...data.items.slice(0, 8).map((vpn, index) => [{ text: `🌐 ${vpn.clientId.slice(0, 28)}`, callback_data: `adm:vpnv:${index}` }]),
-      [{ text: "👤 Profile", callback_data: "adm:usback" }],
+      [{ text: "👤 پروفایل", callback_data: "adm:usback" }],
       [BACK_BTN],
     ],
   };
-  await editOrSend(bot, chatId, messageId, `🌐 <b>VPN services — user ${esc(telegramId)}</b>\n\n${lines.join("\n")}`, keyboard);
+  await editOrSend(bot, chatId, messageId, `🌐 <b>سرویس‌های کاربر ${esc(telegramId)}</b>\n\n${lines.join("\n")}`, keyboard);
 }
 
 async function screenPayments(bot, chatId, messageId, status, page) {
@@ -190,14 +192,15 @@ async function screenPayments(bot, chatId, messageId, status, page) {
     callback_data: `adm:payv:${index}`,
   }]);
   const pager = [];
-  if (data.page > 1) pager.push({ text: "⬅️ Prev", callback_data: `adm:pay:${status}:${data.page - 1}` });
+  if (data.page > 1) pager.push({ text: "⬅️ قبلی", callback_data: `adm:pay:${status}:${data.page - 1}` });
   pager.push({ text: `${data.page}/${Math.max(1, data.pages)}`, callback_data: "adm:x" });
-  if (data.page < data.pages) pager.push({ text: "Next ➡️", callback_data: `adm:pay:${status}:${data.page + 1}` });
+  if (data.page < data.pages) pager.push({ text: "بعدی ➡️", callback_data: `adm:pay:${status}:${data.page + 1}` });
+  const statusLabel = PAY_STATUSES.find((entry) => entry.id === status)?.label || status;
   const text =
-    `💳 <b>Payments — ${esc(status)}</b>\n\n` +
+    `💳 <b>پرداخت‌ها — ${esc(statusLabel)}</b>\n\n` +
     (data.items.length
-      ? data.items.map((item, index) => `${index + 1}. <code>${esc(String(item.id).slice(0, 26))}</code> · ${esc(item.providerLabel)} · ${money(item.amount)} · user <code>${esc(item.userId)}</code>`).join("\n")
-      : "Nothing in this list.");
+      ? data.items.map((item, index) => `${index + 1}. <code>${esc(String(item.id).slice(0, 26))}</code> · ${esc(item.providerLabel)} · ${money(item.amount)} · کاربر <code>${esc(item.userId)}</code>`).join("\n")
+      : "موردی در این فهرست نیست.");
   await editOrSend(bot, chatId, messageId, text, {
     inline_keyboard: [...statusTabs, ...rows, pager, [REFRESH_BTN, HOME_BTN]],
   });
@@ -209,31 +212,31 @@ async function screenPaymentDetail(bot, chatId, messageId, session, rowIndex) {
   const data = await getPaymentDetail({ actorId: bot.__adminActorId, key });
   await setSession(chatId, { ...session, adminPayDetail: key });
   const text =
-    `💳 <b>Payment detail</b>\n\n` +
-    `🧾 ID: <code>${esc(data.id)}</code>\n` +
-    `🏦 Provider: ${esc(data.providerLabel)}\n` +
-    `👤 User: <code>${esc(data.userId)}</code>\n` +
-    `💰 Amount: <b>${money(data.amount)}</b>\n` +
-    `📦 Product: ${esc(data.product)}\n` +
-    `🔢 Tracking: <code>${esc(data.trackingCode || "—")}</code>\n` +
-    `📅 Created: ${when(data.createdAt)}\n` +
-    `✅ Paid: ${when(data.paidAt)}\n` +
-    `📤 Fulfilled: ${when(data.fulfilledAt)}\n` +
-    `📌 Status: <b>${esc(data.status)}</b> (raw: ${esc(data.rawStatus)})\n` +
-    `🔄 Retries: ${num(data.retryCount)}${data.lastError ? `\n⚠️ Last error: ${esc(data.lastError)}` : ""}\n\n` +
-    `<b>Timeline</b>\n` +
+    `💳 <b>جزئیات پرداخت</b>\n\n` +
+    `🧾 شناسه: <code>${esc(data.id)}</code>\n` +
+    `🏦 درگاه: ${esc(data.providerLabel)}\n` +
+    `👤 کاربر: <code>${esc(data.userId)}</code>\n` +
+    `💰 مبلغ: <b>${money(data.amount)}</b>\n` +
+    `📦 محصول: ${esc(data.product)}\n` +
+    `🔢 کد رهگیری: <code>${esc(data.trackingCode || "—")}</code>\n` +
+    `📅 ایجاد: ${when(data.createdAt)}\n` +
+    `✅ پرداخت: ${when(data.paidAt)}\n` +
+    `📤 تحویل: ${when(data.fulfilledAt)}\n` +
+    `📌 وضعیت: <b>${esc(data.status)}</b> (خام: ${esc(data.rawStatus)})\n` +
+    `🔄 تلاش‌های مجدد: ${num(data.retryCount)}${data.lastError ? `\n⚠️ آخرین خطا: ${esc(data.lastError)}` : ""}\n\n` +
+    `<b>روند پرداخت</b>\n` +
     (data.timeline.map((event) => `${event.status === "success" ? "✅" : event.status === "warning" ? "⚠️" : event.status === "pending" ? "⏳" : "•"} ${esc(event.name)} — ${when(event.at)}`).join("\n") || "—");
   const buttons = [];
-  if (data.actions.retryVerification || data.actions.retryFulfillment) buttons.push([{ text: "🔄 Retry", callback_data: `adm:payretry:${rowIndex}` }]);
-  if (data.actions.manualResolve) buttons.push([{ text: "✅ Resolve", callback_data: `adm:payresolve:${rowIndex}` }]);
-  buttons.push([{ text: "⬅️ Back", callback_data: `adm:pay:${session?.adminPayStatus || "recovery-required"}:${session?.adminPayPage || 1}` }]);
+  if (data.actions.retryVerification || data.actions.retryFulfillment) buttons.push([{ text: "🔄 تلاش مجدد", callback_data: `adm:payretry:${rowIndex}` }]);
+  if (data.actions.manualResolve) buttons.push([{ text: "✅ ثبت تعیین تکلیف", callback_data: `adm:payresolve:${rowIndex}` }]);
+  buttons.push([{ text: "⬅️ بازگشت", callback_data: `adm:pay:${session?.adminPayStatus || "recovery-required"}:${session?.adminPayPage || 1}` }]);
   await editOrSend(bot, chatId, messageId, text, { inline_keyboard: [...buttons, [HOME_BTN]] });
 }
 
 async function screenVpnSearch(bot, chatId, messageId) {
   await setSession(chatId, { step: "admin_panel_vpn_search" });
   await editOrSend(bot, chatId, messageId,
-    "🌐 <b>VPN services</b>\n\nSend a <b>service/client ID</b> or a <b>user Telegram ID</b> to look up VPN services.",
+    "🌐 <b>سرویس‌های VPN</b>\n\n<b>شناسه سرویس/کلاینت</b> یا <b>شناسه تلگرام کاربر</b> را برای جستجو ارسال کنید.",
     { inline_keyboard: [[BACK_BTN]] });
 }
 
@@ -242,20 +245,20 @@ async function screenVpnDetail(bot, chatId, messageId, session, rowIndex) {
   if (!username) return screenVpnSearch(bot, chatId, messageId);
   const data = await getVpnDetail({ actorId: bot.__adminActorId, username });
   const text =
-    `🌐 <b>VPN service</b>\n\n` +
-    `👤 Owner: <code>${esc(data.user.telegramId)}</code>${data.user.name ? ` (${esc(data.user.name)})` : ""}\n` +
-    `#⃣ Client ID: <code>${esc(data.clientId)}</code>\n` +
-    `📦 Product: ${esc(data.product || "—")}\n` +
-    `📅 Created: ${when(data.createdAt)}\n` +
-    `⏳ Expiry: ${when(data.expiresAt)}${data.panelExpiry ? ` (panel: ${esc(data.panelExpiry)})` : ""}\n` +
-    `📦 Traffic: ${data.trafficGb != null ? num(data.trafficGb) + " GB" : "—"} (used ${esc(data.trafficUsed || "—")})\n` +
+    `🌐 <b>سرویس VPN</b>\n\n` +
+    `👤 مالک: <code>${esc(data.user.telegramId)}</code>${data.user.name ? ` (${esc(data.user.name)})` : ""}\n` +
+    `#⃣ شناسه کلاینت: <code>${esc(data.clientId)}</code>\n` +
+    `📦 محصول: ${esc(data.product || "—")}\n` +
+    `📅 ایجاد: ${when(data.createdAt)}\n` +
+    `⏳ انقضا: ${when(data.expiresAt)}${data.panelExpiry ? ` (پنل: ${esc(data.panelExpiry)})` : ""}\n` +
+    `📦 حجم: ${data.trafficGb != null ? num(data.trafficGb) + " گیگابایت" : "—"} (مصرف: ${esc(data.trafficUsed || "—")})\n` +
     `📊 WizardXray: ${data.wizardXray.status === "connected" ? "🟢" : "🔴"} ${esc(data.wizardXray.status)}${data.wizardXray.latencyMs != null ? ` · ${data.wizardXray.latencyMs}ms` : ""}\n` +
-    `📌 Status: <b>${esc(data.status)}</b>`;
+    `📌 وضعیت: <b>${esc(data.status)}</b>`;
   const keyboard = { inline_keyboard: [
-    ...(data.availableActions.changeLink ? [[{ text: "🔗 Change link", callback_data: `adm:vpact:change-link:${rowIndex}` }]] : []),
-    ...(data.availableActions.disable ? [[{ text: "⛔ Disable", callback_data: `adm:vpact:disable:${rowIndex}` }]] : []),
-    ...(data.availableActions.revoke ? [[{ text: "🗑 Revoke", callback_data: `adm:vpact:revoke:${rowIndex}` }]] : []),
-    [{ text: "⏱ Extend / 📦 Traffic / 🔐 Regenerate — unavailable", callback_data: "adm:vpunavail" }],
+    ...(data.availableActions.changeLink ? [[{ text: "🔗 تغییر لینک", callback_data: `adm:vpact:change-link:${rowIndex}` }]] : []),
+    ...(data.availableActions.disable ? [[{ text: "⛔ غیرفعال‌سازی", callback_data: `adm:vpact:disable:${rowIndex}` }]] : []),
+    ...(data.availableActions.revoke ? [[{ text: "🗑 حذف قطعی", callback_data: `adm:vpact:revoke:${rowIndex}` }]] : []),
+    [{ text: "⏱ تمدید / 📦 حجم / 🔐 بازسازی — غیرفعال", callback_data: "adm:vpunavail" }],
     [REFRESH_BTN, BACK_BTN],
   ] };
   await editOrSend(bot, chatId, messageId, text, keyboard);
@@ -269,13 +272,13 @@ async function screenProducts(bot, chatId, messageId, page = 1) {
   const slice = products.slice((safePage - 1) * pageSize, safePage * pageSize);
   await setSession(chatId, { step: null, adminProductIds: products.map((product) => product.id) });
   const text =
-    `📦 <b>Products</b> (page ${safePage}/${pages})\n\n` +
+    `📦 <b>محصولات</b> (صفحه ${safePage}/${pages})\n\n` +
     (slice.length
       ? slice.map((product, index) => {
           const globalIndex = (safePage - 1) * pageSize + index;
-          return `${globalIndex + 1}. <b>${esc(product.name)}</b>\n    ${num(product.durationDays)}d · ${num(product.trafficGb)}GB · ${money(product.priceToman)} · ${product.enabled ? "🟢 enabled" : "⚪️ disabled"}`;
+          return `${globalIndex + 1}. <b>${esc(product.name)}</b>\n    ${num(product.durationDays)} روز · ${num(product.trafficGb)} گیگ · ${money(product.priceToman)} · ${product.enabled ? "🟢 فعال" : "⚪️ غیرفعال"}`;
         }).join("\n")
-      : "No products yet.");
+      : "محصولی ثبت نشده است.");
   const pager = [];
   if (safePage > 1) pager.push({ text: "⬅️", callback_data: `adm:prod:${safePage - 1}` });
   pager.push({ text: `${safePage}/${pages}`, callback_data: "adm:x" });
@@ -285,7 +288,7 @@ async function screenProducts(bot, chatId, messageId, page = 1) {
     return [{ text: `${product.enabled ? "🟢" : "⚪️"} ${product.name.slice(0, 30)}`, callback_data: `adm:prodd:${globalIndex}` }];
   });
   await editOrSend(bot, chatId, messageId, text, {
-    inline_keyboard: [...rows, pager, [{ text: "➕ Create / ✏️ Edit — use web panel", callback_data: "adm:prodweb" }], [REFRESH_BTN, HOME_BTN]],
+    inline_keyboard: [...rows, pager, [{ text: "➕ ساخت / ✏️ ویرایش — در پنل وب", callback_data: "adm:prodweb" }], [REFRESH_BTN, HOME_BTN]],
   });
 }
 
@@ -294,20 +297,20 @@ async function screenProductDetail(bot, chatId, messageId, session, rowIndex) {
   const product = products.find((item) => item.id === session?.adminProductIds?.[Number(rowIndex)]);
   if (!product) return screenProducts(bot, chatId, messageId);
   const text =
-    `📦 <b>Product</b>\n\n` +
-    `📛 Name: <b>${esc(product.name)}</b>\n` +
-    `🆔 ID: <code>${esc(product.id)}</code>\n` +
-    `📅 Duration: ${num(product.durationDays)} days\n` +
-    `📦 Traffic: ${num(product.trafficGb)} GB\n` +
-    `💰 Price: <b>${money(product.priceToman)}</b>\n` +
-    `💸 Cost: ${money(product.costToman)}\n` +
-    `📈 Profit: <b>${money(product.profitToman)}</b>\n` +
-    `⚙️ Enabled: ${product.enabled ? "yes" : "no"}\n` +
-    `🔢 Display order: ${num(product.displayOrder)}`;
+    `📦 <b>محصول</b>\n\n` +
+    `📛 نام: <b>${esc(product.name)}</b>\n` +
+    `🆔 شناسه: <code>${esc(product.id)}</code>\n` +
+    `📅 مدت: ${num(product.durationDays)} روز\n` +
+    `📦 حجم: ${num(product.trafficGb)} گیگابایت\n` +
+    `💰 قیمت: <b>${money(product.priceToman)}</b>\n` +
+    `💸 هزینه: ${money(product.costToman)}\n` +
+    `📈 سود: <b>${money(product.profitToman)}</b>\n` +
+    `⚙️ فعال: ${product.enabled ? "بله" : "خیر"}\n` +
+    `🔢 ترتیب نمایش: ${num(product.displayOrder)}`;
   await editOrSend(bot, chatId, messageId, text, {
     inline_keyboard: [
-      [{ text: product.enabled ? "⚪️ Disable" : "🟢 Enable", callback_data: `adm:prodt:${rowIndex}` }],
-      [{ text: "⬅️ Back", callback_data: "adm:prod:1" }, HOME_BTN],
+      [{ text: product.enabled ? "⚪️ غیرفعال‌سازی" : "🟢 فعال‌سازی", callback_data: `adm:prodt:${rowIndex}` }],
+      [{ text: "⬅️ بازگشت", callback_data: "adm:prod:1" }, HOME_BTN],
     ],
   });
 }
@@ -315,14 +318,14 @@ async function screenProductDetail(bot, chatId, messageId, session, rowIndex) {
 async function screenRecovery(bot, chatId, messageId) {
   const data = await getRecoveryQueue({ actorId: bot.__adminActorId, pageSize: 8 });
   const text =
-    `📋 <b>Payment recovery</b>\n\n` +
+    `📋 <b>بازیابی پرداخت‌ها</b>\n\n` +
     (data.items.length
-      ? data.items.map((item) => `🚨 <code>${esc(String(item.key).slice(0, 30))}</code>\n    ${esc(item.kind)} · ${money(item.amount)} · retries ${num(item.retryCount)}${item.lastError ? ` · ${esc(item.lastError)}` : ""}`).join("\n")
-      : "✅ Nothing needs recovery.") +
-    `\n\nTotal in queue: <b>${num(data.total)}</b>`;
+      ? data.items.map((item) => `🚨 <code>${esc(String(item.key).slice(0, 30))}</code>\n    ${esc(item.kind)} · ${money(item.amount)} · تلاش ${num(item.retryCount)}${item.lastError ? ` · ${esc(item.lastError)}` : ""}`).join("\n")
+      : "✅ موردی نیاز به بازیابی ندارد.") +
+    `\n\nمجموع صف: <b>${num(data.total)}</b>`;
   await editOrSend(bot, chatId, messageId, text, {
     inline_keyboard: [
-      [{ text: "🔄 Retry all safe", callback_data: "adm:recgo" }],
+      [{ text: "🔄 تلاش مجدد موارد امن", callback_data: "adm:recgo" }],
       [REFRESH_BTN, HOME_BTN],
     ],
   });
@@ -331,24 +334,24 @@ async function screenRecovery(bot, chatId, messageId) {
 async function screenReferrals(bot, chatId, messageId) {
   const overview = await import("../../services/admin/users.js").then((module) => module.getReferralOverview({ actorId: bot.__adminActorId, pageSize: 5 }));
   const text =
-    `🎁 <b>Referrals</b>\n\n` +
-    `👥 Accounts with referral activity: <b>${num(overview.total)}</b>\n\n` +
+    `🎁 <b>سیستم معرفی</b>\n\n` +
+    `👥 حساب‌های دارای فعالیت معرفی: <b>${num(overview.total)}</b>\n\n` +
     (overview.items.length
-      ? overview.items.map((item) => `• <code>${esc(item.telegramId)}</code>${item.referralCode ? ` · code <code>${esc(item.referralCode)}</code>` : ""}${item.referredByTelegramId ? ` · referred by <code>${esc(item.referredByTelegramId)}</code>` : ""}`).join("\n")
-      : "Referral tracking starts with the updated bot; records appear as users interact.");
+      ? overview.items.map((item) => `• <code>${esc(item.telegramId)}</code>${item.referralCode ? ` · کد <code>${esc(item.referralCode)}</code>` : ""}${item.referredByTelegramId ? ` · معرفی‌کننده <code>${esc(item.referredByTelegramId)}</code>` : ""}`).join("\n")
+      : "ثبت معرفی‌ها همراه با نسخه جدید ربات فعال شده و با تعامل کاربران نمایش داده می‌شود.");
   await editOrSend(bot, chatId, messageId, text, { inline_keyboard: [[REFRESH_BTN, HOME_BTN]] });
 }
 
 async function screenAudit(bot, chatId, messageId, page = 1) {
   const data = await listAuditLogs({ page, pageSize: PAGE_SIZE });
   const text =
-    `📜 <b>Audit log</b> (page ${data.page}/${Math.max(1, Math.ceil(data.total / data.pageSize))})\n\n` +
+    `📜 <b>گزارش عملیات مدیران</b> (صفحه ${data.page}/${Math.max(1, Math.ceil(data.total / data.pageSize))})\n\n` +
     (data.items.length
       ? data.items.map((item) => `• ${when(item.createdAt)} · <code>${esc(item.actorTelegramId)}</code> · <b>${esc(item.action)}</b>${item.targetId ? ` → ${esc(String(item.targetId).slice(0, 24))}` : ""} · ${item.status === "succeeded" ? "✅" : item.status === "failed" ? "❌" : "⏳"}`).join("\n")
-      : "No audit records yet.");
+      : "عملیاتی ثبت نشده است.");
   const pager = [];
-  if (data.page > 1) pager.push({ text: "⬅️ Prev", callback_data: `adm:audit:${data.page - 1}` });
-  if (data.page * data.pageSize < data.total) pager.push({ text: "Next ➡️", callback_data: `adm:audit:${data.page + 1}` });
+  if (data.page > 1) pager.push({ text: "⬅️ قبلی", callback_data: `adm:audit:${data.page - 1}` });
+  if (data.page * data.pageSize < data.total) pager.push({ text: "بعدی ➡️", callback_data: `adm:audit:${data.page + 1}` });
   await editOrSend(bot, chatId, messageId, text, { inline_keyboard: [...(pager.length ? [pager] : []), [REFRESH_BTN, HOME_BTN]] });
 }
 
@@ -356,21 +359,43 @@ async function screenSystem(bot, chatId, messageId) {
   const data = await getSystemHealth({ actorId: bot.__adminActorId });
   const icon = { healthy: "🟢", degraded: "🟡", down: "🔴", unknown: "⚪️" };
   const text =
-    `⚙️ <b>System health</b>\n\n` +
+    `⚙️ <b>وضعیت سیستم</b>\n\n` +
     data.services.map((service) =>
       `${icon[service.status] || "⚪️"} <b>${esc(service.name)}</b> — ${esc(service.status)}` +
       (service.latencyMs != null ? ` · ${service.latencyMs}ms` : "") +
       (service.error ? `\n    ⚠️ ${esc(service.error)}` : "")
     ).join("\n") +
-    `\n\nOverall: <b>${esc(data.overall)}</b>\nUpdated ${when(new Date())}`;
+    `\n\nوضعیت کلی: <b>${esc(data.overall)}</b>\nآخرین بروزرسانی: ${when(new Date())}`;
   await editOrSend(bot, chatId, messageId, text, { inline_keyboard: [[REFRESH_BTN, HOME_BTN]] });
 }
 
 async function screenBroadcast(bot, chatId, messageId) {
   await setSession(chatId, { step: "admin_panel_broadcast_message" });
   await editOrSend(bot, chatId, messageId,
-    "📢 <b>Broadcast</b>\n\nSend the message text you want to deliver. In the next step you will pick the audience and confirm.",
+    "📢 <b>ارسال پیام همگانی</b>\n\nمتن پیام را ارسال کنید. در مرحله بعد مخاطبان را انتخاب و تأیید خواهید کرد.",
     { inline_keyboard: [[BACK_BTN]] });
+}
+
+// ── Admin management (owner-only mutations) ──────────────────────────────────
+
+async function screenAdmins(bot, chatId, messageId, userId) {
+  const admins = await listAdmins({ actorId: userId });
+  const isOwner = isOwnerUser(userId);
+  const lines = admins.map((admin) =>
+    `${admin.role === "owner" ? "👑" : "🛡"} <code>${esc(admin.telegramId)}</code> · ${admin.role === "owner" ? "مالک" : "مدیر"} · ${admin.source === "environment" ? "از تنظیمات سرور" : "از پایگاه داده"}`);
+  const text =
+    `🛡 <b>مدیریت مدیران</b>\n\n${lines.join("\n")}\n\n` +
+    `${isOwner ? "👤 شما مالک اصلی هستید و می‌توانید مدیر اضافه یا حذف کنید." : "فقط مالک اصلی می‌تواند مدیران را تغییر دهد."}`;
+  const keyboard = { inline_keyboard: [] };
+  if (isOwner) {
+    keyboard.inline_keyboard.push([{ text: "➕ افزودن مدیر", callback_data: "adm:admadd" }]);
+    const removable = admins.filter((admin) => admin.source === "database" && admin.role !== "owner");
+    for (const admin of removable.slice(0, 10)) {
+      keyboard.inline_keyboard.push([{ text: `🗑 حذف ${admin.telegramId}`, callback_data: `adm:admrm:${admin.telegramId}` }]);
+    }
+  }
+  keyboard.inline_keyboard.push([REFRESH_BTN, HOME_BTN]);
+  await editOrSend(bot, chatId, messageId, text, keyboard);
 }
 
 // ── Router ───────────────────────────────────────────────────────────────────
@@ -378,7 +403,7 @@ async function screenBroadcast(bot, chatId, messageId) {
 export async function handleAdminPanelCommand(bot, msg) {
   const chatId = msg.chat.id;
   const text =
-    "👑 <b>SWIFT ADMIN</b>\n\nWelcome to the admin control panel. Everything here shares the same permissions, services and audit trail as the web dashboard.";
+    "👑 <b>پنل مدیریت سویفت</b>\n\nبه مرکز کنترل مدیریت خوش آمدید. همه بخش‌ها از همان سرویس‌های امن و گزارش عملیات پنل وب استفاده می‌کنند.";
   await bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: mainMenuKeyboard() });
 }
 
@@ -424,14 +449,14 @@ export async function handleAdminCallback(bot, query) {
       case "bal":
         await setSession(chatId, { ...session, step: `admin_panel_balance:${arg1}`, adminPanelUser: session?.adminPanelUser });
         await editOrSend(bot, chatId, messageId,
-          `💰 <b>${arg1 === "add" ? "Add" : "Remove"} balance</b>\n\nUser: <code>${esc(session?.adminPanelUser || "?")}</code>\n\nSend the amount in Toman.`,
-          { inline_keyboard: [[{ text: "⬅️ Cancel", callback_data: "adm:usback" }]] });
+          `💰 <b>${arg1 === "add" ? "افزایش" : "کاهش"} موجودی</b>\n\nکاربر: <code>${esc(session?.adminPanelUser || "؟")}</code>\n\nمبلغ را به تومان ارسال کنید.`,
+          { inline_keyboard: [[{ text: "⬅️ انصراف", callback_data: "adm:usback" }]] });
         break;
       case "blk":
         await setSession(chatId, { ...session, step: `admin_panel_block:${arg1}`, adminPanelUser: session?.adminPanelUser });
         await editOrSend(bot, chatId, messageId,
-          `${arg1 === "yes" ? "🚫 <b>Block user</b> — send the reason" : "🔓 <b>Unblock user</b> — send a note (optional)"}\n\nUser: <code>${esc(session?.adminPanelUser || "?")}</code>`,
-          { inline_keyboard: [[{ text: "⬅️ Cancel", callback_data: "adm:usback" }]] });
+          `${arg1 === "yes" ? "🚫 <b>مسدودسازی کاربر</b> — دلیل را ارسال کنید" : "🔓 <b>رفع مسدودی</b> — توضیح ارسال کنید (اختیاری)"}\n\nکاربر: <code>${esc(session?.adminPanelUser || "؟")}</code>`,
+          { inline_keyboard: [[{ text: "⬅️ انصراف", callback_data: "adm:usback" }]] });
         break;
       case "pay":
         await screenPayments(bot, chatId, messageId, arg1 || "recovery-required", Number(arg2) || 1);
@@ -440,20 +465,20 @@ export async function handleAdminCallback(bot, query) {
         await screenPaymentDetail(bot, chatId, messageId, session, arg1);
         break;
       case "payretry":
-        await bot.answerCallbackQuery(query.id, { text: "⏳ Retrying…" });
+        await bot.answerCallbackQuery(query.id, { text: "⏳ در حال تلاش مجدد..." });
         await confirmAndRun(bot, query, chatId, messageId,
-          `🔄 Retry payment processing?\n\n<code>${esc(String(session?.adminPayKeys?.[Number(arg1)] || "").slice(0, 40))}</code>\n\nRetries are idempotent — a paid order can never be credited twice.`,
+          `🔄 پردازش مجدد این پرداخت انجام شود؟\n\n<code>${esc(String(session?.adminPayKeys?.[Number(arg1)] || "").slice(0, 40))}</code>\n\nتلاش‌های مجدد تکرارناپذیر نیستند — یک پرداخت تسویه‌شده هرگز دوباره اعمال نمی‌شود.`,
           async () => {
             const result = await retryPayment({ actorId: userId, operationId: randomUUID(), key: session.adminPayKeys[Number(arg1)] });
-            return `✅ Retry result: <b>${esc(result.status)}</b>`;
+            return `✅ نتیجه تلاش مجدد: <b>${esc(result.status)}</b>`;
           });
         handled = true;
         break;
       case "payresolve":
         await setSession(chatId, { ...session, step: `admin_panel_resolve:${arg1}` });
         await editOrSend(bot, chatId, messageId,
-          "✅ <b>Manual resolve</b>\n\nSend a short note describing how this payment was settled. This records the disposition only — it does not move money.",
-          { inline_keyboard: [[{ text: "⬅️ Cancel", callback_data: `adm:payv:${arg1}` }]] });
+          "✅ <b>تعیین تکلیف دستی</b>\n\nتوضیح کوتاهی درباره نحوه تسویه این پرداخت ارسال کنید. این عمل فقط ثبت وضعیت است و مبلغی جابه‌جا نمی‌کند.",
+          { inline_keyboard: [[{ text: "⬅️ انصراف", callback_data: `adm:payv:${arg1}` }]] });
         break;
       case "vpns":
         await screenVpnSearch(bot, chatId, messageId);
@@ -462,19 +487,19 @@ export async function handleAdminCallback(bot, query) {
         await screenVpnDetail(bot, chatId, messageId, session, arg1);
         break;
       case "vpact": {
-        const labels = { "change-link": "change the subscription link", disable: "disable this service", revoke: "PERMANENTLY REVOKE this service" };
+        const labels = { "change-link": "تغییر لینک اشتراک", disable: "غیرفعال‌سازی این سرویس", revoke: "حذف قطعی این سرویس" };
         const username = session?.adminVpnKeys?.[Number(arg2)];
         await confirmAndRun(bot, query, chatId, messageId,
-          `⚠️ Confirm: <b>${esc(labels[arg1] || arg1)}</b>\n\nService: <code>${esc(username || "?")}</code>${arg1 === "revoke" ? "\n\nThis deletes the service on WizardXray and removes it from the user's account. It cannot be undone." : ""}`,
+          `⚠️ تأیید کنید: <b>${esc(labels[arg1] || arg1)}</b>\n\nسرویس: <code>${esc(username || "؟")}</code>${arg1 === "revoke" ? "\n\nاین عمل سرویس را در WizardXray حذف و از حساب کاربر پاک می‌کند و قابل بازگشت نیست." : ""}`,
           async () => {
             const result = await performVpnAction({ actorId: userId, operationId: randomUUID(), username, action: arg1, reason: `Telegram admin panel: ${arg1}` });
-            return `✅ Done (${esc(arg1)}).`;
+            return `✅ انجام شد (${esc(arg1)}).`;
           });
         break;
       }
       case "vpunavail":
         await bot.answerCallbackQuery(query.id, {
-          text: "The configured WizardXray API has no safe endpoint for extend-time / traffic / regenerate. Use change-link or revoke.",
+          text: "API تنظیم‌شده WizardXray نقطه پایانی امنی برای تمدید/افزایش حجم/بازسازی ندارد. از تغییر لینک یا حذف استفاده کنید.",
           show_alert: true,
         }).catch(() => {});
         break;
@@ -489,16 +514,16 @@ export async function handleAdminCallback(bot, query) {
         const product = products.find((item) => item.id === session?.adminProductIds?.[Number(arg1)]);
         const nextEnabled = !(product?.enabled ?? false);
         await confirmAndRun(bot, query, chatId, messageId,
-          `${nextEnabled ? "🟢 Enable" : "⚪️ Disable"} product <b>${esc(product?.name || "?")}</b>?`,
+          `${nextEnabled ? "🟢 فعال‌سازی" : "⚪️ غیرفعال‌سازی"} محصول <b>${esc(product?.name || "؟")}</b>؟`,
           async () => {
             await setProductEnabled({ actorId: userId, operationId: randomUUID(), productId: product.id, enabled: nextEnabled });
-            return `✅ Product ${nextEnabled ? "enabled" : "disabled"}.`;
+            return `✅ محصول ${nextEnabled ? "فعال" : "غیرفعال"} شد.`;
           });
         break;
       }
       case "prodweb":
         await bot.answerCallbackQuery(query.id, {
-          text: "Creating and editing products with full validation is available in the web admin dashboard (/admin).",
+          text: "ساخت و ویرایش کامل محصولات با اعتبارسنجی کامل در پنل وب مدیریت (/admin) انجام می‌شود.",
           show_alert: true,
         }).catch(() => {});
         break;
@@ -508,36 +533,25 @@ export async function handleAdminCallback(bot, query) {
       case "bcaud": {
         const message = session?.adminPanelBroadcastMessage;
         if (!message) { await screenBroadcast(bot, chatId, messageId); break; }
-        const audiences = [
-          { id: "all", label: "👥 All users" },
-          { id: "active", label: "🟢 Active users" },
-          { id: "expired", label: "⏳ Expired users" },
-          { id: "paying", label: "💳 Paying users" },
-        ];
-        const keyboard = { inline_keyboard: [
-          ...audiences.map((audience) => [{ text: audience.label, callback_data: `adm:bcgo:${audience.id}` }]),
-          [{ text: "⬅️ Rewrite message", callback_data: "adm:bcast" }],
-          [HOME_BTN],
-        ] };
         await editOrSend(bot, chatId, messageId,
-          `📢 <b>Broadcast preview</b>\n\n——\n${esc(message.slice(0, 1200))}\n——\n\nChoose the audience:`,
-          keyboard);
+          `📢 <b>پیش‌نمایش پیام همگانی</b>\n\n——\n${esc(message.slice(0, 1200))}\n——\n\nمخاطبان را انتخاب کنید:`,
+          broadcastAudienceKeyboard());
         break;
       }
       case "bcgo": {
         const message = session?.adminPanelBroadcastMessage;
         if (!message) { await screenBroadcast(bot, chatId, messageId); break; }
-        await bot.answerCallbackQuery(query.id, { text: "🚀 Starting broadcast…" }).catch(() => {});
+        await bot.answerCallbackQuery(query.id, { text: "🚀 در حال ارسال..." }).catch(() => {});
         const operationId = randomUUID();
         const result = await createBroadcast({ actorId: userId, operationId, message, audience: arg1 });
         await setSession(chatId, { step: null });
         await editOrSend(bot, chatId, messageId,
-          `🚀 <b>Broadcast started</b>\n\nAudience: <b>${esc(arg1)}</b>\nRecipients: <b>${num(result.broadcast?.total ?? 0)}</b>\n\nTrack progress from the web dashboard, or check back here.`, { inline_keyboard: [[HOME_BTN]] });
+          `🚀 <b>ارسال همگانی آغاز شد</b>\n\nمخاطبان: <b>${esc(broadcastAudienceLabel(arg1))}</b>\nتعداد گیرندگان: <b>${num(result.broadcast?.total ?? 0)}</b>\n\nپیشرفت ارسال را از پنل وب دنبال کنید.`, { inline_keyboard: [[HOME_BTN]] });
         setTimeout(async () => {
           try {
             const status = await getBroadcastStatus({ actorId: userId, operationId });
             await bot.sendMessage(chatId,
-              `📢 Broadcast update\n\nStatus: <b>${esc(status.status)}</b>\nSent: ${num(status.succeeded)}/${num(status.total)} · Failed: ${num(status.failed)}`,
+              `📢 وضعیت ارسال همگانی\n\nوضعیت: <b>${esc(status.status)}</b>\nارسال‌شده: ${num(status.succeeded)}/${num(status.total)} · ناموفق: ${num(status.failed)}`,
               { parse_mode: "HTML" });
           } catch { /* status update is best-effort */ }
         }, 30_000).unref?.();
@@ -547,12 +561,12 @@ export async function handleAdminCallback(bot, query) {
         await screenRecovery(bot, chatId, messageId);
         break;
       case "recgo":
-        await bot.answerCallbackQuery(query.id, { text: "⏳ Retrying safe items…" }).catch(() => {});
+        await bot.answerCallbackQuery(query.id, { text: "⏳ در حال تلاش مجدد موارد امن..." }).catch(() => {});
         await confirmAndRun(bot, query, chatId, messageId,
-          "🔄 <b>Retry all safe recovery items?</b>\n\nOnly idempotent paths are retried (paid-not-credited, pending commits). Ambiguous provisioning is never replayed.",
+          "🔄 <b>تلاش مجدد برای همه موارد امن صف بازیابی؟</b>\n\nفقط مسیرهای تکرارناپذیر مجدداً اجرا می‌شوند (پرداخت‌شده بدون شارژ، ثبت‌های ناتمام). ساخت سرویس با نتیجه نامشخص هرگز تکرار نمی‌شود.",
           async () => {
             const result = await retrySafeRecoveryItems({ actorId: userId, operationId: randomUUID() });
-            return `✅ Retried ${num(result.attempted)}: ${num(result.succeeded)} succeeded, ${num(result.failed?.length || 0)} failed.`;
+            return `✅ از ${num(result.attempted)} مورد، ${num(result.succeeded)} موفق و ${num(result.failed?.length || 0)} ناموفق بود.`;
           });
         break;
       case "ref":
@@ -564,6 +578,34 @@ export async function handleAdminCallback(bot, query) {
       case "sys":
         await screenSystem(bot, chatId, messageId);
         break;
+      case "admins":
+        await screenAdmins(bot, chatId, messageId, userId);
+        break;
+      case "admadd": {
+        if (!isOwnerUser(userId)) {
+          await bot.answerCallbackQuery(query.id, { text: "⛔️ فقط مالک اصلی می‌تواند مدیر اضافه کند.", show_alert: true }).catch(() => {});
+          break;
+        }
+        await setSession(chatId, { step: "admin_panel_add_admin" });
+        await editOrSend(bot, chatId, messageId,
+          "➕ <b>افزودن مدیر</b>\n\n<b>شناسه عددی تلگرام</b> کاربر را ارسال کنید.\n\nℹ️ کاربر پس از افزودن، به همه بخش‌های پنل دسترسی خواهد داشت (به جز مدیریت مدیران).",
+          { inline_keyboard: [[{ text: "⬅️ انصراف", callback_data: "adm:admins" }]] });
+        break;
+      }
+      case "admrm": {
+        if (!isOwnerUser(userId)) {
+          await bot.answerCallbackQuery(query.id, { text: "⛔️ فقط مالک اصلی می‌تواند مدیر حذف کند.", show_alert: true }).catch(() => {});
+          break;
+        }
+        const targetId = String(arg1 || "");
+        await confirmAndRun(bot, query, chatId, messageId,
+          `🗑 حذف مدیر <code>${esc(targetId)}</code>؟\n\nدسترسی این کاربر حداکثر تا یک دقیقه دیگر قطع می‌شود.`,
+          async () => {
+            await removeAdmin({ actorId: userId, telegramId: targetId });
+            return `✅ مدیر <code>${esc(targetId)}</code> حذف شد.`;
+          });
+        break;
+      }
       case "x":
         await bot.answerCallbackQuery(query.id).catch(() => {});
         break;
@@ -571,7 +613,7 @@ export async function handleAdminCallback(bot, query) {
         handled = false;
     }
   } catch (error) {
-    const message = error instanceof AdminServiceError ? error.safeMessage : "The operation could not be completed.";
+    const message = error instanceof AdminServiceError || error?.safeMessage ? error.safeMessage : "عملیات در حال حاضر انجام نشد.";
     await bot.answerCallbackQuery(query.id, { text: `❌ ${message}`, show_alert: true }).catch(() => {});
     console.error(JSON.stringify({
       ts: new Date().toISOString(), service: "admin-panel", level: "error",
@@ -586,6 +628,21 @@ export async function handleAdminCallback(bot, query) {
   return true;
 }
 
+function broadcastAudienceKeyboard() {
+  return { inline_keyboard: [
+    [{ text: "👥 همه کاربران", callback_data: "adm:bcgo:all" }],
+    [{ text: "🟢 کاربران فعال", callback_data: "adm:bcgo:active" }],
+    [{ text: "⏳ کاربران منقضی", callback_data: "adm:bcgo:expired" }],
+    [{ text: "💳 کاربران پرداخت‌کننده", callback_data: "adm:bcgo:paying" }],
+    [{ text: "✏️ بازنویسی پیام", callback_data: "adm:bcast" }],
+    [HOME_BTN],
+  ] };
+}
+
+function broadcastAudienceLabel(audience) {
+  return { all: "همه کاربران", active: "کاربران فعال", expired: "کاربران منقضی", paying: "کاربران پرداخت‌کننده", custom: "فهرست دلخواه" }[audience] || audience;
+}
+
 async function renderRefresh(bot, query, chatId, messageId, session) {
   // Re-render whatever screen the refresh button was pressed on.
   const data = query.data;
@@ -598,9 +655,9 @@ async function confirmAndRun(bot, query, chatId, messageId, confirmText, run) {
   pendingConfirms.set(confirmKey, { run, chatId, messageId });
   setTimeout(() => pendingConfirms.delete(confirmKey), 120_000).unref?.();
   await editOrSend(bot, chatId, messageId,
-    `⚠️ <b>Confirmation required</b>\n\n${confirmText}`,
+    `⚠️ <b>نیاز به تأیید</b>\n\n${confirmText}`,
     { inline_keyboard: [
-      [{ text: "✅ Confirm", callback_data: confirmKey }, { text: "❌ Cancel", callback_data: "adm:x" }],
+      [{ text: "✅ تأیید", callback_data: confirmKey }, { text: "❌ انصراف", callback_data: "adm:x" }],
     ] });
 }
 
@@ -613,16 +670,16 @@ export async function handleAdminConfirm(bot, query) {
   const pending = pendingConfirms.get(data);
   pendingConfirms.delete(data);
   if (!pending) {
-    await bot.answerCallbackQuery(query.id, { text: "This confirmation expired. Try again.", show_alert: true }).catch(() => {});
+    await bot.answerCallbackQuery(query.id, { text: "این تأیید منقضی شده است. دوباره تلاش کنید.", show_alert: true }).catch(() => {});
     return true;
   }
-  await bot.answerCallbackQuery(query.id, { text: "⏳ Running…" }).catch(() => {});
+  await bot.answerCallbackQuery(query.id, { text: "⏳ در حال انجام..." }).catch(() => {});
   try {
     const message = await pending.run();
     await editOrSend(bot, pending.chatId, pending.messageId, `${message}`, { inline_keyboard: [[HOME_BTN]] });
   } catch (error) {
-    const text = error instanceof AdminServiceError ? error.safeMessage : "The operation could not be completed.";
-    await editOrSend(bot, pending.chatId, pending.messageId, `❌ <b>Failed</b>\n\n${esc(text)}`, { inline_keyboard: [[HOME_BTN]] });
+    const text = error?.safeMessage || "عملیات در حال حاضر انجام نشد.";
+    await editOrSend(bot, pending.chatId, pending.messageId, `❌ <b>ناموفق</b>\n\n${esc(text)}`, { inline_keyboard: [[HOME_BTN]] });
     console.error(JSON.stringify({
       ts: new Date().toISOString(), service: "admin-panel", level: "error",
       message: "Confirmed admin action failed", errorType: error?.name || "Error",
@@ -659,7 +716,7 @@ export async function handleAdminPanelStep(bot, msg) {
     if (step === "admin_panel_user_search") {
       const found = await listUsers({ actorId: userId, query: { search: text, pageSize: 5 } });
       if (!found.items.length) {
-        await bot.sendMessage(chatId, `❌ No user found for <code>${esc(text)}</code>.`, { parse_mode: "HTML" });
+        await bot.sendMessage(chatId, `❌ کاربری برای <code>${esc(text)}</code> یافت نشد.`, { parse_mode: "HTML" });
         return true;
       }
       const user = found.items[0];
@@ -672,7 +729,7 @@ export async function handleAdminPanelStep(bot, msg) {
     if (step === "admin_panel_vpn_search") {
       const data = await listVpns({ actorId: userId, query: { search: text, status: "all", pageSize: 8 } });
       if (!data.items.length) {
-        await bot.sendMessage(chatId, `❌ No VPN services found for <code>${esc(text)}</code>.`, { parse_mode: "HTML" });
+        await bot.sendMessage(chatId, `❌ سرویسی برای <code>${esc(text)}</code> یافت نشد.`, { parse_mode: "HTML" });
         return true;
       }
       await setSession(chatId, { step: null, adminVpnKeys: data.items.map((item) => item.clientId) });
@@ -686,14 +743,14 @@ export async function handleAdminPanelStep(bot, msg) {
       const direction = step.split(":")[1];
       const amount = Number(text.replace(/[,\s]/g, ""));
       if (!Number.isSafeInteger(amount) || amount <= 0) {
-        await bot.sendMessage(chatId, "❌ Send a whole positive amount in Toman.");
+        await bot.sendMessage(chatId, "❌ مبلغ را به صورت عدد مثبت و به تومان ارسال کنید.");
         return true;
       }
       const result = await changeUserBalance({
         actorId: userId, operationId: randomUUID(), telegramId: session.adminPanelUser,
         amount, direction, reason: `Telegram admin panel (${direction})`,
       });
-      await bot.sendMessage(chatId, `✅ Balance ${direction === "add" ? "added" : "removed"}. New balance: <b>${money(result.balance)}</b>.`, { parse_mode: "HTML" });
+      await bot.sendMessage(chatId, `✅ موجودی ${direction === "add" ? "افزایش" : "کاهش"} یافت. موجودی جدید: <b>${money(result.balance)}</b>.`, { parse_mode: "HTML" });
       const sent = await bot.sendMessage(chatId, "…", { parse_mode: "HTML" });
       await showUserProfile(bot, chatId, sent.message_id, session.adminPanelUser);
       await finish();
@@ -706,7 +763,7 @@ export async function handleAdminPanelStep(bot, msg) {
         actorId: userId, operationId: randomUUID(), telegramId: session.adminPanelUser,
         blocked: blocking, reason: text || "Telegram admin panel",
       });
-      await bot.sendMessage(chatId, `✅ User ${result.isBanned ? "blocked" : "unblocked"}.`, { parse_mode: "HTML" });
+      await bot.sendMessage(chatId, `✅ کاربر ${result.isBanned ? "مسدود" : "از مسدودی خارج"} شد.`, { parse_mode: "HTML" });
       const sent = await bot.sendMessage(chatId, "…", { parse_mode: "HTML" });
       await showUserProfile(bot, chatId, sent.messageId, session.adminPanelUser);
       await finish();
@@ -715,21 +772,14 @@ export async function handleAdminPanelStep(bot, msg) {
 
     if (step === "admin_panel_broadcast_message") {
       if (!text || text.length > 4096) {
-        await bot.sendMessage(chatId, "❌ Message must be 1–4096 characters.");
+        await bot.sendMessage(chatId, "❌ متن پیام باید بین ۱ تا ۴۰۹۶ نویسه باشد.");
         return true;
       }
       await setSession(chatId, { step: null, adminPanelBroadcastMessage: text });
       const sent = await bot.sendMessage(chatId, "…", { parse_mode: "HTML" });
       await editOrSend(bot, chatId, sent.message_id,
-        `📢 <b>Broadcast preview</b>\n\n——\n${esc(text.slice(0, 1200))}\n——\n\nChoose the audience:`,
-        { inline_keyboard: [
-          [{ text: "👥 All users", callback_data: "adm:bcgo:all" }],
-          [{ text: "🟢 Active users", callback_data: "adm:bcgo:active" }],
-          [{ text: "⏳ Expired users", callback_data: "adm:bcgo:expired" }],
-          [{ text: "💳 Paying users", callback_data: "adm:bcgo:paying" }],
-          [{ text: "✏️ Rewrite message", callback_data: "adm:bcast" }],
-          [HOME_BTN],
-        ] });
+        `📢 <b>پیش‌نمایش پیام همگانی</b>\n\n——\n${esc(text.slice(0, 1200))}\n——\n\nمخاطبان را انتخاب کنید:`,
+        broadcastAudienceKeyboard());
       return true;
     }
 
@@ -738,16 +788,31 @@ export async function handleAdminPanelStep(bot, msg) {
       const key = session.adminPayKeys?.[rowIndex];
       if (!key) { await finish(); return true; }
       if (text.length < 10) {
-        await bot.sendMessage(chatId, "❌ Please send at least a 10-character note describing the resolution.");
+        await bot.sendMessage(chatId, "❌ توضیح حداقل ۱۰ نویسه درباره نحوه تسویه ارسال کنید.");
         return true;
       }
       await resolvePaymentRecovery({ actorId: userId, operationId: randomUUID(), key, reason: text });
-      await bot.sendMessage(chatId, "✅ Recovery resolved and recorded in the audit log.");
+      await bot.sendMessage(chatId, "✅ تعیین تکلیف ثبت و در گزارش عملیات درج شد.");
+      await finish();
+      return true;
+    }
+
+    if (step === "admin_panel_add_admin") {
+      if (!isOwnerUser(userId)) {
+        await bot.sendMessage(chatId, "⛔️ فقط مالک اصلی می‌تواند مدیر اضافه کند.");
+        await finish();
+        return true;
+      }
+      const result = await addAdmin({ actorId: userId, telegramId: text });
+      const already = result?.alreadyPresent ? " (از قبل مدیر بود)" : "";
+      await bot.sendMessage(chatId, `✅ مدیر <code>${esc(text)}</code> ثبت شد${already}. دسترسی حداکثر تا یک دقیقه دیگر فعال می‌شود.`, { parse_mode: "HTML" });
+      const sent = await bot.sendMessage(chatId, "…", { parse_mode: "HTML" });
+      await screenAdmins(bot, chatId, sent.message_id, userId);
       await finish();
       return true;
     }
   } catch (error) {
-    const message = error instanceof AdminServiceError ? error.safeMessage : "The operation could not be completed.";
+    const message = error?.safeMessage || "عملیات در حال حاضر انجام نشد.";
     await bot.sendMessage(chatId, `❌ ${esc(message)}`, { parse_mode: "HTML" });
     console.error(JSON.stringify({
       ts: new Date().toISOString(), service: "admin-panel", level: "error",

@@ -1,357 +1,168 @@
-import { findService } from "../../api/wizardApi.js";
 import User from "../../models/User.js";
+import { getServiceView } from "../../services/wizardServiceStatus.js";
+import formatDate from "../../utils/formatDate.js";
 
-// Helper function to remove service from database
-const removeServiceFromDatabase = async (username) => {
-  try {
-    const user = await User.findOne({ "services.username": username });
+const HOME_BUTTON = [{ text: "🔙 بازگشت به منوی اصلی", callback_data: "buy_service_back_to_main" }];
 
-    if (!user) {
-      return { success: false, message: "کاربر یافت نشد" };
-    }
+function progressBar(percent) {
+  if (percent == null || !Number.isFinite(percent)) return "";
+  const filled = Math.round(Math.min(10, Math.max(0, percent / 10)));
+  return "▰".repeat(filled) + "▱".repeat(10 - filled);
+}
 
-    const newTotal = Math.max(0, (user.totalServices || 0) - 1);
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[character]);
+}
 
-    const updateResult = await User.updateOne(
-      { telegramId: user.telegramId },
-      {
-        $pull: { services: { username: username } },
-        $set: { totalServices: newTotal },
-      }
-    );
-
-    // Verify the service was actually removed
-    const updatedUser = await User.findOne({ "services.username": username });
-    if (updatedUser) {
-      return { success: false, message: "خطا در حذف سرویس از دیتابیس" };
-    } else {
-      return {
-        success: true,
-        message: `سرویس ${username} از سیستم حذف شده و از لیست شما نیز حذف شد.`,
-        modifiedCount: updateResult.modifiedCount,
-      };
-    }
-  } catch (error) {
-    return { success: false, message: "خطا در حذف سرویس از دیتابیس" };
-  }
-};
-
+/**
+ * Show a service's live details.
+ *
+ * Source of truth: the WizardXray panel for status/usage/expiry (cached for
+ * WIZARD_STATUS_TTL_SECONDS). When the panel is unreachable, the user's stored
+ * record is shown instead with a clear "live unavailable" notice — the bot
+ * never crashes and NEVER auto-deletes a service because of a panel error.
+ */
 const showServiceDetails = async (bot, chatId, username, messageId) => {
   try {
-    const apiResponse = await findService(username);
-
-    // Check if service doesn't exist in API (response is false/undefined/null)
-    if (!apiResponse || apiResponse === false) {
-      // Remove service from database since it doesn't exist in API
-      const removalResult = await removeServiceFromDatabase(username);
-
-      // Prepare message
-      const messageText = `❌ سرویس <code>${username}</code> یافت نشد.`;
-
-      // Edit the previous message if messageId is provided
-      if (messageId) {
-        try {
-          await bot.editMessageText(messageText, {
-            chat_id: chatId,
-            message_id: messageId,
-            parse_mode: "HTML",
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  {
-                    text: "🔙 بازگشت به منوی اصلی",
-                    callback_data: "buy_service_back_to_main",
-                  },
-                ],
-              ],
-            },
-          });
-        } catch (editError) {
-          // If editing fails, send a new message
-          await bot.sendMessage(chatId, messageText, {
-            parse_mode: "HTML",
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  {
-                    text: "🔙 بازگشت به منوی اصلی",
-                    callback_data: "buy_service_back_to_main",
-                  },
-                ],
-              ],
-            },
-          });
-        }
-      } else {
-        // If no messageId, send a new message
-        await bot.sendMessage(chatId, messageText, {
-          parse_mode: "HTML",
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: "🔙 بازگشت به منوی اصلی",
-                  callback_data: "buy_service_back_to_main",
-                },
-              ],
-            ],
-          },
-        });
-      }
+    if (typeof username !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(username)) {
+      await bot.sendMessage(chatId, "❌ شناسه سرویس نامعتبر است.");
       return;
     }
 
-    // Check if API returned an error
-    if (apiResponse.error) {
-      // Service might be deleted from API, remove it from database
-      const removalResult = await removeServiceFromDatabase(username);
+    const view = await getServiceView(username, null);
+    const data = view.data;
 
-      // Prepare message based on removal result
-      let messageText;
-      if (removalResult.success) {
-        messageText = `❌ ${removalResult.message}`;
-      } else {
-        messageText = `❌ سرویس <code>${username}</code> یافت نشد. ${removalResult.message}`;
-      }
-
-      // Edit the previous message if messageId is provided
-      if (messageId) {
-        try {
-          await bot.editMessageText(messageText, {
-            chat_id: chatId,
-            message_id: messageId,
-            parse_mode: "HTML",
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  {
-                    text: "🔙 بازگشت به منوی اصلی",
-                    callback_data: "buy_service_back_to_main",
-                  },
-                ],
-              ],
-            },
-          });
-        } catch (editError) {
-          // If editing fails, send a new message
-          await bot.sendMessage(chatId, messageText, {
-            parse_mode: "HTML",
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  {
-                    text: "🔙 بازگشت به منوی اصلی",
-                    callback_data: "buy_service_back_to_main",
-                  },
-                ],
-              ],
-            },
-          });
-        }
-      } else {
-        // If no messageId, send a new message
-        await bot.sendMessage(chatId, messageText, {
-          parse_mode: "HTML",
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: "🔙 بازگشت به منوی اصلی",
-                  callback_data: "buy_service_back_to_main",
-                },
-              ],
-            ],
-          },
-        });
-      }
-      return;
-    }
-
-    // Additional check for empty or invalid result
-    if (!apiResponse.result || typeof apiResponse.result !== "object") {
-      // Try to remove from database as well
-      const removalResult = await removeServiceFromDatabase(username);
-
-      const messageText = `❌ سرویس <code>${username}</code> یافت نشد یا اطلاعات آن نامعتبر است.`;
-
-      if (messageId) {
-        try {
-          await bot.editMessageText(messageText, {
-            chat_id: chatId,
-            message_id: messageId,
-            parse_mode: "HTML",
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  {
-                    text: "🔙 بازگشت به منوی اصلی",
-                    callback_data: "buy_service_back_to_main",
-                  },
-                ],
-              ],
-            },
-          });
-        } catch (editError) {
-          // If editing fails, send a new message
-          await bot.sendMessage(chatId, messageText, {
-            parse_mode: "HTML",
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  {
-                    text: "🔙 بازگشت به منوی اصلی",
-                    callback_data: "buy_service_back_to_main",
-                  },
-                ],
-              ],
-            },
-          });
-        }
-      } else {
-        await bot.sendMessage(chatId, messageText, {
-          parse_mode: "HTML",
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: "🔙 بازگشت به منوی اصلی",
-                  callback_data: "buy_service_back_to_main",
-                },
-              ],
-            ],
-          },
-        });
-      }
-      return;
-    }
-
-    const res = apiResponse.result;
-    if (!res) {
-      await bot.sendMessage(chatId, "❌ اطلاعات سرویس یافت نشد.");
-      return;
-    }
-
-    const online = res.online_info || {};
-    const latest = res.latest_info || {};
-
-    const expireDatePersian = latest.expire_date || "نامشخص";
-    const daysLeft = latest.day ?? "نامشخص";
-
-    const smartLink = res.hash
-      ? `https://iranisystem.com/bot/sub/?hash=${res.hash}`
-      : res.sub_link || "";
-
-    const message = `
-    #⃣ کد سرویس : <code>${res.username}</code>
-
-▫️ وضعیت سرویس : ${
-      online.status === "active"
-        ? "<code>🟢 فعال</code>"
-        : online.status === "limited"
-        ? "<code>🔴 منقضی شده</code>"
-        : "🔴 غیرفعال"
-    }
-
-📦 حجم سرویس : <code>${latest.gig || "نامشخص"} گیگابایت</code>
-📥 حجم مصرفی : <code>${online.usage_converted || 0}</code>
-📅 تاریخ انقضا : <code>${expireDatePersian} | ${daysLeft} روز دیگر</code>
-
-🔗 لینک اتصال (Subscription) :
-
-<code>${smartLink}</code>
-
-▫️ یکی از گزینه های زیر را انتخاب کنید.`;
-
-    if (messageId) {
-      // Always delete the current message and send a new one to avoid edit conflicts
-      try {
-        await bot.deleteMessage(chatId, messageId);
-      } catch (deleteError) {
-        // Message deletion failed, continue with sending new message
-      }
-
-      // Create inline keyboard based on service status
-      const inlineKeyboard = [
-        [
-          {
-            text: "‼️چجوری به سرویس متصل بشم‼️",
-            url: "https://t.me/swift_shield/9",
-          },
+    // Panel explicitly says the service does not exist. Offer cleanup, but
+    // never delete automatically — the record is removed only with the user's
+    // explicit confirmation (or admin action).
+    if (view.source === "missing") {
+      const messageText = `❌ سرویس <code>${escapeHtml(username)}</code> در پنل یافت نشد.\n\nاگر این سرویس را حذف کرده‌اید، می‌توانید آن را از لیست خود پاک کنید.`;
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "🗑 حذف از لیست سرویس‌های من", callback_data: `delete_service_${username}` }],
+          HOME_BUTTON,
         ],
-      ];
-
-      // Only show change link button if status is not limited
-      if (online.status !== "limited") {
-        inlineKeyboard.push([
-          {
-            text: "🛑 تغییر لینک 🛑",
-            callback_data: `change_link_${res.username}`,
-          },
-          {
-            text: "⏳ افزایش زمان",
-            callback_data: `extend_service_${res.username}`,
-          },
-          {
-            text: "📦 افزایش حجم",
-            callback_data: `extend_data_${res.username}`,
-          },
-        ]);
-      } else {
-        // For limited status, only show extend service button
-        inlineKeyboard.push([
-          {
-            text: "⏳ افزایش زمان",
-            callback_data: `extend_service_${res.username}`,
-          },
-          {
-            text: "📦 افزایش حجم",
-            callback_data: `extend_data_${res.username}`,
-          },
-        ]);
+      };
+      if (messageId) {
+        try {
+          await bot.editMessageText(messageText, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
+          return;
+        } catch { /* fall through to send */ }
       }
-
-      inlineKeyboard.push([
-        {
-          text: "🗑 حذف سرویس",
-          callback_data: `delete_service_${res.username}`,
-        },
-        {
-          text: "◽️دریافت QRCode",
-          callback_data: `qrcode_${res.username}`,
-        },
-      ]);
-
-      // Only show activate/deactivate button if status is not limited
-      if (online.status !== "limited") {
-        inlineKeyboard.push([
-          {
-            text: `${
-              online.status === "active"
-                ? "🚫 غیر فعال کردن سرویس"
-                : "✅ فعال کردن سرویس"
-            }`,
-            callback_data: `deactivate_service_${res.username}`,
-          },
-        ]);
-      }
-
-      inlineKeyboard.push([
-        {
-          text: "بازگشت به منوی اصلی",
-          callback_data: "buy_service_back_to_main",
-        },
-      ]);
-
-      await bot.sendMessage(chatId, message, {
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: inlineKeyboard,
-        },
-      });
+      await bot.sendMessage(chatId, messageText, { parse_mode: "HTML", reply_markup: keyboard });
+      return;
     }
+
+    // ── Live panel view ──────────────────────────────────────────────────────
+    if (view.source === "live") {
+      const d = data;
+      const expiry = d.expireDate
+        ? `${d.expireDate}${d.daysLeft != null ? ` | ${d.daysLeft} روز دیگر` : ""}`
+        : "نامشخص";
+
+      const trafficLines = [];
+      if (d.totalGbText != null) trafficLines.push(`📦 حجم کل: <code>${d.totalGbText} گیگابایت</code>`);
+      if (d.usedGbText != null) trafficLines.push(`📥 حجم مصرفی: <code>${d.usedGbText} گیگابایت</code>`);
+      if (d.remainingGbText != null) trafficLines.push(`📤 حجم باقی‌مانده: <code>${d.remainingGbText} گیگابایت</code>`);
+      if (d.usagePercent != null) trafficLines.push(`${progressBar(d.usagePercent)} <code>${d.usagePercent}%</code>`);
+
+      const message = `#⃣ کد سرویس: <code>${escapeHtml(d.username)}</code>
+
+▫️ وضعیت سرویس: <code>${d.statusLabel}</code>
+
+${trafficLines.join("\n") || "📦 حجم: نامشخص"}
+
+📅 تاریخ انقضا: <code>${expiry}</code>
+
+🔗 لینک اتصال (Subscription):
+<code>${escapeHtml(d.smartLink || "—")}</code>
+
+🟢 اطلاعات لحظه‌ای از پنل
+▫️ یکی از گزینه‌های زیر را انتخاب کنید.`;
+      await sendDetailsMessage(bot, chatId, messageId, message, d.username, d.status);
+      return;
+    }
+
+    // ── Cached fallback (panel unreachable) ──────────────────────────────────
+    const record = view.record || {};
+    const expiry = record.expiresAt
+      ? `${formatDate(record.expiresAt)}${record.expiresAt ? ` | ${Math.ceil((new Date(record.expiresAt).getTime() - Date.now()) / 86400000)} روز دیگر` : ""}`
+      : "نامشخص";
+
+    const message = `#⃣ کد سرویس: <code>${escapeHtml(username)}</code>
+
+▫️ وضعیت سرویس: <code>نامشخص</code>
+
+${record.trafficGb != null ? `📦 حجم کل: <code>${record.trafficGb} گیگابایت</code>\n` : ""}📅 تاریخ انقضا: <code>${expiry}</code>
+
+${record.sub_link ? `🔗 لینک اتصال (Subscription):\n<code>${escapeHtml(record.sub_link)}</code>\n\n` : ""}🟡 اطلاعات لحظه‌ای پنل در دسترس نیست؛ اطلاعات ذخیره‌شده نمایش داده می‌شود.
+▫️ یکی از گزینه‌های زیر را انتخاب کنید.`;
+    await sendDetailsMessage(bot, chatId, messageId, message, username, null);
   } catch (error) {
+    console.error("showServiceDetails error:", error?.name || "Error");
     await bot.sendMessage(chatId, "❌ خطایی رخ داد، لطفا دوباره تلاش کنید.");
   }
 };
 
+async function sendDetailsMessage(bot, chatId, messageId, message, username, status) {
+  const inlineKeyboard = [
+    [{ text: "‼️چجوری به سرویس متصل بشم‼️", url: "https://t.me/swift_shield/9" }],
+  ];
+
+  if (status !== "limited") {
+    inlineKeyboard.push([
+      { text: "🛑 تغییر لینک 🛑", callback_data: `change_link_${username}` },
+      { text: "⏳ افزایش زمان", callback_data: `extend_service_${username}` },
+      { text: "📦 افزایش حجم", callback_data: `extend_data_${username}` },
+    ]);
+  } else {
+    inlineKeyboard.push([
+      { text: "⏳ افزایش زمان", callback_data: `extend_service_${username}` },
+      { text: "📦 افزایش حجم", callback_data: `extend_data_${username}` },
+    ]);
+  }
+
+  inlineKeyboard.push([
+    { text: "🗑 حذف سرویس", callback_data: `delete_service_${username}` },
+    { text: "◽️دریافت QRCode", callback_data: `qrcode_${username}` },
+  ]);
+
+  if (status !== "limited") {
+    inlineKeyboard.push([
+      {
+        text: status === "active" ? "🚫 غیر فعال کردن سرویس" : "✅ فعال کردن سرویس",
+        callback_data: `deactivate_service_${username}`,
+      },
+    ]);
+  }
+
+  inlineKeyboard.push([{ text: "🔄 بروزرسانی وضعیت", callback_data: `show_service_${username}` }]);
+  inlineKeyboard.push(HOME_BUTTON);
+
+  if (messageId) {
+    try {
+      await bot.deleteMessage(chatId, messageId);
+    } catch { /* message deletion failed, continue */ }
+  }
+  await bot.sendMessage(chatId, message, {
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: inlineKeyboard },
+  });
+}
+
+// Kept for backward compatibility with any external callers.
+const removeServiceFromDatabase = async (username) => {
+  const user = await User.findOne({ "services.username": username });
+  if (!user) return { success: false, message: "کاربر یافت نشد" };
+  const newTotal = Math.max(0, (user.totalServices || 0) - 1);
+  await User.updateOne(
+    { telegramId: user.telegramId },
+    { $pull: { services: { username } }, $set: { totalServices: newTotal } }
+  );
+  return { success: true, message: `سرویس ${username} از لیست شما حذف شد.` };
+};
+
+export { removeServiceFromDatabase };
 export default showServiceDetails;

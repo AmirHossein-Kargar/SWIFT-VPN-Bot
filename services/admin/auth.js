@@ -29,7 +29,7 @@ function sessionTtl() {
 
 function ready(redis = redisClient) {
   if (!redis || (redis === redisClient && !isRedisReady())) {
-    const error = new Error("Admin sign-in requires the shared Redis session store.");
+    const error = new Error("ورود مدیریت به مخزن نشست Redis نیاز دارد.");
     error.code = "ADMIN_SESSION_STORE_UNAVAILABLE";
     error.status = 503;
     error.safeMessage = error.message;
@@ -51,21 +51,21 @@ function digestCode(code) {
 
 export async function issueAdminLoginCode(telegramId, redis = store()) {
   if (!isAdminUser(telegramId)) {
-    throw httpError("This Telegram account is not allowlisted for admin access.", "FORBIDDEN", 403);
+    throw httpError("این حساب تلگرام برای دسترسی مدیریتی مجاز نیست.", "FORBIDDEN", 403);
   }
   ready(redis);
   const id = String(telegramId);
   const rateKey = `${LOGIN_RATE_PREFIX}${id}`;
   const rate = await redis.set(rateKey, "1", { NX: true, EX: LOGIN_RATE_TTL_SECONDS });
   if (rate !== "OK") {
-    throw httpError("A sign-in code was recently issued. Please wait before requesting another.", "LOGIN_CODE_RATE_LIMITED", 429);
+    throw httpError("کد ورود به تازگی ارسال شده است. برای درخواست جدید کمی صبر کنید.", "LOGIN_CODE_RATE_LIMITED", 429);
   }
 
   const code = randomBytes(24).toString("base64url");
   const key = `${LOGIN_PREFIX}${digestCode(code)}`;
   const saved = await redis.set(key, id, { NX: true, EX: LOGIN_CODE_TTL_SECONDS });
   if (saved !== "OK") {
-    throw httpError("Could not create a sign-in code.", "LOGIN_CODE_UNAVAILABLE", 503);
+    throw httpError("ایجاد کد ورود در حال حاضر ممکن نیست.", "LOGIN_CODE_UNAVAILABLE", 503);
   }
   return { code, expiresInSeconds: LOGIN_CODE_TTL_SECONDS };
 }
@@ -81,7 +81,7 @@ export async function consumeAdminLoginCode(code, redis = store()) {
 
 export async function createAdminSession(telegramId, redis = store(), { ttlSeconds = sessionTtl() } = {}) {
   if (!isAdminUser(telegramId)) {
-    throw httpError("This Telegram account is not allowlisted for admin access.", "FORBIDDEN", 403);
+    throw httpError("این حساب تلگرام برای دسترسی مدیریتی مجاز نیست.", "FORBIDDEN", 403);
   }
   ready(redis);
   const token = randomBytes(32).toString("base64url");

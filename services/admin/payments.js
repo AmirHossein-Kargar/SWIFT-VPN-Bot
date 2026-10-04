@@ -160,12 +160,12 @@ export async function listPayments({ actorId, query = {} } = {}) {
 }
 
 function parsePaymentKey(key) {
-  if (typeof key !== "string" || key.length > 180) throw new AdminServiceError("Invalid payment ID.", { status: 400, code: "invalid_payment_id" });
+  if (typeof key !== "string" || key.length > 180) throw new AdminServiceError("شناسه پرداخت نامعتبر است.", { status: 400, code: "invalid_payment_id" });
   const separator = key.indexOf(":");
   const provider = key.slice(0, separator);
   const id = key.slice(separator + 1);
   if (separator < 1 || !["hooshpay", "bank", "trx", "wallet"].includes(provider) || !/^[A-Za-z0-9_.-]{1,128}$/.test(id)) {
-    throw new AdminServiceError("Invalid payment ID.", { status: 400, code: "invalid_payment_id" });
+    throw new AdminServiceError("شناسه پرداخت نامعتبر است.", { status: 400, code: "invalid_payment_id" });
   }
   return { provider, id };
 }
@@ -175,7 +175,7 @@ async function findPayment(key) {
   const model = { hooshpay: HooshPayInvoice, bank: bankInvoice, trx: CryptoInvoice, wallet: WalletPurchase }[provider];
   const field = { hooshpay: "uid", bank: "paymentId", trx: "invoiceId", wallet: "purchaseId" }[provider];
   const record = await model.findOne({ [field]: id }).lean();
-  if (!record) throw new AdminServiceError("Payment or order not found.", { status: 404, code: "payment_not_found" });
+  if (!record) throw new AdminServiceError("پرداخت یا سفارش یافت نشد.", { status: 404, code: "payment_not_found" });
   return { provider, record, normalized: normalizePayment(provider, record) };
 }
 
@@ -268,7 +268,7 @@ async function safeRetry({ provider, id, record, actorId, operationId }) {
   if (provider === "hooshpay") {
     if (record.status === "pending") {
       const result = await verifyHooshPayment(record.uid, bot, record.userId);
-      if (result.locked) throw new AdminServiceError("Another verification of this payment is already running.", { status: 409, code: "payment_processing" });
+      if (result.locked) throw new AdminServiceError("بررسی دیگری برای این پرداخت در حال انجام است.", { status: 409, code: "payment_processing" });
       if (result.notPaid) return { ok: true, status: "not-paid", auditSummary: { status: "not-paid" } };
       if (!result.success && !result.alreadyCredited && !result.notified) {
         throw new AdminServiceError(result.error || "HooshPay verification did not complete.", { status: 503, code: "hooshpay_verification_incomplete" });
@@ -277,30 +277,30 @@ async function safeRetry({ provider, id, record, actorId, operationId }) {
     }
     if (record.status === "paid" && !record.balanceCredited) {
       const result = await fulfillHooshOrder({ invoice: record, bot, chatId: record.userId });
-      if (result.manualReviewRequired) throw new AdminServiceError("Legacy payment requires manual ledger reconciliation; no credit was issued.", { status: 409, code: "legacy_payment_manual_review" });
-      if (!(result.credited || result.alreadyCredited || result.notified)) throw new AdminServiceError("HooshPay fulfillment remains incomplete.", { status: 503, code: "hooshpay_fulfillment_incomplete" });
+      if (result.manualReviewRequired) throw new AdminServiceError("این پرداخت قدیمی نیاز به تطبیق دستی دفتر دارد؛ موجودی اعمال نشد.", { status: 409, code: "legacy_payment_manual_review" });
+      if (!(result.credited || result.alreadyCredited || result.notified)) throw new AdminServiceError("تسویه HooshPay همچنان ناقص است.", { status: 503, code: "hooshpay_fulfillment_incomplete" });
       await HooshPayInvoice.updateOne({ _id: record._id }, { $set: { recoveryStatus: "none", recoveryReason: null } });
       return { ok: true, status: "fulfilled", auditSummary: { status: "fulfilled" } };
     }
-    throw new AdminServiceError("Only a pending verification or a paid uncredited HooshPay invoice can be retried.", { status: 409, code: "payment_not_retryable" });
+    throw new AdminServiceError("فقط فاکتور HooshPay در انتظار بررسی یا پرداخت‌شده بدون شارژ قابل تلاش مجدد است.", { status: 409, code: "payment_not_retryable" });
   }
   if (provider === "bank") {
     if (record.status === "confirmed" && !record.balanceCredited && record.creditLedgerVersion === 2) {
       const result = await confirmBankPayment({ paymentId: record.paymentId, adminId: actorId, bot });
-      if (!["credited", "recovered", "already_confirmed"].includes(result.status)) throw new AdminServiceError("Bank payment recovery did not complete.", { status: 409, code: `bank_${result.status}` });
+      if (!["credited", "recovered", "already_confirmed"].includes(result.status)) throw new AdminServiceError("بازیابی پرداخت بانکی کامل نشد.", { status: 409, code: `bank_${result.status}` });
       await bankInvoice.updateOne({ _id: record._id }, { $set: { recoveryStatus: "none", recoveryReason: null } });
       return { ok: true, status: result.status, auditSummary: { status: result.status } };
     }
-    throw new AdminServiceError("Bank transfers cannot be auto-verified; confirm the receipt through the existing approval workflow.", { status: 409, code: "bank_auto_verify_unavailable" });
+    throw new AdminServiceError("پرداخت بانکی به صورت خودکار تأیید نمی‌شود؛ رسید را از مسیر تأیید موجود بررسی کنید.", { status: 409, code: "bank_auto_verify_unavailable" });
   }
   if (provider === "trx") {
     if (record.status === "paid" && !record.balanceCredited && record.creditLedgerVersion === 2) {
       const recovered = await trxScanner.recoverInvoice(record.invoiceId);
-      if (!recovered) throw new AdminServiceError("TRX recovery did not complete.", { status: 503, code: "trx_recovery_incomplete" });
+      if (!recovered) throw new AdminServiceError("بازیابی TRX کامل نشد.", { status: 503, code: "trx_recovery_incomplete" });
       await CryptoInvoice.updateOne({ _id: record._id }, { $set: { recoveryStatus: "none", recoveryReason: null } });
       return { ok: true, status: "fulfilled", auditSummary: { status: "fulfilled" } };
     }
-    throw new AdminServiceError("Only a paid TRX invoice with the versioned wallet ledger can be retried.", { status: 409, code: "payment_not_retryable" });
+    throw new AdminServiceError("فقط فاکتور TRX پرداخت‌شده با دفتر نسخه‌دار قابل تلاش مجدد است.", { status: 409, code: "payment_not_retryable" });
   }
   if (provider === "wallet") {
     if (record.status === "provisioned") {
@@ -312,9 +312,9 @@ async function safeRetry({ provider, id, record, actorId, operationId }) {
       const notified = await deliverPurchaseNotification(record, bot);
       return { ok: true, status: notified ? "notification-sent" : "notification-pending", auditSummary: { status: notified ? "notification-sent" : "notification-pending" } };
     }
-    throw new AdminServiceError("WizardXray create requests are not replayed automatically. Inspect the panel and resolve uncertain provisioning manually.", { status: 409, code: "non_idempotent_provisioning_blocked" });
+    throw new AdminServiceError("درخواست‌های ساخت در WizardXray به صورت خودکار تکرار نمی‌شوند. وضعیت پنل را بررسی و ساخت نامشخص را دستی تعیین تکلیف کنید.", { status: 409, code: "non_idempotent_provisioning_blocked" });
   }
-  throw new AdminServiceError("Unsupported payment provider.", { status: 400, code: "invalid_payment_provider" });
+  throw new AdminServiceError("درگاه پرداخت پشتیبانی نشده است.", { status: 400, code: "invalid_payment_provider" });
 }
 
 export async function retryPayment({ actorId, operationId, key, ipAddress } = {}) {
@@ -356,7 +356,7 @@ export async function markPaymentRecoveryRequired({ actorId, operationId, key, r
     metadata: { provider, reason: safeReason }, resumeStarted: true,
     execute: async () => {
       const updated = await model.findOneAndUpdate({ [field]: id }, { $set: { recoveryStatus: "required", recoveryReason: safeReason } }, { new: true }).select(field).lean();
-      if (!updated) throw new AdminServiceError("Payment or order not found.", { status: 404, code: "payment_not_found" });
+      if (!updated) throw new AdminServiceError("پرداخت یا سفارش یافت نشد.", { status: 404, code: "payment_not_found" });
       return { ok: true, recoveryStatus: "required", auditSummary: { recoveryStatus: "required" } };
     },
   });
@@ -375,9 +375,9 @@ export async function resolvePaymentRecovery({ actorId, operationId, key, reason
     metadata: { provider, resolution: safeReason }, resumeStarted: true,
     execute: async () => {
       const current = await model.findOne({ [field]: id }).select("recoveryStatus status balanceCredited").lean();
-      if (!current) throw new AdminServiceError("Payment or order not found.", { status: 404, code: "payment_not_found" });
+      if (!current) throw new AdminServiceError("پرداخت یا سفارش یافت نشد.", { status: 404, code: "payment_not_found" });
       if (current.recoveryStatus !== "required" && !["manual_review", "uncertain"].includes(current.status) && !(current.status === "paid" && current.balanceCredited === false)) {
-        throw new AdminServiceError("This payment is not waiting for manual recovery.", { status: 409, code: "not_recovery_required" });
+        throw new AdminServiceError("این پرداخت در انتظار بازیابی دستی نیست.", { status: 409, code: "not_recovery_required" });
       }
       await model.updateOne({ [field]: id }, { $set: { recoveryStatus: "resolved", recoveryReason: safeReason, recoveryResolvedAt: new Date(), recoveryResolvedBy: String(actorId) } });
       // This is a disposition record only. It deliberately does not credit a
@@ -391,7 +391,7 @@ export async function resolvePaymentRecovery({ actorId, operationId, key, reason
 export async function confirmBankInvoice({ actorId, operationId, paymentId, ipAddress } = {}) {
   assertAdminUser(actorId);
   const id = String(paymentId ?? "");
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new AdminServiceError("Invalid bank payment ID.", { status: 400, code: "invalid_payment_id" });
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new AdminServiceError("شناسه پرداخت بانکی نامعتبر است.", { status: 400, code: "invalid_payment_id" });
   const { result } = await runAuditedAction({
     actorTelegramId: actorId, operationId, action: "BANK_PAYMENT_CONFIRMED", targetType: "payment", targetId: id, ipAddress,
     execute: async () => {
@@ -406,7 +406,7 @@ export async function confirmBankInvoice({ actorId, operationId, paymentId, ipAd
 export async function rejectBankInvoice({ actorId, operationId, paymentId, reason, ipAddress } = {}) {
   assertAdminUser(actorId);
   const id = String(paymentId ?? "");
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new AdminServiceError("Invalid bank payment ID.", { status: 400, code: "invalid_payment_id" });
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new AdminServiceError("شناسه پرداخت بانکی نامعتبر است.", { status: 400, code: "invalid_payment_id" });
   const safeReason = requireReason(reason);
   const { result } = await runAuditedAction({
     actorTelegramId: actorId, operationId, action: "BANK_PAYMENT_REJECTED", targetType: "payment", targetId: id, targetUserId: null, ipAddress,
@@ -417,7 +417,7 @@ export async function rejectBankInvoice({ actorId, operationId, paymentId, reaso
         { $set: { status: "rejected", rejectedAt: new Date(), rejectedBy: String(actorId) } },
         { new: true }
       );
-      if (!payment) throw new AdminServiceError("This bank payment is no longer awaiting approval.", { status: 409, code: "bank_payment_not_pending" });
+      if (!payment) throw new AdminServiceError("این پرداخت بانکی دیگر در انتظار تأیید نیست.", { status: 409, code: "bank_payment_not_pending" });
       try { await botInstance.bot?.sendMessage(String(payment.userId), "❌ رسید پرداخت شما بررسی شد. در صورت نیاز با پشتیبانی تماس بگیرید."); } catch { /* Notification failure does not undo a rejected receipt. */ }
       return { ok: true, status: "rejected", auditSummary: { status: "rejected" } };
     },

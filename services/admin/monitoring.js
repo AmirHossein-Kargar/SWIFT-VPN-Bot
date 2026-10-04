@@ -32,9 +32,9 @@ function safeError(error) {
   const name = error?.name || "Error";
   const code = typeof error?.code === "string" ? error.code : undefined;
   if (Number.isInteger(error?.status)) return `HTTP ${error.status} response`;
-  if (code === "ETIMEDOUT" || code === "ECONNABORTED") return "request timed out";
-  if (code === "ENOTFOUND" || code === "EAI_AGAIN") return "host could not be resolved";
-  if (code === "ECONNREFUSED") return "connection refused";
+  if (code === "ETIMEDOUT" || code === "ECONNABORTED") return "مهلت درخواست پایان یافت";
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") return "آدرس سرور قابل تشخیص نیست";
+  if (code === "ECONNREFUSED") return "اتصال رد شد";
   return `${name}`;
 }
 
@@ -206,8 +206,8 @@ export async function getSystemHealth({ actorId, fresh = false } = {}) {
     overall: criticalDown.length ? "down" : (extended.some((service) => service.status !== "healthy") ? "degraded" : "healthy"),
     services: extended,
     notes: {
-      webhook: "Webhook health is process-local and reflects the runtime readiness flags.",
-      "background-jobs": "Job health is process-local; last-run times come from the running process only.",
+      webhook: "سلامت Webhook مربوط به همین فرایند است و پرچم‌های آمادگی اجرا را نشان می‌دهد.",
+      "background-jobs": "سلامت کارهای پس‌زمینه مربوط به همین فرایند است؛ زمان آخرین اجرا فقط از فرایند جاری می‌آید.",
     },
   };
 }

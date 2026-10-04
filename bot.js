@@ -22,6 +22,30 @@ import supportMessageHandler from "./handlers/supportMessageHandler.js";
 import { getSession, setSession } from "./config/sessionStore.js";
 import hideKeyboard from "./utils/hideKeyboard.js";
 import { WELCOME_MESSAGE } from "./messages/staticMessages.js";
+import { getUnsupportedMediaMessage, getSupportDirectButton } from "./messages/supportContact.js";
+
+/** Edit the standing support notice with the unsupported-media message. */
+async function showUnsupportedMediaNotice(bot, chatId, session) {
+  if (!session?.supportMessageId) return;
+  const reply_markup = {
+    inline_keyboard: [
+      ...getSupportDirectButton(),
+      [{ text: "🏠 بازگشت به منوی اصلی", callback_data: "back_to_home" }],
+    ],
+  };
+  try {
+    await bot.editMessageText(getUnsupportedMediaMessage(), {
+      chat_id: chatId,
+      message_id: session.supportMessageId,
+      reply_markup,
+    });
+  } catch (editError) {
+    console.log("❗️خطا در ویرایش پیام پشتیبانی:", editError.message);
+    await bot
+      .sendMessage(chatId, getUnsupportedMediaMessage(), { reply_markup })
+      .catch(() => {});
+  }
+}
 
 // * 📦 Models
 import User from "./models/User.js";
@@ -244,29 +268,7 @@ bot.on("voice", async (msg) => {
       }
 
       // Edit the previous support message to show error
-      if (session.supportMessageId) {
-        try {
-          await bot.editMessageText(
-            `❌ این فایل مجاز نیست!\n\n▫️ جهت ارتباط به صورت مستقیم:\n🔰 @Swift_servicebot\n\n‼️ قبل از ارسال پیام به پشتیبانی، قوانین و مقررات سرویس‌ دهی را مطالعه کنید.\n\n📝 لطفاً پیام پشتیبانی خود را در همین چت تایپ و ارسال کنید.\n\n✅ فایل‌های مجاز: متن، عکس، فیلم`,
-            {
-              chat_id: chatId,
-              message_id: session.supportMessageId,
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    {
-                      text: "🏠 بازگشت به منوی اصلی",
-                      callback_data: "back_to_home",
-                    },
-                  ],
-                ],
-              },
-            }
-          );
-        } catch (editError) {
-          console.log("❗️خطا در ویرایش پیام پشتیبانی:", editError.message);
-        }
-      }
+      await showUnsupportedMediaNotice(bot, chatId, session);
     } catch (error) {
       console.error("❌ Error deleting unsupported voice message:", error);
     }
@@ -290,29 +292,7 @@ bot.on("video_note", async (msg) => {
       }
 
       // Edit the previous support message to show error
-      if (session.supportMessageId) {
-        try {
-          await bot.editMessageText(
-            `❌ این فایل مجاز نیست!\n\n▫️ جهت ارتباط به صورت مستقیم:\n🔰 @Swift_servicebot\n\n‼️ قبل از ارسال پیام به پشتیبانی، قوانین و مقررات سرویس‌ دهی را مطالعه کنید.\n\n📝 لطفاً پیام پشتیبانی خود را در همین چت تایپ و ارسال کنید.\n\n✅ فایل‌های مجاز: متن، عکس، فیلم`,
-            {
-              chat_id: chatId,
-              message_id: session.supportMessageId,
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    {
-                      text: "🏠 بازگشت به منوی اصلی",
-                      callback_data: "back_to_home",
-                    },
-                  ],
-                ],
-              },
-            }
-          );
-        } catch (editError) {
-          console.log("❗️خطا در ویرایش پیام پشتیبانی:", editError.message);
-        }
-      }
+      await showUnsupportedMediaNotice(bot, chatId, session);
     } catch (error) {
       console.error("❌ Error deleting unsupported video_note message:", error);
     }
@@ -336,29 +316,7 @@ bot.on("document", async (msg) => {
       }
 
       // Edit the previous support message to show error
-      if (session.supportMessageId) {
-        try {
-          await bot.editMessageText(
-            `❌ این فایل مجاز نیست!\n\n▫️ جهت ارتباط به صورت مستقیم:\n🔰 @Swift_servicebot\n\n‼️ قبل از ارسال پیام به پشتیبانی، قوانین و مقررات سرویس‌ دهی را مطالعه کنید.\n\n📝 لطفاً پیام پشتیبانی خود را در همین چت تایپ و ارسال کنید.\n\n✅ فایل‌های مجاز: متن، عکس، فیلم`,
-            {
-              chat_id: chatId,
-              message_id: session.supportMessageId,
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    {
-                      text: "🏠 بازگشت به منوی اصلی",
-                      callback_data: "back_to_home",
-                    },
-                  ],
-                ],
-              },
-            }
-          );
-        } catch (editError) {
-          console.log("❗️خطا در ویرایش پیام پشتیبانی:", editError.message);
-        }
-      }
+      await showUnsupportedMediaNotice(bot, chatId, session);
     } catch (error) {
       console.error("❌ Error deleting unsupported document message:", error);
     }

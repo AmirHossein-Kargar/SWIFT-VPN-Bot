@@ -16,6 +16,7 @@ import {
   cancelApiPurchase,
 } from "./admin/apiServicePurchase.js";
 import showPaymentMethods from "./message/showPaymentMethods.js";
+import sendServiceSelectionMenu from "../services/manageServices/sendServiceSelectionMenu.js";
 import {
   clearSession,
   getSession,
@@ -24,7 +25,7 @@ import {
 import keyboard from "../keyboards/mainKeyboard.js";
 import { CHOOSE_OPTION_MESSAGE } from "../messages/staticMessages.js";
 import promptForReceipt from "../paymentHandlers/promptForReceipt.js";
-import { plans30, plans60, plans90 } from "../services/plans.js";
+import { getActiveProducts, getActiveProductById } from "../services/plans.js";
 import handleBuyService from "../services/buyService/buyService.js";
 import generatePlanButtons from "../keyboards/generatePlanButtons.js";
 import confirmOrder from "../services/buyService/confirmOrder.js";
@@ -329,15 +330,12 @@ const handleCallbackQuery = async (bot, query) => {
 
   switch (data) {
     // ── Payment methods ──────────────────────────────────────────────────────
+    // HooshPay is the primary online payment method. Direct card-to-card was
+    // removed from the customer flow; "pay_bank" is intentionally not routed
+    // anymore (historical bank receipts are reconciled in the admin panel).
     case "pay_hoosh":
       await payHoosh(bot, query, session);
       break;
-
-    case "pay_bank": {
-      const payBank = (await import("./../paymentHandlers/payBank.js")).default;
-      await payBank(bot, query, session);
-      break;
-    }
 
     case "pay_trx":
       await payTrx(bot, query, session);
@@ -389,29 +387,9 @@ const handleCallbackQuery = async (bot, query) => {
       break;
 
     // ── Service purchase ─────────────────────────────────────────────────────
-    case "duration_30":
-      await bot.editMessageText("💡 لطفاً یکی از پلن‌های 30 روزه را انتخاب کنید:", {
-        chat_id: chatId,
-        message_id: messageId,
-        ...generatePlanButtons(plans30),
-      });
-      break;
-
-    case "duration_60":
-      await bot.editMessageText("💡 لطفاً یکی از پلن‌های 60 روزه را انتخاب کنید:", {
-        chat_id: chatId,
-        message_id: messageId,
-        ...generatePlanButtons(plans60),
-      });
-      break;
-
-    case "duration_90":
-      await bot.editMessageText("💡 لطفاً یکی از پلن‌های 90 روزه را انتخاب کنید:", {
-        chat_id: chatId,
-        message_id: messageId,
-        ...generatePlanButtons(plans90),
-      });
-      break;
+    // (duration groups and plan selection are handled by the dynamic
+    // "duration_" / "plan_" / "confirm_order_" handlers below the switch —
+    // they read the authoritative Admin Panel product catalog.)
 
     case "buy_service_back_to_main":
       await bot.deleteMessage(chatId, messageId);
@@ -498,7 +476,8 @@ const handleCallbackQuery = async (bot, query) => {
         const totalBalances = users.reduce((s, u) => s + (u.balance || 0), 0);
         const recognizedRevenue = Math.max(0, totalTopups - totalBalances);
 
-        const allPlans = [...plans30, ...plans60, ...plans90]
+        // Estimate against the live catalog (DB prices), with static fallback.
+        const allPlans = (await getActiveProducts())
           .map((p) => ({ price: p.price, gig: p.gig, days: p.days }))
           .sort((a, b) => b.price - a.price);
         let remaining = recognizedRevenue;
@@ -670,6 +649,32 @@ const handleCallbackQuery = async (bot, query) => {
 
   // ── Dynamic callback handlers (startsWith) ─────────────────────────────────
 
+  // Plan group for a duration. Products and prices come from the Admin Panel
+  // catalog; the shipped static catalog is only a fallback when the DB is
+  // empty or unreachable.
+  if (data.startsWith("duration_")) {
+    const days = Number(data.slice("duration_".length));
+    if (!Number.isSafeInteger(days) || days < 1 || days > 3650) {
+      await bot.answerCallbackQuery(query.id, { text: "⚠️ مدت زمان نامعتبر است.", show_alert: true });
+      return;
+    }
+    const products = await getActiveProducts({ durationDays: days });
+    if (!products.length) {
+      await bot.editMessageText("⚠️ در حال حاضر پلن فعالی برای این مدت زمان موجود نیست.", {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: { inline_keyboard: [[{ text: "🔙 بازگشت", callback_data: "buy_service_back" }]] },
+      });
+      return;
+    }
+    await bot.editMessageText(`💡 لطفاً یکی از پلن‌های ${days} روزه را انتخاب کنید:`, {
+      chat_id: chatId,
+      message_id: messageId,
+      ...generatePlanButtons(products),
+    });
+    return;
+  }
+
   if (data.startsWith("confirm_payment_")) {
     if (!isAdmin(chatId, userId)) { await denyAdmin(bot, query.id); return; }
 
@@ -755,10 +760,18 @@ const handleCallbackQuery = async (bot, query) => {
   }
 
   if (data.startsWith("plan_")) {
-    const planId = data.replace("plan_", "");
-    const allPlans = [...plans30, ...plans60, ...plans90];
-    const selectedPlan = allPlans.find((p) => p.id === planId);
-    if (!selectedPlan) { await bot.sendMessage(chatId, "❌ پلن مورد نظر یافت نشد."); return; }
+    const planId = data.slice("plan_".length);
+    // Authoritative product record (DB price, enabled state). Never trust the
+    // button label over the catalog.
+    const selectedPlan = await getActiveProductById(planId);
+    if (!selectedPlan) {
+      await bot.editMessageText("❌ این پلن در حال حاضر فعال نیست یا حذف شده است.", {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: { inline_keyboard: [[{ text: "🔙 بازگشت", callback_data: "buy_service_back" }]] },
+      });
+      return;
+    }
     const { message, replyMarkup } = confirmOrder(selectedPlan);
     await bot.editMessageText(message, {
       chat_id: chatId,
@@ -772,9 +785,13 @@ const handleCallbackQuery = async (bot, query) => {
 
   if (data.startsWith("confirm_order_")) {
     const planId = data.split("confirm_order_")[1];
-    const allPlans = [...plans30, ...plans60, ...plans90];
-    const selectedPlan = allPlans.find((p) => p.id.toString() === planId);
-    if (!selectedPlan) { return bot.sendMessage(chatId, "❌ پلن مورد نظر یافت نشد."); }
+    // Re-resolve the product at charge time so the price always comes from
+    // the authoritative catalog record, never from a stale button.
+    const selectedPlan = await getActiveProductById(planId);
+    if (!selectedPlan) {
+      await bot.sendMessage(chatId, "❌ این پلن در حال حاضر فعال نیست یا حذف شده است. لطفاً از منوی خرید دوباره انتخاب کنید.", keyboard.reply_markup);
+      return;
+    }
     await bot.deleteMessage(chatId, messageId);
     await orderService(bot, chatId, userId, selectedPlan);
     return;
@@ -863,6 +880,19 @@ const handleCallbackQuery = async (bot, query) => {
   if (data.startsWith("back_to_profile")) {
     await bot.deleteMessage(chatId, messageId);
     await handleProfile(bot, chatId, userId);
+    return;
+  }
+
+  // Profile quick actions
+  if (data === "topup_from_profile") {
+    await bot.deleteMessage(chatId, messageId).catch(() => {});
+    await showPaymentMethods(bot, chatId);
+    return;
+  }
+
+  if (data === "my_services_from_profile") {
+    await bot.deleteMessage(chatId, messageId).catch(() => {});
+    await sendServiceSelectionMenu(bot, chatId, userId);
     return;
   }
 

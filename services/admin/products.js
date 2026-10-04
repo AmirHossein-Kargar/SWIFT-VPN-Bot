@@ -5,11 +5,11 @@ import { runAuditedAction } from "./audit.js";
 import { parsePositiveInteger } from "./validation.js";
 
 function validateProductInput(input, { partial = false } = {}) {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new AdminServiceError("Product data is required.", { status: 400, code: "invalid_product" });
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new AdminServiceError("اطلاعات محصول لازم است.", { status: 400, code: "invalid_product" });
   const output = {};
   if (!partial || Object.hasOwn(input, "name")) {
     const name = String(input.name ?? "").trim();
-    if (!name || name.length > 120 || /[\u0000-\u001f\u007f]/.test(name)) throw new AdminServiceError("Product name must contain 1 to 120 printable characters.", { status: 400, code: "invalid_product_name" });
+    if (!name || name.length > 120 || /[\u0000-\u001f\u007f]/.test(name)) throw new AdminServiceError("نام محصول باید ۱ تا ۱۲۰ نویسه قابل نمایش باشد.", { status: 400, code: "invalid_product_name" });
     output.name = name;
   }
   if (!partial || Object.hasOwn(input, "durationDays")) output.durationDays = parsePositiveInteger(input.durationDays, { name: "duration days", min: 1, max: 3650 });
@@ -17,7 +17,7 @@ function validateProductInput(input, { partial = false } = {}) {
   if (!partial || Object.hasOwn(input, "priceToman")) output.priceToman = parsePositiveInteger(input.priceToman, { name: "price", min: 1, max: 2_000_000_000 });
   if (!partial || Object.hasOwn(input, "costToman")) output.costToman = parsePositiveInteger(input.costToman, { name: "cost", min: 0, max: 2_000_000_000 });
   if (!partial || Object.hasOwn(input, "enabled")) {
-    if (typeof input.enabled !== "boolean") throw new AdminServiceError("Product enabled must be true or false.", { status: 400, code: "invalid_product_enabled" });
+    if (typeof input.enabled !== "boolean") throw new AdminServiceError("وضعیت فعال بودن محصول باید مشخص باشد.", { status: 400, code: "invalid_product_enabled" });
     output.enabled = input.enabled;
   }
   if (!partial || Object.hasOwn(input, "displayOrder")) output.displayOrder = parsePositiveInteger(input.displayOrder ?? 0, { name: "display order", min: 0, max: 100_000 });
@@ -79,9 +79,9 @@ export async function createProduct({ actorId, operationId, input, ipAddress } =
 export async function updateProduct({ actorId, operationId, productId, input, ipAddress } = {}) {
   assertAdminUser(actorId);
   const id = String(productId ?? "");
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new AdminServiceError("Invalid product ID.", { status: 400, code: "invalid_product_id" });
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new AdminServiceError("شناسه محصول نامعتبر است.", { status: 400, code: "invalid_product_id" });
   const values = validateProductInput(input, { partial: true });
-  if (!Object.keys(values).length) throw new AdminServiceError("No product fields were supplied.", { status: 400, code: "empty_product_update" });
+  if (!Object.keys(values).length) throw new AdminServiceError("هیچ فیلدی برای ویرایش محصول ارسال نشد.", { status: 400, code: "empty_product_update" });
   const { result } = await runAuditedAction({
     actorTelegramId: actorId,
     operationId,
@@ -97,7 +97,7 @@ export async function updateProduct({ actorId, operationId, productId, input, ip
         { $set: { ...values, updatedBy: String(actorId), updatedAt: new Date() } },
         { new: true, runValidators: true }
       ).lean();
-      if (!product) throw new AdminServiceError("Product not found.", { status: 404, code: "product_not_found" });
+      if (!product) throw new AdminServiceError("محصول یافت نشد.", { status: 404, code: "product_not_found" });
       return { product: present(product), auditSummary: { productId: id, fields: Object.keys(values) } };
     },
   });
@@ -107,7 +107,7 @@ export async function updateProduct({ actorId, operationId, productId, input, ip
 export async function duplicateProduct({ actorId, operationId, productId, ipAddress } = {}) {
   assertAdminUser(actorId);
   const id = String(productId ?? "");
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new AdminServiceError("Invalid product ID.", { status: 400, code: "invalid_product_id" });
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new AdminServiceError("شناسه محصول نامعتبر است.", { status: 400, code: "invalid_product_id" });
   const { result } = await runAuditedAction({
     actorTelegramId: actorId,
     operationId,
@@ -121,7 +121,7 @@ export async function duplicateProduct({ actorId, operationId, productId, ipAddr
       let product = await AdminProduct.findOne({ createdByOperationId: operationId }).lean();
       if (!product) {
         const source = await AdminProduct.findOne({ productId: id }).lean();
-        if (!source) throw new AdminServiceError("Product not found.", { status: 404, code: "product_not_found" });
+        if (!source) throw new AdminServiceError("محصول یافت نشد.", { status: 404, code: "product_not_found" });
         product = await AdminProduct.create({
           productId: `PRD-${randomUUID()}`,
           name: `${source.name} (copy)`.slice(0, 120),
@@ -145,9 +145,9 @@ export async function duplicateProduct({ actorId, operationId, productId, ipAddr
 export async function reorderProducts({ actorId, operationId, productIds, ipAddress } = {}) {
   assertAdminUser(actorId);
   if (!Array.isArray(productIds) || productIds.length < 1 || productIds.length > 200 || productIds.some((id) => typeof id !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(id))) {
-    throw new AdminServiceError("A list of 1 to 200 product IDs is required.", { status: 400, code: "invalid_product_order" });
+    throw new AdminServiceError("فهرستی از ۱ تا ۲۰۰ شناسه محصول لازم است.", { status: 400, code: "invalid_product_order" });
   }
-  if (new Set(productIds).size !== productIds.length) throw new AdminServiceError("Product order contains duplicates.", { status: 400, code: "duplicate_product_id" });
+  if (new Set(productIds).size !== productIds.length) throw new AdminServiceError("ترتیب محصولات شامل شناسه تکراری است.", { status: 400, code: "duplicate_product_id" });
   const { result } = await runAuditedAction({
     actorTelegramId: actorId,
     operationId,
@@ -160,7 +160,7 @@ export async function reorderProducts({ actorId, operationId, productIds, ipAddr
     execute: async () => {
       const operations = productIds.map((id, displayOrder) => ({ updateOne: { filter: { productId: id }, update: { $set: { displayOrder, updatedBy: String(actorId), updatedAt: new Date() } } } }));
       const write = await AdminProduct.bulkWrite(operations, { ordered: true });
-      if ((write.matchedCount ?? write.nMatched) !== productIds.length) throw new AdminServiceError("One or more products no longer exist.", { status: 409, code: "product_order_conflict" });
+      if ((write.matchedCount ?? write.nMatched) !== productIds.length) throw new AdminServiceError("یک یا چند محصول دیگر وجود ندارد.", { status: 409, code: "product_order_conflict" });
       return { ok: true, updated: productIds.length, auditSummary: { updated: productIds.length } };
     },
   });
@@ -168,7 +168,7 @@ export async function reorderProducts({ actorId, operationId, productIds, ipAddr
 }
 
 export async function setProductEnabled({ actorId, operationId, productId, enabled, ipAddress } = {}) {
-  if (typeof enabled !== "boolean") throw new AdminServiceError("Choose enabled or disabled.", { status: 400, code: "invalid_product_enabled" });
+  if (typeof enabled !== "boolean") throw new AdminServiceError("وضعیت فعال یا غیرفعال را انتخاب کنید.", { status: 400, code: "invalid_product_enabled" });
   return updateProduct({ actorId, operationId, productId, input: { enabled }, ipAddress });
 }
 
