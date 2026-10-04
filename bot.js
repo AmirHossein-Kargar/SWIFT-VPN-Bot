@@ -29,6 +29,9 @@ import User from "./models/User.js";
 // * 📦 API
 import { StatusApi } from "./api/wizardApi.js";
 import showStatusApi from "./handlers/admin/showStatusApi.js";
+import { handleAdminPanelCommand } from "./handlers/admin/panel.js";
+import { isAdminUser } from "./utils/auth.js";
+import { touchUserActivity } from "./services/admin/users.js";
 
 // * ⚙️ Configuration report
 // Resolves platform-provided variable names (Railway's MONGO_URL / REDIS_URL /
@@ -66,6 +69,11 @@ bot.on("message", async (msg) => {
     const userText = msg.text;
     const session = await getSession(chatId);
 
+    // Best-effort activity tracking for admin dashboards (throttled).
+    if (msg.chat?.type === "private" && userId) {
+      void touchUserActivity(userId, { now: new Date() });
+    }
+
     // بررسی اینکه آیا پیام از گروه ادمین است
     if (process.env.GROUP_ID && chatId.toString() === process.env.GROUP_ID) {
       // اگر در این چت گروهی فرآیند فعالی وجود دارد (برای ادمین)، همان هندلر عمومی را صدا بزن
@@ -84,11 +92,25 @@ bot.on("message", async (msg) => {
       }
       case "/panel":
       case "پنل": {
-        // پنل مدیریت فقط در گروه ادمین قابل استفاده است
-        await bot.sendMessage(
-          chatId,
-          "⛔️ پنل مدیریت فقط در گروه ادمین در دسترس است. لطفاً دستور را در گروه ارسال کنید."
-        );
+        // پنل مدیریت: برای ادمین‌های مجاز در چت خصوصی هم در دسترس است
+        if (isAdminUser(userId)) {
+          await handleAdminPanelCommand(bot, msg);
+        } else {
+          await bot.sendMessage(
+            chatId,
+            "⛔️ پنل مدیریت فقط برای ادمین‌های مجاز در دسترس است."
+          );
+        }
+        break;
+      }
+      case "/admin":
+      case "👑 SWIFT ADMIN": {
+        // New SWIFT admin panel — private chat for allowlisted admins.
+        if (isAdminUser(userId)) {
+          await handleAdminPanelCommand(bot, msg);
+        } else {
+          await bot.sendMessage(chatId, "⛔️ این دستور فقط برای ادمین‌های مجاز فعال است.");
+        }
         break;
       }
       case "/status": {

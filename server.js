@@ -7,6 +7,9 @@ import { isRedisReady } from "./config/redisClient.js";
 import { fulfillHooshOrder } from "./services/hooshpay/fulfillHooshOrder.js";
 import { acquireVerifyLock, releaseVerifyLock } from "./services/hooshpay/verifyLock.js";
 import { verifyHooshPaySignature } from "./services/hooshpay/verifySignature.js";
+import { recordWebhookOutcome } from "./services/admin/monitoring.js";
+import adminRouter from "./web/adminRouter.js";
+import { serveAdminSpa, notFoundHandler } from "./web/spa.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -255,6 +258,7 @@ export async function handleHooshWebhook(req, res) {
         reqId, uid: invoice.uid, userId: invoice.userId,
         newlyCredited: result.credited, alreadyCredited: result.alreadyCredited,
       });
+      recordWebhookOutcome({ ok: true });
       return res.status(200).json({ ok: true, received: true, request_id: reqId });
     } finally {
       await releaseVerifyLock(lock);
@@ -263,6 +267,7 @@ export async function handleHooshWebhook(req, res) {
     log("error", "Webhook processing failed; gateway retry requested", {
       reqId, uid: invoice.uid, ...safeErrorFields(error),
     });
+    recordWebhookOutcome({ ok: false, error: error?.code || error?.name });
     return res.status(503).json({ ok: false, error: "temporarily_unavailable", request_id: reqId });
   }
 }
@@ -289,9 +294,11 @@ app.get("/ready", (_req, res) => {
   res.status(ready ? 200 : 503).json({ ready, dependencies, ts: new Date().toISOString() });
 });
 
-app.use((req, res) => {
-  res.status(404).json({ ok: false, error: "not_found" });
-});
+// Admin Panel API + web dashboard (mounted after the webhook route so the
+// payment webhook path is untouched).
+app.use("/api/admin", adminRouter);
+app.use(serveAdminSpa);
+app.use(notFoundHandler);
 
 app.use((error, _req, res, _next) => {
   const status = error?.type === "entity.too.large" ? 413

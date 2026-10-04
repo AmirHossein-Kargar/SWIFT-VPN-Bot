@@ -8,6 +8,7 @@ import {
   handleApiGigInput,
   handleApiDaysInput,
 } from "./admin/apiServicePurchase.js";
+import { handleAdminPanelStep } from "./admin/panel.js";
 
 // Function to send config to user
 async function handleSendConfig(bot, msg, session) {
@@ -60,6 +61,12 @@ async function handleSendConfig(bot, msg, session) {
 async function handleMessage(bot, msg) {
   const chatId = msg.chat.id;
   const session = await getSession(chatId);
+
+  // SWIFT admin panel multi-step inputs (search, balance, broadcast, …).
+  // Returns true only when the message belonged to an admin panel flow.
+  if (await handleAdminPanelStep(bot, msg)) {
+    return;
+  }
 
   // Forward support messages if in support mode (only for text messages)
   if (session?.support && msg.text) {

@@ -19,6 +19,7 @@ panel, and an admin panel that runs entirely inside a Telegram group.
 9. [Testing](#9-testing)
 10. [Production checklist](#10-production-checklist)
 11. [Operations & recovery](#11-operations--recovery)
+12. [Admin Panel ecosystem (web + Telegram)](#12-admin-panel-ecosystem-web--telegram)
 
 ---
 
@@ -90,7 +91,8 @@ panel, and an admin panel that runs entirely inside a Telegram group.
 | **HooshPay** | Primary online gateway. Invoice created via REST; confirmation arrives as a signed webhook. |
 | **WizardXray** | VPN panel REST API: create / find / change-link / delete / deactivate service. |
 | **TRX scanner** | Polls TronScan every 5 minutes, matches incoming TRX against unpaid invoices, credits the wallet. |
-| **Express server** | Receives HooshPay webhooks and serves health probes. Runs inside the same process as the bot. |
+| **Express server** | Receives HooshPay webhooks, serves health probes and hosts the **web admin dashboard** (`/admin`, `web/public`) plus the admin JSON API (`/api/admin/*`). Runs inside the same process as the bot. |
+| **Admin services** | `services/admin/*` — the single implementation of authorization, audit logging, user/VPN/payment/product management, recovery, broadcast, analytics and health checks shared by the Telegram panel and the web dashboard. |
 
 **Process layout** — `npm start` boots one process that starts, in order:
 MongoDB → Express → Telegram polling → TRX scanner → HooshPay cron → signal handlers.
@@ -172,6 +174,7 @@ authoritative list — every variable below is read somewhere in the codebase.
 | `COST_PER_DAY` | `200` | Cost per service-day (Toman) for admin profit reports |
 | `COST_PER_GB` | `300` | Cost per GB sold (Toman) for admin profit reports |
 | `TEST_MONGO_URL` | `mongodb://127.0.0.1:27017/swiftvpn_test` | Test-only. Name must contain `test`. |
+| `ADMIN_SESSION_TTL_SECONDS` | `28800` | Web admin session lifetime (900–86400 s). |
 
 > **Removed:** `NOW_PAYMENTS_API_KEY` and the whole NowPayments/TON flow were
 > deleted — they were unreachable at runtime (the session step that triggered
@@ -453,13 +456,19 @@ npm test
 | `tests/integration/purchaseFlow.test.js` | Real purchase flow with a stubbed panel: reserve/commit/**refund** | yes |
 | `tests/integration/adminBankConfirm.test.js` | Real admin callbacks: authorization, double-click, tampered amount | yes |
 | `tests/integration/trxScanner.test.js` | Real scanner claims, hash reuse, reverted transactions, recovery | yes |
+| `tests/unit/adminAudit.test.js` | Audit idempotency, replay/conflict handling, metadata redaction | no |
+| `tests/unit/adminAuthSession.test.js` | Web sign-in codes (single use, rate limited) and session lifecycle | no |
+| `tests/unit/adminValidation.test.js` | Admin input hardening (IDs, amounts, pagination, reasons) | no |
+| `tests/integration/adminServices.test.js` | Real admin services: user search, balance idempotency, products, payments, recovery, VPN registry, broadcast safety | yes |
+| `tests/integration/adminWeb.test.js` | Real HTTP: login flow, CSRF, session enforcement, SPA, admin API | no (data tests: yes) |
+| `tests/integration/adminTelegramPanel.test.js` | Telegram panel authorization, navigation, safe failures | no (data screens: yes) |
 
-Expected result on a machine with MongoDB and Redis available: **154/154 passing,
-0 skipped.**
+Expected result on a machine with MongoDB available: **212 tests, all passing,
+0 skipped** (without MongoDB the DB-backed suites skip by design).
 
 ```text
-# tests 154
-# pass 154
+# tests 212
+# pass 212
 # fail 0
 ```
 
@@ -549,3 +558,111 @@ and the cron, then close Express, MongoDB and Redis before exiting. Railway send
 
 For VPS/PM2/Nginx deployment details, deeper monitoring queries and the manual
 recovery playbook, see [`DEPLOYMENT_CHECKLIST.md`](DEPLOYMENT_CHECKLIST.md).
+
+---
+
+## 12. Admin Panel ecosystem (web + Telegram)
+
+Both admin interfaces are thin presentations over the same audited service
+layer. **No business logic is duplicated** between them.
+
+```
+Telegram admin panel (handlers/admin/panel.js)     Web dashboard (web/public SPA)
+                    │                                        │
+                    └──────────────┬─────────────────────────┘
+                                   ▼
+                        services/admin/*  (shared)
+   authorization · audit · users · vpns · payments · recovery · products
+   broadcast · analytics · monitoring · auth (web sessions)
+                                   │
+                 ┌─────────────────┼──────────────────┐
+                 ▼                 ▼                  ▼
+       existing models      WizardXray client   HooshPay client
+       (User, invoices,     (api/wizardApi.js)  (services/hooshpay/*)
+        WalletPurchase…)         │                  │
+                                 └──── Redis ───────┘
+                              sessions · locks · rate limits
+```
+
+### 12.1 Web dashboard
+
+Open `<WEBHOOK_BASE_URL>/admin`. Sign-in is Telegram-based:
+
+1. Enter the Telegram ID of an account listed in `ADMINS`.
+2. The bot DMs a one-time code (valid 5 minutes, single use, SHA-256 stored).
+3. The server issues a Redis-backed session (HttpOnly, `Secure`, `SameSite=Lax`
+   cookie + double-submit CSRF token; TTL `ADMIN_SESSION_TTL_SECONDS`).
+
+Pages: Dashboard (KPIs, revenue/orders/users charts, popular packages, live
+system health), Users (search/filters/sorts + profile with balance, block,
+payments, services), VPN Services (registry + WizardXray detail with
+change-link/disable/revoke), Payments (all providers, status tabs, full
+timeline incl. webhook events), Recovery (queue + safe retry-all), Products
+(CRUD/duplicate/reorder/enable — the panel catalog that powers product-mix &
+profit analytics; the Telegram shop still sells the built-in plan list, see
+§12.5),
+Broadcast (preview, audience, rate-limited delivery, cancel, progress),
+Analytics, Referrals, Audit Log, System health.
+
+JSON API (all session + CSRF protected, idempotent via `operationId`):
+
+| Route | Purpose |
+|---|---|
+| `POST /api/admin/auth/request-code` · `POST /api/admin/auth/verify` · `POST /api/admin/auth/logout` · `GET /api/admin/auth/session` | Authentication |
+| `GET /api/admin/dashboard` | KPI + chart data |
+| `GET /api/admin/users` · `GET /api/admin/users/:id` · `POST /api/admin/users/:id/balance` · `…/block` · `…/unblock` | User management |
+| `GET /api/admin/vpns` · `GET /api/admin/vpns/:username` · `POST /api/admin/vpns/:username/actions` | VPN management |
+| `GET /api/admin/payments` · `GET /api/admin/payments/:key` · `POST …/retry` · `…/recovery-required` · `…/resolve` · `POST /api/admin/payments/bank/:id/confirm` · `…/reject` | Payments |
+| `GET /api/admin/recovery` · `POST /api/admin/recovery/retry-safe` | Recovery |
+| `GET/POST/PATCH /api/admin/products…` · `POST /api/admin/products/reorder` | Catalog |
+| `POST /api/admin/broadcast` (+`/preview`, `/cancel/:id`, `/status/:id`, `GET /broadcasts`) | Broadcast |
+| `GET /api/admin/analytics` · `GET /api/admin/audit` · `GET /api/admin/system/health` · `GET /api/admin/referrals` | Analytics / audit / ops |
+
+### 12.2 Telegram panel
+
+`/admin` (private chat for allowlisted admins, or the admin group) → 👑 SWIFT
+ADMIN main menu. Navigation follows the same sections as the web dashboard,
+with confirmations for every sensitive action and pagination where needed.
+The panel stores long IDs in the chat session and references them by index so
+`callback_data` stays under Telegram's 64-byte limit.
+
+### 12.3 Money safety in admin actions
+
+- **Balance changes** use a new durable idempotency ledger
+  (`User.appliedAdminBalanceKeys`) written atomically with the `$inc` — a
+  repeated HTTP callback or replayed button can never change a balance twice.
+- **Payment retries** call the *existing* idempotent fulfillment paths
+  (`fulfillHooshOrder`, `confirmBankPayment`, scanner Phase-2, purchase
+  commit). Duplicate webhooks still credit exactly once.
+- **Ambiguous provisioning is never replayed** — manual-review orders are
+  surfaced, not re-created, so a paid order can never provision twice.
+- Every mutation writes an `AdminAuditLog` record **before** executing
+  (`started` → `succeeded`/`failed`), keyed by a unique `operationId`.
+
+### 12.4 New database collections
+
+`AdminAuditLog`, `AdminProduct`, `AdminBroadcast`, `SystemHealth` — plus
+additive fields on existing models (VPN expiry/traffic on services & purchases,
+recovery/retry bookkeeping on all invoice models, `lastActivityAt` /
+`referralCode` / block metadata on `User`). Indexes are created automatically
+at startup; nothing existing is dropped or rewritten.
+
+### 12.5 Honest limitations
+
+- VPN **extend-time / increase-traffic / regenerate-config** are marked
+  unavailable everywhere: the configured WizardXray client has no safe
+  endpoint for them (the user-facing bot already shows the same notice).
+- **Product catalog scope:** the `AdminProduct` catalog is real data that
+  powers the panel's product-mix and profit analytics, but the Telegram
+  shop's checkout still sells the built-in plan list
+  (`plans30/60/90`). Editing a product does not change what the shop
+  charges. Wiring the checkout to the catalog
+  (`getActiveProducts`/`getActiveProductById` in `services/plans.js`,
+  which already fall back to the built-in list when the DB is empty or
+  unreachable) is a deliberate follow-up so it can ship with full
+  DB-backed integration coverage of the money path.
+- Activity/referral tracking starts with this release — historical accounts
+  appear on their next interaction.
+- `expired VPNs` counts tracked orders; services registered before this
+  release without a linked purchase show as *unknown expiry* until looked up
+  individually.
