@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { setSession } from "../config/sessionStore.js";
 import validateWithCommas from "../utils/validationAmount.js";
 import invoice from "../models/invoice.js";
@@ -88,7 +89,7 @@ const payBank = async (bot, msg, session) => {
     return;
   }
 
-  const paymentId = Math.random().toString(36).substr(2, 8).toUpperCase();
+  const paymentId = randomUUID().replaceAll("-", "").slice(0, 20).toUpperCase();
   const CARD_NUMBER = process.env.CARD_NUMBER;
   const ltrCardNumber = `\u200E${CARD_NUMBER}`;
 
@@ -111,16 +112,25 @@ const payBank = async (bot, msg, session) => {
     `🔢 شماره کارت: <code>${ltr(ltrCardNumber)}</code>\n\n` +
     rtl("سپس روی دکمه زیر کلیک کرده و رسید واریزی را ارسال نمایید.");
 
-  // * save invoice to database
+  // Persist before showing payment instructions. Never accept a transfer for an
+  // invoice that the bot cannot later reconcile.
   try {
     await invoice.create({
       paymentId,
-      userId: chatId,
-      amount: Number(validation.amount) || 0,
-      paymentType: "bank", // Add payment type
+      userId: Number(chatId),
+      amount: validation.amount,
+      paymentType: "bank",
+      creditLedgerVersion: 2,
     });
   } catch (error) {
-    console.error("Error to save invoice", error.message);
+    console.error("Bank invoice persistence failed:", error?.name || "DatabaseError");
+    await bot.editMessageText("❌ در حال حاضر امکان ثبت فاکتور بانکی وجود ندارد. لطفاً بعداً دوباره تلاش کنید.", {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: { inline_keyboard: backButton },
+    });
+    await setSession(chatId, { ...session, step: null });
+    return;
   }
 
   try {

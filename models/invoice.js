@@ -32,6 +32,16 @@ const invoiceSchema = new mongoose.Schema({
   // Set exactly once by the atomic admin claim in handleCallbackQuery.
   confirmedAt: { type: Date, default: null },
   confirmedBy: { type: String, default: null },
+  rejectedAt: { type: Date, default: null },
+  rejectedBy: { type: String, default: null },
+  receiptFileId: { type: String, default: null },
+  receiptSubmittedAt: { type: Date, default: null },
+  balanceCredited: { type: Boolean, default: false },
+  balanceCreditedAt: { type: Date, default: null },
+  creditLedgerVersion: { type: Number },
+  notificationPending: { type: Boolean, default: false },
+  notificationClaimedAt: { type: Date, default: null },
+  notifiedAt: { type: Date, default: null },
 });
 
 // The admin confirmation callback claims an invoice with a single atomic

@@ -38,7 +38,20 @@ import { assertRequiredEnv } from "./config/env.js";
 assertRequiredEnv();
 
 // * 🚀 Start Bot
-const bot = await startBot();
+let bot;
+try {
+  bot = await startBot();
+} catch (error) {
+  console.error(JSON.stringify({
+    ts: new Date().toISOString(),
+    service: "startup",
+    level: "fatal",
+    message: "Application startup failed",
+    errorType: error?.name || "StartupError",
+    code: typeof error?.code === "string" || typeof error?.code === "number" ? error.code : undefined,
+  }));
+  process.exit(1);
+}
 
 // * 🏠 Initialize Group Manager
 import { handleGroupMessage } from "./handlers/admin/groupManager.js";

@@ -30,9 +30,11 @@
  */
 import axios from "axios";
 import CryptoInvoice from "../models/CryptoInvoice.js";
+import User from "../models/User.js";
 import { getSession } from "../config/sessionStore.js";
 import mongoose from "mongoose";
-import redisClient from "../config/redisClient.js";
+import { acquireRedisLease, releaseRedisLease, startRedisLeaseHeartbeat } from "./redisLease.js";
+import { creditWalletOnce } from "./walletCredit.js";
 
 const TRX_CRON_LOCK_KEY = "trx:scan:cron";
 const TRX_CRON_LOCK_TTL = 270; // 4.5 min — just under the 5-min scan interval
@@ -85,10 +87,10 @@ class TRXWalletScanner {
 
   async checkTronScanConnection() {
     try {
-      const res = await axios.get(
-        `https://apilist.tronscanapi.com/api/account?address=${this.walletAddress}`,
-        { timeout: 10000 }
-      );
+      const res = await axios.get("https://apilist.tronscanapi.com/api/account", {
+        params: { address: this.walletAddress },
+        timeout: 8_000,
+      });
       this.tronScanConnected = res.status === 200;
     } catch {
       this.tronScanConnected = false;
@@ -104,12 +106,12 @@ class TRXWalletScanner {
     }
 
     this.scanInterval = setInterval(() => {
-      this.scanWallet().catch((e) => log("error", "Unhandled scan error", { error: e.message }));
+      this.scanWallet().catch((e) => log("error", "Unhandled scan error", { errorType: e?.name || "Error" }));
     }, SCAN_INTERVAL_MS);
     if (this.scanInterval.unref) this.scanInterval.unref();
 
     // Initial run (not awaited — startAutoScan stays synchronous for callers)
-    this.scanWallet().catch((e) => log("error", "Unhandled scan error", { error: e.message }));
+    this.scanWallet().catch((e) => log("error", "Unhandled scan error", { errorType: e?.name || "Error" }));
   }
 
   stopAutoScan() {
@@ -146,21 +148,31 @@ class TRXWalletScanner {
       return { ...emptySummary, error: "TRX_WALLET not configured" };
     }
 
-    // Distributed lock — only one instance scans at a time.
-    let redisLockAcquired = false;
+    // Redis serializes normal scans across replicas. The unique transaction-hash
+    // index and wallet credit ledger remain the authoritative safety controls.
+    let redisLease = null;
+    let leaseHealthy = true;
+    let stopLeaseHeartbeat = null;
     try {
-      const lockResult = await redisClient.set(TRX_CRON_LOCK_KEY, process.pid.toString(), {
-        NX: true,
-        EX: TRX_CRON_LOCK_TTL,
-      });
-      if (lockResult !== "OK") {
-        log("info", "Scan lock held by another instance — skipping");
+      redisLease = await acquireRedisLease(TRX_CRON_LOCK_KEY, TRX_CRON_LOCK_TTL);
+      if (!redisLease) {
+        log("info", "Scan lease is held by another instance — skipping");
         return emptySummary;
       }
-      redisLockAcquired = true;
-    } catch (err) {
-      // Redis unavailable — fail open; atomic Mongo claims keep us safe.
-      log("warn", "Redis lock unavailable (fail-open)", { error: err.message });
+      stopLeaseHeartbeat = startRedisLeaseHeartbeat(redisLease, {
+        ttlSeconds: TRX_CRON_LOCK_TTL,
+        intervalMs: 60_000,
+        onLost: async () => {
+          leaseHealthy = false;
+          log("error", "Scan lease lost; stopping this scan");
+        },
+      });
+    } catch (error) {
+      // Redis is an optimization only. MongoDB uniqueness and the in-process
+      // guard still prevent repeated wallet credits when Redis is unavailable.
+      log("warn", "Redis scan lease unavailable; using database safeguards", {
+        errorType: error?.name || "RedisError",
+      });
     }
 
     this.isScanning = true;
@@ -175,6 +187,7 @@ class TRXWalletScanner {
         log("warn", "Database not connected — aborting scan");
         return emptySummary;
       }
+      if (!leaseHealthy) return emptySummary;
 
       // Finish anything a previous crash left half-done.
       const recoveredInvoices = await this.recoverStuckInvoices();
@@ -196,6 +209,7 @@ class TRXWalletScanner {
       }
 
       for (const tx of transactions) {
+        if (!leaseHealthy) break;
         const result = await this.processTransaction(tx);
         if (!result) continue;
         if (result.processed) summary.processedTransactions += 1;
@@ -218,16 +232,13 @@ class TRXWalletScanner {
 
       return summary;
     } catch (error) {
-      log("error", "Scan failed", { error: error.message });
-      return { ...emptySummary, error: error.message };
+      log("error", "Scan failed", { errorType: error?.name || "Error" });
+      return { ...emptySummary, error: "TRX scan failed" };
     } finally {
       this.isScanning = false;
-      if (redisLockAcquired) {
-        try {
-          await redisClient.del(TRX_CRON_LOCK_KEY);
-        } catch {
-          /* TTL will clean up */
-        }
+      stopLeaseHeartbeat?.();
+      if (redisLease) {
+        try { await releaseRedisLease(redisLease); } catch { /* TTL will clean up */ }
       }
     }
   }
@@ -237,23 +248,28 @@ class TRXWalletScanner {
     try {
       const response = await axios.get("https://apilist.tronscanapi.com/api/account/tokens", {
         params: { address: this.walletAddress, start: 0, limit: 100 },
+        timeout: 8_000,
       });
       const trxToken = response.data?.data?.find(
         (t) => t.tokenAbbr === "trx" || t.tokenId === "_"
       );
       if (trxToken) {
-        return parseFloat(trxToken.balance) / Math.pow(10, trxToken.tokenDecimal || 6);
+        const balance = Number(trxToken.balance) / Math.pow(10, Number(trxToken.tokenDecimal) || 6);
+        return Number.isFinite(balance) ? balance : null;
       }
 
-      const accountResponse = await axios.get(
-        `https://apilist.tronscanapi.com/api/account?address=${this.walletAddress}`
-      );
-      if (accountResponse.data?.balance) {
-        return parseFloat(accountResponse.data.balance) / 1e6;
+      const accountResponse = await axios.get("https://apilist.tronscanapi.com/api/account", {
+        params: { address: this.walletAddress },
+        timeout: 8_000,
+      });
+      if (accountResponse.data?.balance != null) {
+        const balance = Number(accountResponse.data.balance) / 1e6;
+        return Number.isFinite(balance) ? balance : null;
       }
-      return 0;
-    } catch {
-      return 0;
+      return null;
+    } catch (error) {
+      log("warn", "TronScan wallet balance unavailable", { errorType: error?.name || "NetworkError" });
+      return null;
     }
   }
 
@@ -267,6 +283,7 @@ class TRXWalletScanner {
           start: 0,
           address: this.walletAddress,
         },
+        timeout: 8_000,
       });
 
       const list = response.data?.data;
@@ -279,7 +296,7 @@ class TRXWalletScanner {
           tx.tokenInfo?.tokenAbbr === "trx"
       );
     } catch (error) {
-      log("error", "Failed to fetch transactions", { error: error.message });
+      log("error", "Failed to fetch transactions", { errorType: error?.name || "NetworkError" });
       return [];
     }
   }
@@ -298,12 +315,29 @@ class TRXWalletScanner {
     try {
       if (tx.contractType !== 1 || tx.tokenInfo?.tokenAbbr !== "trx") return none;
       if (tx.toAddress !== this.walletAddress) return none;
+      if (typeof tx.hash !== "string" || !/^[A-Fa-f0-9]{16,128}$/.test(tx.hash)) return none;
 
-      const txAmount = parseFloat(tx.amount) / 1e6;
-      const invoices = await this.findMatchingInvoices(txAmount);
+      const txAmount = Number(tx.amount) / 1e6;
+      if (!Number.isFinite(txAmount) || txAmount <= 0) return none;
+      let invoices = await this.findMatchingInvoices(txAmount);
 
-      if (invoices.length === 0) {
-        return { ...none, processed: true };
+      if (invoices.length === 0) return { ...none, processed: true };
+      if (invoices.length > 1) {
+        const exact = invoices.filter((candidate) => Math.round(Number(candidate.cryptoAmount) * 1_000_000) === Math.round(txAmount * 1_000_000));
+        if (exact.length === 1) {
+          invoices = exact;
+        } else {
+          log("warn", "TRX transfer matches multiple invoices; automatic credit withheld", {
+            hash: tx.hash, candidateCount: invoices.length,
+          });
+          await this.alertAdmin(
+            `⚠️ <b>واریز TRX مبهم است</b>\n` +
+            `هش: <code>${tx.hash}</code>\n` +
+            `تعداد فاکتورهای نزدیک: <code>${invoices.length}</code>\n` +
+            `برای جلوگیری از شارژ اشتباه، تطبیق خودکار انجام نشد.`
+          );
+          return { ...none, processed: true };
+        }
       }
 
       const isConfirmed = tx.confirmed && tx.contractRet === "SUCCESS" && !tx.revert;
@@ -364,7 +398,7 @@ class TRXWalletScanner {
 
       return { ...none, processed: true };
     } catch (error) {
-      log("error", "Error processing transaction", { error: error.message });
+      log("error", "Error processing transaction", { errorType: error?.name || "Error" });
       return none;
     }
   }
@@ -385,7 +419,7 @@ class TRXWalletScanner {
         return percentage <= MATCH_TOLERANCE;
       });
     } catch (error) {
-      log("error", "Failed to search matching invoices", { error: error.message });
+      log("error", "Failed to search matching invoices", { errorType: error?.name || "DatabaseError" });
       return [];
     }
   }
@@ -404,6 +438,8 @@ class TRXWalletScanner {
             status: "paid",
             transactionHash: tx.hash,
             confirmedAt: new Date(),
+            creditLedgerVersion: 2,
+            notificationPending: true,
           },
         },
         { new: true }
@@ -416,7 +452,7 @@ class TRXWalletScanner {
         });
         return false;
       }
-      log("error", "Failed to claim invoice", { invoiceId: invoice.invoiceId, error: err.message });
+      log("error", "Failed to claim invoice", { invoiceId: invoice.invoiceId, errorType: err?.name || "DatabaseError" });
       return false;
     }
 
@@ -446,75 +482,108 @@ class TRXWalletScanner {
       return true;
     } catch (err) {
       if (err?.code === 11000) return false;
-      log("error", "Failed to reject invoice", { invoiceId: invoice.invoiceId, error: err.message });
+      log("error", "Failed to reject invoice", { invoiceId: invoice.invoiceId, errorType: err?.name || "DatabaseError" });
       return false;
     }
   }
 
   /**
-   * Phase 2: atomically mark balanceCredited, increment the wallet, then notify.
-   * Crediting happens BEFORE the notification so a user is never told "paid"
-   * for money that was not actually added.
+   * Apply the wallet credit through the shared idempotency ledger, then persist
+   * invoice completion and deliver a retryable notification.
    */
   async creditAndNotify(invoice, tx) {
-    const phase2 = await CryptoInvoice.findOneAndUpdate(
-      { _id: invoice._id, status: "paid", balanceCredited: false },
-      { $set: { balanceCredited: true, balanceCreditedAt: new Date() } },
-      { new: true }
-    );
+    let current = await CryptoInvoice.findById(invoice._id).lean();
+    if (!current || current.status !== "paid") return false;
 
-    if (!phase2) {
-      log("info", "Phase-2 already completed", { invoiceId: invoice.invoiceId });
-      return false;
-    }
-
-    let user;
-    try {
-      const User = (await import("../models/User.js")).default;
-      user = await User.findOneAndUpdate(
-        { telegramId: String(invoice.userId) },
-        { $inc: { balance: invoice.amount, successfulPayments: 1 } },
+    if (!current.balanceCredited && current.creditLedgerVersion !== 2) {
+      const alertClaim = await CryptoInvoice.findOneAndUpdate(
+        {
+          _id: current._id,
+          status: "paid",
+          balanceCredited: false,
+          creditLedgerVersion: { $ne: 2 },
+          legacyReviewAlertedAt: null,
+        },
+        { $set: { legacyReviewAlertedAt: new Date() } },
         { new: true }
       );
-    } catch (err) {
-      // Roll the flag back so the next scan retries.
-      await CryptoInvoice.findOneAndUpdate(
-        { _id: invoice._id, balanceCredited: true },
-        { $set: { balanceCredited: false, balanceCreditedAt: null } }
-      ).catch(() => {});
-      log("error", "Wallet credit failed — Phase-2 flag rolled back", {
-        invoiceId: invoice.invoiceId, error: err.message,
-      });
-      await this.alertAdmin(
-        `❌ <b>شارژ کیف پول ناموفق</b>\n` +
-          `🧾 فاکتور: <code>${invoice.invoiceId}</code>\n` +
-          `👤 کاربر: <code>${invoice.userId}</code>\n` +
-          `💰 مبلغ: <code>${invoice.amount.toLocaleString()}</code> تومان\n` +
-          `خطا: <code>${err.message}</code>`
-      );
+      if (alertClaim) {
+        await this.alertAdmin(
+          `⚠️ <b>فاکتور قدیمی TRX نیازمند تطبیق دستی است</b>\n` +
+            `🧾 فاکتور: <code>${current.invoiceId}</code>\n` +
+            `👤 کاربر: <code>${current.userId}</code>\n` +
+            `برای جلوگیری از شارژ تکراری، بازیابی خودکار انجام نشد.`
+        );
+      }
+      log("error", "Legacy TRX credit requires manual reconciliation", { invoiceId: current.invoiceId });
       return false;
     }
 
-    if (!user) {
-      log("warn", "User not found for wallet credit", {
-        invoiceId: invoice.invoiceId, userId: invoice.userId,
-      });
-      await this.alertAdmin(
-        `⚠️ <b>کاربر یافت نشد — موجودی اضافه نشد</b>\n` +
-          `🧾 فاکتور: <code>${invoice.invoiceId}</code>\n` +
-          `👤 کاربر: <code>${invoice.userId}</code>\n` +
-          `💰 مبلغ: <code>${invoice.amount.toLocaleString()}</code> تومان`
+    let creditResult = null;
+    if (!current.balanceCredited) {
+      try {
+        creditResult = await creditWalletOnce({
+          telegramId: current.userId,
+          amount: Number(current.amount),
+          creditKey: `trx:${current.invoiceId}`,
+        });
+      } catch (error) {
+        log("error", "Atomic TRX wallet credit failed", {
+          invoiceId: current.invoiceId,
+          errorType: error?.name || "DatabaseError",
+          code: typeof error?.code === "string" || typeof error?.code === "number" ? error.code : undefined,
+        });
+        await this.alertAdmin(
+          `❌ <b>شارژ کیف پول TRX ناموفق</b>\n` +
+            `🧾 فاکتور: <code>${current.invoiceId}</code>\n` +
+            `👤 کاربر: <code>${current.userId}</code>\n` +
+            `لطفاً دیتابیس و فاکتور را بررسی کنید.`
+        );
+        return false;
+      }
+
+      if (!creditResult.user) {
+        log("error", "TRX wallet owner not found", { invoiceId: current.invoiceId, userId: current.userId });
+        await this.alertAdmin(
+          `⚠️ <b>کاربر پرداخت TRX یافت نشد</b>\n` +
+            `🧾 فاکتور: <code>${current.invoiceId}</code>\n` +
+            `👤 کاربر: <code>${current.userId}</code>\n` +
+            `💰 مبلغ: <code>${Number(current.amount).toLocaleString("en-US")}</code> تومان`
+        );
+        return false;
+      }
+
+      const finalized = await CryptoInvoice.findOneAndUpdate(
+        { _id: current._id, status: "paid", creditLedgerVersion: 2, balanceCredited: false },
+        { $set: { balanceCredited: true, balanceCreditedAt: new Date(), notificationPending: true } },
+        { new: true }
       );
+      if (finalized) {
+        current = finalized.toObject ? finalized.toObject() : finalized;
+      } else {
+        current = await CryptoInvoice.findById(current._id).lean();
+        if (!current?.balanceCredited) {
+          log("error", "TRX balance was durably credited but invoice flag is pending", { invoiceId: invoice.invoiceId });
+          return false;
+        }
+      }
+      log("info", "TRX wallet credit ledger committed", {
+        invoiceId: current.invoiceId,
+        userId: current.userId,
+        amount: current.amount,
+        newlyCredited: creditResult.credited,
+      });
+    } else {
+      creditResult = {
+        user: await User.findOne({ telegramId: String(current.userId) }).select("balance").lean(),
+        credited: false,
+        alreadyCredited: true,
+      };
     }
 
-    log("info", "WALLET_CREDITED", {
-      invoiceId: invoice.invoiceId,
-      userId: invoice.userId,
-      amount: invoice.amount,
-      newBalance: user?.balance ?? null,
-    });
-
-    await this.sendPaymentConfirmation(invoice, tx, user?.balance ?? null);
+    if (current.notificationPending) {
+      await this.sendPaymentConfirmation(current, tx, creditResult?.user?.balance ?? null);
+    }
     return true;
   }
 
@@ -524,9 +593,19 @@ class TRXWalletScanner {
    */
   async recoverStuckInvoices() {
     try {
-      const stuck = await CryptoInvoice.find({ status: "paid", balanceCredited: false })
-        .limit(RECOVERY_BATCH_SIZE)
-        .lean();
+      const stuck = await CryptoInvoice.find({
+        status: "paid",
+        creditLedgerVersion: 2,
+        $or: [{ balanceCredited: false }, { notificationPending: true }],
+      }).limit(RECOVERY_BATCH_SIZE).lean();
+
+      const legacy = await CryptoInvoice.find({
+        status: "paid",
+        balanceCredited: false,
+        creditLedgerVersion: { $ne: 2 },
+        legacyReviewAlertedAt: null,
+      }).limit(RECOVERY_BATCH_SIZE).lean();
+      for (const invoice of legacy) await this.creditAndNotify(invoice, { hash: invoice.transactionHash || "manual_review" });
 
       if (stuck.length === 0) return 0;
 
@@ -539,7 +618,7 @@ class TRXWalletScanner {
       }
       return recovered;
     } catch (err) {
-      log("error", "Recovery sweep failed", { error: err.message });
+      log("error", "Recovery sweep failed", { errorType: err?.name || "DatabaseError" });
       return 0;
     }
   }
@@ -553,34 +632,48 @@ class TRXWalletScanner {
         parse_mode: "HTML",
       });
     } catch (e) {
-      log("warn", "Admin alert failed", { error: e.message });
+      log("warn", "Admin alert failed", { errorType: e?.name || "TelegramError" });
     }
   }
 
   async sendPaymentConfirmation(invoice, tx, newBalance) {
-    if (!this.botInstance) return;
+    if (!this.botInstance) return false;
+    const now = new Date();
+    const staleClaim = new Date(now.getTime() - 5 * 60_000);
+    const claim = await CryptoInvoice.findOneAndUpdate(
+      {
+        _id: invoice._id,
+        status: "paid",
+        balanceCredited: true,
+        creditLedgerVersion: 2,
+        notificationPending: true,
+        $or: [
+          { notificationClaimedAt: null },
+          { notificationClaimedAt: { $lt: staleClaim } },
+        ],
+      },
+      { $set: { notificationClaimedAt: now } },
+      { new: true }
+    );
+    if (!claim) return false;
 
-    const userId = invoice.userId;
-
-    // Remove the wallet-instructions message if we still know its id.
+    const userId = claim.userId;
     try {
       const session = await getSession(userId);
       if (session?.walletMessageId) {
-        await this.botInstance.deleteMessage(userId, session.walletMessageId);
+        await this.botInstance.deleteMessage(userId, session.walletMessageId).catch(() => {});
       }
     } catch { /* non-fatal */ }
 
-    const balanceLine =
-      newBalance !== null && newBalance !== undefined
-        ? `💳 <b>موجودی جدید:</b> <code>${Number(newBalance).toLocaleString("en-US")}</code> تومان\n`
-        : "";
-
+    const balanceLine = newBalance !== null && newBalance !== undefined
+      ? `💳 <b>موجودی جدید:</b> <code>${Number(newBalance).toLocaleString("en-US")}</code> تومان\n`
+      : "";
     const message =
       `🎉 <b>پرداخت شما تایید شد!</b>\n\n` +
-      `🧾 <b>فاکتور:</b> <code>${invoice.invoiceId}</code>\n` +
-      `💰 <b>مبلغ:</b> <code>${invoice.amount.toLocaleString("en-US")}</code> تومان\n` +
-      `🪙 <b>مبلغ TRX:</b> <code>${Number(invoice.cryptoAmount).toFixed(6)}</code> TRX\n` +
-      `🔗 <b>هش تراکنش:</b> <code>${tx.hash}</code>\n` +
+      `🧾 <b>فاکتور:</b> <code>${claim.invoiceId}</code>\n` +
+      `💰 <b>مبلغ:</b> <code>${Number(claim.amount).toLocaleString("en-US")}</code> تومان\n` +
+      `🪙 <b>مبلغ TRX:</b> <code>${Number(claim.cryptoAmount).toFixed(6)}</code> TRX\n` +
+      `🔗 <b>هش تراکنش:</b> <code>${String(tx?.hash || claim.transactionHash || "").replace(/[^A-Fa-f0-9_]/g, "")}</code>\n` +
       balanceLine +
       `\n⏰ <b>زمان تایید:</b> ${new Date().toLocaleString("fa-IR")}`;
 
@@ -588,15 +681,21 @@ class TRXWalletScanner {
       await this.botInstance.sendMessage(userId, message, {
         parse_mode: "HTML",
         reply_markup: {
-          inline_keyboard: [
-            [{ text: "🏠 بازگشت به منوی اصلی", callback_data: "back_to_home" }],
-          ],
+          inline_keyboard: [[{ text: "🏠 بازگشت به منوی اصلی", callback_data: "back_to_home" }]],
         },
       });
-    } catch (e) {
-      log("warn", "User confirmation failed (non-fatal)", {
-        userId, invoiceId: invoice.invoiceId, error: e.message,
+      await CryptoInvoice.findOneAndUpdate(
+        { _id: claim._id, notificationClaimedAt: now, notificationPending: true },
+        { $set: { notificationPending: false, notifiedAt: new Date() }, $unset: { notificationClaimedAt: 1 } }
+      );
+      return true;
+    } catch (error) {
+      // A stale claim is retried after five minutes; immediate retries could
+      // duplicate a Telegram notification accepted before a network timeout.
+      log("warn", "TRX user notification failed; retry delayed", {
+        invoiceId: claim.invoiceId, errorType: error?.name || "TelegramError",
       });
+      return false;
     }
   }
 
@@ -632,7 +731,7 @@ class TRXWalletScanner {
       );
     } catch (e) {
       log("warn", "User rejection notice failed (non-fatal)", {
-        userId, invoiceId: invoice.invoiceId, error: e.message,
+        userId, invoiceId: invoice.invoiceId, errorType: e?.name || "TelegramError",
       });
     }
   }

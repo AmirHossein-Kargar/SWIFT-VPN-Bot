@@ -11,29 +11,30 @@ import crypto from "node:crypto";
 import { connectTestDB, disconnectTestDB } from "../helpers/db.js";
 import { waitFor } from "../helpers/util.js";
 
-process.env.HOOSHPAY_WEBHOOK_SECRET = "integration-webhook-secret";
+process.env.HOOSHPAY_WEBHOOK_SECRET = "integration-webhook-secret-for-test-only-0123456789";
 process.env.GROUP_ID = ""; // disable Telegram admin alerts
 
-const dbAvailable = await connectTestDB();
+let HooshPayInvoice, User, dbAvailable, server, baseUrl;
+const app = (await import("../../server.js")).default;
+server = app.listen(0, "127.0.0.1");
+await new Promise((resolve, reject) => {
+  server.once("listening", resolve);
+  server.once("error", reject);
+});
+baseUrl = `http://127.0.0.1:${server.address().port}`;
 
-let HooshPayInvoice, User, server, baseUrl;
-
+// Start the real HTTP service before attempting MongoDB. The liveness and
+// signature-rejection cases below must remain runnable when the test DB is down.
+dbAvailable = await connectTestDB();
 if (dbAvailable) {
   ({ default: HooshPayInvoice } = await import("../../models/HooshPayInvoice.js"));
   ({ default: User } = await import("../../models/User.js"));
-  const app = (await import("../../server.js")).default;
-  server = app.listen(0);
-  await new Promise((r) => server.once("listening", r));
-  baseUrl = `http://127.0.0.1:${server.address().port}`;
 }
 
 after(async () => {
   if (server) await new Promise((r) => server.close(r));
   await disconnectTestDB();
 });
-
-const opts = (name) => (dbAvailable ? name : `${name} [skip: no MongoDB]`);
-const skip = () => (dbAvailable ? false : "MongoDB not reachable");
 
 const SECRET = process.env.HOOSHPAY_WEBHOOK_SECRET;
 
@@ -86,12 +87,29 @@ const paidPayload = (invoice) => ({
 });
 
 describe("Express endpoints", () => {
-  test("/health returns 200 without a database", async () => {
-    const res = await fetch(`${baseUrl}/health`);
-    assert.equal(res.status, 200);
-    const body = await res.json();
+  test("/health and /livez return 200 without a database", async () => {
+    const health = await fetch(`${baseUrl}/health`);
+    assert.equal(health.status, 200);
+    const body = await health.json();
     assert.equal(body.ok, true);
     assert.ok(body.ts);
+
+    const live = await fetch(`${baseUrl}/livez`);
+    assert.equal(live.status, 200);
+  });
+
+  test("/ready reports dependency state without querying MongoDB", async () => {
+    const res = await fetch(`${baseUrl}/ready`);
+    assert.equal(res.status, 503);
+    const body = await res.json();
+    assert.equal(body.ready, false);
+    assert.equal(body.dependencies.mongo, dbAvailable);
+  });
+
+  test("unsigned and invalid-signature webhooks are rejected before database access", async () => {
+    const body = { event: "payment.success", invoice: "inv_http_probe", status: "paid", amount: 10 };
+    assert.equal(await postWebhook(body), 401);
+    assert.equal(await postWebhook(body, { signature: "0".repeat(64) }), 401);
   });
 
   test("unknown routes 404", async () => {
@@ -112,7 +130,7 @@ describe("Express endpoints", () => {
 });
 
 describe("HooshPay webhook — signature & body handling", () => {
-  test(opts("a validly signed webhook is parsed and credited exactly once"), skip(), async () => {
+  test("a validly signed webhook is parsed and credited exactly once", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const invoice = await seedInvoice({ telegramId: "3001", amount: 50000 });
     const body = paidPayload(invoice);
 
@@ -130,7 +148,7 @@ describe("HooshPay webhook — signature & body handling", () => {
     assert.equal(stored.balanceCredited, true);
   });
 
-  test(opts("a webhook with an invalid signature never credits"), skip(), async () => {
+  test("a webhook with an invalid signature never credits", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const invoice = await seedInvoice({ telegramId: "3002", amount: 60000 });
     const body = paidPayload(invoice);
 
@@ -141,7 +159,7 @@ describe("HooshPay webhook — signature & body handling", () => {
     assert.equal(user.balance, 0, "invalid signature => no credit");
   });
 
-  test(opts("a webhook with no signature header never credits"), skip(), async () => {
+  test("a webhook with no signature header never credits", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const invoice = await seedInvoice({ telegramId: "3003", amount: 60000 });
     await postWebhook(paidPayload(invoice), {});
     await new Promise((r) => setTimeout(r, 500));
@@ -150,7 +168,7 @@ describe("HooshPay webhook — signature & body handling", () => {
     assert.equal(user.balance, 0);
   });
 
-  test(opts("a webhook with a wrong amount never credits"), skip(), async () => {
+  test("a webhook with a wrong amount never credits", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const invoice = await seedInvoice({ telegramId: "3004", amount: 60000 });
     const body = { ...paidPayload(invoice), amount: 1 };
 
@@ -164,7 +182,7 @@ describe("HooshPay webhook — signature & body handling", () => {
     assert.equal(stored.status, "pending", "invoice left untouched");
   });
 
-  test(opts("an unknown invoice is acknowledged without error"), skip(), async () => {
+  test("an unknown invoice is acknowledged without error", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const body = {
       event: "payment.success",
       invoice: "inv_does_not_exist",
@@ -173,10 +191,10 @@ describe("HooshPay webhook — signature & body handling", () => {
       amount: 1000,
     };
     const status = await postWebhook(body, { signature: sign(body) });
-    assert.equal(status, 200);
+    assert.equal(status, 404);
   });
 
-  test(opts("10 CONCURRENT identical webhooks credit exactly once"), skip(), async () => {
+  test("10 CONCURRENT identical webhooks credit exactly once", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const invoice = await seedInvoice({ telegramId: "3005", amount: 90000 });
     const body = paidPayload(invoice);
     const sig = sign(body);
@@ -197,7 +215,7 @@ describe("HooshPay webhook — signature & body handling", () => {
     assert.equal(user.successfulPayments, 1);
   });
 
-  test(opts("a paid webhook for a REVERSED invoice is ignored"), skip(), async () => {
+  test("a paid webhook for a REVERSED invoice is ignored", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const invoice = await seedInvoice({ telegramId: "3006", amount: 70000, status: "paid" });
     await HooshPayInvoice.findByIdAndUpdate(invoice._id, { $set: { status: "reversed" } });
 
@@ -209,7 +227,7 @@ describe("HooshPay webhook — signature & body handling", () => {
     assert.equal(user.balance, 0, "refunded invoices must never be credited again");
   });
 
-  test(opts("a reversal webhook moves paid -> reversed and never credits"), skip(), async () => {
+  test("a reversal webhook moves paid -> reversed and never credits", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const invoice = await seedInvoice({ telegramId: "3007", amount: 45000, status: "paid" });
     await HooshPayInvoice.findByIdAndUpdate(invoice._id, {
       $set: { fulfilled: true, balanceCredited: true, status: "paid" },
@@ -228,7 +246,7 @@ describe("HooshPay webhook — signature & body handling", () => {
     assert.equal(user.balance, 0, "reversal does not credit");
   });
 
-  test(opts("a late payment on an expired invoice IS credited (funds confirmed by gateway)"), skip(), async () => {
+  test("a late payment on an expired invoice IS credited (funds confirmed by gateway)", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const invoice = await seedInvoice({ telegramId: "3008", amount: 20000, status: "expired" });
     const body = paidPayload(invoice);
 

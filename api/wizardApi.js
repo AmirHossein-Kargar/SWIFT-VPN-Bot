@@ -1,218 +1,151 @@
 import axios from "axios";
 
-// * Base URL for the Wizard API, loaded from environment variables
-const BASE_URL = process.env.WIZARD_API_URL;
+const TIMEOUT_MS = 15_000;
+const MAX_BODY_BYTES = 1_048_576;
 
-/**
- * * Create a new VPN service.
- * @param {number} gig - Amount of data in gigabytes.
- * @param {number} day - Number of days for the service.
- * @param {number} [test=0] - Set to 1 for test service, 0 for normal.
- * @returns {Promise<Object>} - API response data.
- */
+export class WizardApiError extends Error {
+  constructor(operation, { status, code, ambiguous = false } = {}) {
+    super(`Wizard panel ${operation} failed${Number.isInteger(status) ? ` (HTTP ${status})` : ""}`);
+    this.name = "WizardApiError";
+    this.status = status;
+    this.code = typeof code === "string" ? code : undefined;
+    this.ambiguous = Boolean(ambiguous);
+  }
+}
+
+function getClient() {
+  const baseURL = process.env.WIZARD_API_URL?.trim();
+  const apiKey = process.env.VPN_API_KEY;
+  if (!baseURL) throw new Error("WIZARD_API_URL is not configured");
+  if (!apiKey) throw new Error("VPN_API_KEY is not configured");
+
+  let parsed;
+  try { parsed = new URL(baseURL); } catch { throw new Error("WIZARD_API_URL is invalid"); }
+  const localDevelopment = process.env.NODE_ENV !== "production" && parsed.protocol === "http:" && ["127.0.0.1", "localhost", "::1"].includes(parsed.hostname);
+  if ((!localDevelopment && parsed.protocol !== "https:") || !parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error("WIZARD_API_URL must be HTTPS and must not contain credentials, a query, or a fragment");
+  }
+
+  return axios.create({
+    baseURL: baseURL.replace(/\/+$/, ""),
+    timeout: TIMEOUT_MS,
+    maxContentLength: MAX_BODY_BYTES,
+    maxBodyLength: MAX_BODY_BYTES,
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Bearer ${apiKey}`,
+      Accept: "application/json",
+    },
+  });
+}
+
+function safeError(operation, error, { mutation = false } = {}) {
+  const status = Number.isInteger(error?.response?.status) ? error.response.status : undefined;
+  const code = typeof error?.code === "string" ? error.code : undefined;
+  return new WizardApiError(operation, {
+    status,
+    code,
+    ambiguous: mutation && (!status || status >= 500),
+  });
+}
+
+async function request(operation, method, path, form, { mutation = false } = {}) {
+  const client = getClient();
+  try {
+    const response = await client.request({
+      method,
+      url: path,
+      data: form ? form.toString() : undefined,
+    });
+    const body = response.data;
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      throw new WizardApiError(operation, {
+        status: response.status,
+        code: "invalid_response",
+        ambiguous: mutation,
+      });
+    }
+    if (body.ok !== true) {
+      throw new WizardApiError(operation, {
+        status: response.status,
+        code: "panel_rejected_request",
+        ambiguous: false,
+      });
+    }
+    return body;
+  } catch (error) {
+    if (error instanceof WizardApiError) throw error;
+    throw safeError(operation, error, { mutation });
+  }
+}
+
+function form(fields) {
+  const data = new URLSearchParams();
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined && value !== null) data.set(key, String(value));
+  }
+  return data;
+}
+
+function requireUsername(username) {
+  if (typeof username !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(username)) {
+    throw new TypeError("A valid VPN service username is required");
+  }
+}
+
+function validatedProvisioningResponse(data, operation) {
+  const result = data?.result;
+  const validHash = typeof result?.hash === "string" && /^[A-Za-z0-9_-]{1,256}$/.test(result.hash);
+  const validSubLink = typeof result?.sub_link === "string" && result.sub_link.length <= 4096 && /^https:\/\//i.test(result.sub_link);
+  try { requireUsername(result?.username); } catch {
+    throw new WizardApiError(operation, { code: "invalid_provisioning_response", ambiguous: true });
+  }
+  if (!validHash && !validSubLink) {
+    throw new WizardApiError(operation, { code: "invalid_provisioning_response", ambiguous: true });
+  }
+  return data;
+}
+
 export async function createVpnService(gig, day, test = 0) {
-  try {
-    // * Prepare form data
-    const params = new URLSearchParams();
-    params.append("gig", gig);
-    params.append("day", day);
-    params.append("test", test);
-
-    // * Send POST request to create service
-    const response = await axios.post(`${BASE_URL}/create`, params.toString(), {
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: `Bearer ${process.env.VPN_API_KEY}`,
-      },
-    });
-
-    return response.data;
-  } catch (error) {
-    // * If API returns an error response, return its data
-    if (error.response) {
-      return error.response.data;
-    }
-    // * Otherwise, throw the error
-    throw error;
+  if (!Number.isSafeInteger(Number(gig)) || Number(gig) <= 0 || !Number.isSafeInteger(Number(day)) || Number(day) <= 0) {
+    throw new TypeError("gig and day must be positive integers");
   }
+  if (![0, 1].includes(Number(test))) throw new TypeError("test must be 0 or 1");
+  const data = await request("service creation", "POST", "/create", form({ gig, day, test }), { mutation: true });
+  return validatedProvisioningResponse(data, "service creation");
 }
 
-/**
- * * Find a VPN service by username.
- * @param {string} username - The username of the service.
- * @returns {Promise<Object>} - API response data.
- */
 export async function findService(username) {
-  try {
-    const params = new URLSearchParams();
-    params.append("username", username);
-
-    const response = await axios.post(
-      `${BASE_URL}/find`,
-      params.toString(),
-      {
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Authorization: `Bearer ${process.env.VPN_API_KEY}`,
-        },
-      }
-    );
-
-    if (response && response.data) {
-      return response.data;
-    } else {
-      // Silent error: return undefined if no data
-      return undefined;
-    }
-  } catch (error) {
-    // Silent error: return undefined on any error
-    return undefined;
-  }
+  requireUsername(username);
+  return request("service lookup", "POST", "/find", form({ username }));
 }
 
-/**
- * * Create a test VPN service.
- * @returns {Promise<Object>} - API response data.
- */
 export async function createTestService() {
-  try {
-    // * Prepare form data for test service
-    const params = new URLSearchParams();
-    params.append("test", "1");
-
-    // * Send POST request to create test service
-    const response = await axios.post(`${BASE_URL}/create`, params.toString(), {
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: `Bearer ${process.env.VPN_API_KEY}`,
-      },
-    });
-
-    return response.data;
-  } catch (error) {
-    // * If API returns an error response, return its data
-    if (error.response) {
-      return error.response.data;
-    }
-    throw error;
-  }
+  const data = await request("test service creation", "POST", "/create", form({ test: 1 }), { mutation: true });
+  return validatedProvisioningResponse(data, "test service creation");
 }
 
-/**
- * * Change the link for a VPN service.
- * @param {string} username - The username of the service.
- * @returns {Promise<Object>} - API response data.
- */
 export async function changeLinkService(username) {
-  try {
-    // * Prepare form data
-    const params = new URLSearchParams();
-    params.append("username", username);
-
-    // * Send POST request to change the service link
-    const response = await axios.post(
-      `${BASE_URL}/change_link`,
-      params.toString(),
-      {
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Authorization: `Bearer ${process.env.VPN_API_KEY}`,
-        },
-      }
-    );
-
-    return response.data;
-  } catch (error) {
-    // * Log error details for debugging
-    console.error("Error in changeLinkService:", error.message);
-    if (error.response) {
-      console.error("API Error response:", error.response.data);
-      return error.response.data;
-    }
-    throw error;
-  }
+  requireUsername(username);
+  return request("link change", "POST", "/change_link", form({ username }), { mutation: true });
 }
 
-// * Delete Service
-
-/**
- * * Delete a VPN service.
- * @param {string} username - The username of the service to delete.
- * @returns {Promise<Object>} - API response data.
- */
 export async function deleteService(username) {
-  try {
-    // * Prepare form data
-    const params = new URLSearchParams();
-    params.append("username", username);
-
-    // * Send POST request to delete the service
-    const response = await axios.post(`${BASE_URL}/delsvc`, params.toString(), {
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: `Bearer ${process.env.VPN_API_KEY}`,
-      },
-    });
-    return response.data;
-  } catch (error) {
-    // * If API returns an error response, return its data
-    if (error.response) {
-      return error.response.data;
-    }
-    throw error;
-  }
+  requireUsername(username);
+  return request("service deletion", "POST", "/delsvc", form({ username }), { mutation: true });
 }
 
-// * Deactivate Service
-
-/**
- * * Deactivate (reverse mode) a VPN service.
- * @param {string} username - The username of the service to deactivate.
- * @returns {Promise<Object>} - API response data.
- */
 export async function deactiveService(username) {
-  try {
-    // * Prepare form data
-    const params = new URLSearchParams();
-    params.append("username", username);
-
-    // * Send POST request to deactivate the service
-    const response = await axios.post(
-      `${BASE_URL}/reverse_mode`,
-      params.toString(),
-      {
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Authorization: `Bearer ${process.env.VPN_API_KEY}`,
-        },
-      }
-    );
-    return response.data;
-  } catch (error) {
-    // * If API returns an error response, return its data
-    if (error.response) {
-      return error.response.data;
-    }
-  }
+  requireUsername(username);
+  return request("service mode change", "POST", "/reverse_mode", form({ username }), { mutation: true });
 }
 
-// * Status
-// NOTE: upgradeServiceTime / upgradeServiceData were removed — the bot UI
-// intentionally disables plan extension ("این آپشن در حال حاضر غیرفعال است")
-// and nothing in the codebase imported them.
 export async function StatusApi() {
-  try {
-    const response = await axios.get(`${BASE_URL}/status`, {
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: `Bearer ${process.env.VPN_API_KEY}`,
-      },
-    });
-    return response.data;
-  } catch (error) {
-    if (error.response) {
-      return error.response.data;
-    }
-    throw error;
+  const data = await request("status lookup", "GET", "/status");
+  const perGb = Number(data.result?.per_gb);
+  const perDay = Number(data.result?.per_day);
+  if (!Number.isFinite(perGb) || perGb < 0 || !Number.isFinite(perDay) || perDay < 0) {
+    throw new WizardApiError("status lookup", { code: "invalid_price_response" });
   }
+  return data;
 }

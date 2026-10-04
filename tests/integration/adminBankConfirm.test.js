@@ -30,7 +30,6 @@ after(async () => {
   await disconnectTestDB();
 });
 
-const skip = () => (dbAvailable ? false : "MongoDB not reachable");
 
 async function seed(paymentId, { userId = 5001, amount = 50000 } = {}) {
   await User.updateOne(
@@ -52,7 +51,7 @@ function makeQuery({ data, chatId = GROUP_ID, fromId = ADMIN_ID, messageId = 77 
 }
 
 describe("admin bank payment confirmation", () => {
-  test("an admin confirmation credits the wallet once", skip(), async () => {
+  test("an admin confirmation credits the wallet once", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const inv = await seed("PAYOK01", { userId: 5101, amount: 50000 });
     const bot = makeBotStub();
 
@@ -67,7 +66,7 @@ describe("admin bank payment confirmation", () => {
     assert.equal(stored.confirmedBy, String(ADMIN_ID));
   });
 
-  test("a rapid DOUBLE-CLICK credits the wallet only once", skip(), async () => {
+  test("a rapid DOUBLE-CLICK credits the wallet only once", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const inv = await seed("PAYDBL01", { userId: 5102, amount: 70000 });
     const bot = makeBotStub();
     const data = `confirm_payment_5102_70,000_${inv.paymentId}`;
@@ -81,7 +80,7 @@ describe("admin bank payment confirmation", () => {
     assert.equal(user.successfulPayments, 1);
   });
 
-  test("5 CONCURRENT confirmations credit the wallet only once", skip(), async () => {
+  test("5 CONCURRENT confirmations credit the wallet only once", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const inv = await seed("PAYCONC01", { userId: 5103, amount: 91000 });
     const bot = makeBotStub();
     const data = `confirm_payment_5103_91,000_${inv.paymentId}`;
@@ -94,7 +93,7 @@ describe("admin bank payment confirmation", () => {
     assert.equal(user.balance, 91000, "exactly one credit under concurrency");
   });
 
-  test("a NON-ADMIN cannot confirm a payment", skip(), async () => {
+  test("a NON-ADMIN cannot confirm a payment", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const inv = await seed("PAYNONADM", { userId: 5104, amount: 88000 });
     const bot = makeBotStub();
 
@@ -110,7 +109,7 @@ describe("admin bank payment confirmation", () => {
     assert.equal(stored.status, "waiting_for_approval", "invoice untouched");
   });
 
-  test("an admin clicking OUTSIDE the admin group is rejected (forged/forwarded callback)", skip(), async () => {
+  test("an admin clicking OUTSIDE the admin group is rejected (forged/forwarded callback)", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const inv = await seed("PAYFORGE", { userId: 5105, amount: 64000 });
     const bot = makeBotStub();
 
@@ -123,7 +122,7 @@ describe("admin bank payment confirmation", () => {
     assert.equal(user.balance, 0, "admin identity alone is not enough outside the group");
   });
 
-  test("the credited amount comes from the DB, not from callback_data", skip(), async () => {
+  test("the credited amount comes from the DB, not from callback_data", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const inv = await seed("PAYTAMPER", { userId: 5106, amount: 30000 });
     const bot = makeBotStub();
 
@@ -137,7 +136,7 @@ describe("admin bank payment confirmation", () => {
     assert.equal(user.balance, 30000, "only the persisted invoice amount is credited");
   });
 
-  test("confirming an unknown payment id does not credit anyone", skip(), async () => {
+  test("confirming an unknown payment id does not credit anyone", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const bot = makeBotStub();
 
     await handleCallbackQuery(
@@ -151,7 +150,7 @@ describe("admin bank payment confirmation", () => {
 });
 
 describe("admin bank payment rejection", () => {
-  test("a non-admin cannot reject a payment", skip(), async () => {
+  test("a non-admin cannot reject a payment", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const inv = await seed("PAYREJ01", { userId: 5201, amount: 40000 });
     const bot = makeBotStub();
 
@@ -164,14 +163,16 @@ describe("admin bank payment rejection", () => {
     assert.ok(stored, "invoice still present — rejection was denied");
   });
 
-  test("an admin rejection removes the invoice and notifies the user", skip(), async () => {
+  test("an admin rejection records an audit status and notifies the user", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const inv = await seed("PAYREJ02", { userId: 5202, amount: 40000 });
     const bot = makeBotStub();
 
     await handleCallbackQuery(bot, makeQuery({ data: `reject_payment_${inv.paymentId}_5202` }));
 
     const stored = await invoiceModel.findOne({ paymentId: inv.paymentId });
-    assert.equal(stored, null, "invoice deleted");
+    assert.equal(stored.status, "rejected", "invoice remains for an audit trail");
+    assert.equal(stored.rejectedBy, String(ADMIN_ID));
+    assert.ok(stored.rejectedAt);
 
     const user = await User.findOne({ telegramId: "5202" });
     assert.equal(user.balance, 0, "rejection never credits");

@@ -1,33 +1,18 @@
-/**
- * hooshpayRecoveryCron
- * --------------------
- * Runs every 5 minutes. Safe under PM2 cluster / multiple bot instances.
- *
- * Distributed safety:
- *   Each run tries to acquire a Redis cron lock (SET NX EX 270).
- *   Only the first worker to acquire the lock runs the cycle.
- *   All others skip cleanly. If Redis is unavailable, all workers skip
- *   (fail-closed for cron — better to skip than double-recover).
- *
- * Scenarios handled:
- *   A) Crash-between-writes: fulfilled=true, balanceCredited=false
- *      → calls fulfillHooshOrder which re-runs Phase 2 atomically
- *   B) Stale pending invoices older than EXPIRY_MINUTES
- *      → marks as "expired"
- *   C) Reconciliation: pending invoices that may have been paid but webhook missed
- *      → queries HooshPay verify API for pending invoices older than RECONCILE_MINUTES
- */
 import { randomUUID } from "node:crypto";
 import HooshPayInvoice from "../../models/HooshPayInvoice.js";
 import { fulfillHooshOrder } from "./fulfillHooshOrder.js";
-import { acquireCronLock } from "./verifyLock.js";
+import { acquireCronLock, releaseCronLock } from "./verifyLock.js";
+import { startRedisLeaseHeartbeat } from "../redisLease.js";
 import { verifyInvoice as apiVerify } from "./hooshpayClient.js";
+import { recoverWalletPurchases } from "../buyService/purchaseLedger.js";
+import { recoverTestServiceAttempts } from "../createTestService.js";
 
-const INTERVAL_MS     = 5 * 60 * 1000;   // 5 minutes
-const EXPIRY_MINUTES  = 35;
-const RECONCILE_MINUTES = 10;             // after 10 min, check pending invoices with HooshPay API
-const BATCH_SIZE      = 50;
-const CRON_JOB_NAME   = "hooshpay-recovery";
+const INTERVAL_MS = 5 * 60_000;
+const EXPIRY_GRACE_MINUTES = 35;
+const RECONCILE_MINUTES = 10;
+const BATCH_SIZE = 50;
+const CRON_JOB_NAME = "hooshpay-recovery";
+const CRON_LOCK_TTL_SECONDS = 900;
 
 function log(level, message, meta = {}) {
   console[level === "error" ? "error" : level === "warn" ? "warn" : "log"](
@@ -35,124 +20,165 @@ function log(level, message, meta = {}) {
   );
 }
 
-let _cronTimer = null;
+let cronTimer = null;
+let activeCycle = false;
 
 export function startHooshpayRecoveryCron(bot) {
-  _runCycle(bot);
-  _cronTimer = setInterval(() => _runCycle(bot), INTERVAL_MS);
-  if (_cronTimer.unref) _cronTimer.unref();
-  log("info", "Recovery + expiry cron started", { pid: process.pid });
+  if (cronTimer) return;
+  void runCycle(bot);
+  cronTimer = setInterval(() => { void runCycle(bot); }, INTERVAL_MS);
+  cronTimer.unref?.();
+  log("info", "Recovery and expiry cron started", { pid: process.pid });
 }
 
-/**
- * Stop the recovery cron — used during graceful shutdown.
- */
 export function stopHooshpayRecoveryCron() {
-  if (_cronTimer) {
-    clearInterval(_cronTimer);
-    _cronTimer = null;
-    log("info", "Recovery + expiry cron stopped", { pid: process.pid });
-  }
+  if (cronTimer) clearInterval(cronTimer);
+  cronTimer = null;
+  log("info", "Recovery and expiry cron stopped", { pid: process.pid });
 }
 
-async function _runCycle(bot) {
-  // ── Distributed lock: only one PM2 worker runs per cycle ─────────────────
-  const won = await acquireCronLock(CRON_JOB_NAME, 270);
-  if (!won) {
-    log("info", "Cron slot taken by another worker — skipping", { pid: process.pid });
+async function runCycle(bot) {
+  if (activeCycle) return;
+  activeCycle = true;
+  const lease = await acquireCronLock(CRON_JOB_NAME, CRON_LOCK_TTL_SECONDS);
+  if (!lease) {
+    activeCycle = false;
     return;
   }
 
   const cycleId = randomUUID();
-  log("info", "Cron cycle started", { cycleId, pid: process.pid });
+  const leaseState = { healthy: true };
+  const stopHeartbeat = startRedisLeaseHeartbeat(lease, {
+    ttlSeconds: CRON_LOCK_TTL_SECONDS,
+    intervalMs: 60_000,
+    onLost: async (error) => {
+      leaseState.healthy = false;
+      log("error", "Cron lease was lost; stopping the current cycle", { cycleId, errorType: error?.name || "RedisError" });
+    },
+  });
 
   try {
-    await _recoverStuckInvoices(bot, cycleId);
-    await _reconcilePendingInvoices(bot, cycleId);
-    await _expireStaleInvoices(cycleId);
-    log("info", "Cron cycle complete", { cycleId });
-  } catch (err) {
-    log("error", "Cron cycle error", { cycleId, error: err.message });
+    await recoverStuckInvoices(bot, cycleId, leaseState);
+    if (leaseState.healthy) await recoverWalletPurchases(bot);
+    if (leaseState.healthy) await recoverTestServiceAttempts(bot);
+    if (leaseState.healthy) await reconcilePendingInvoices(bot, cycleId, leaseState);
+    if (leaseState.healthy) await expireStaleInvoices(cycleId);
+    log("info", "Recovery cycle complete", { cycleId, leaseHealthy: leaseState.healthy });
+  } catch (error) {
+    log("error", "Recovery cycle failed", {
+      cycleId, errorType: error?.name || "Error",
+      code: typeof error?.code === "string" || typeof error?.code === "number" ? error.code : undefined,
+    });
+  } finally {
+    stopHeartbeat();
+    await releaseCronLock(lease);
+    activeCycle = false;
   }
 }
 
-async function _recoverStuckInvoices(bot, cycleId) {
+async function recoverStuckInvoices(bot, cycleId, leaseState) {
   const stuck = await HooshPayInvoice.find({
-    fulfilled: true,
-    balanceCredited: false,
     status: "paid",
-  })
-    .limit(BATCH_SIZE)
-    .lean();
+    $or: [
+      { creditLedgerVersion: 2, balanceCredited: false },
+      { creditLedgerVersion: 2, notificationPending: true },
+    ],
+  }).limit(BATCH_SIZE).lean();
 
-  if (stuck.length === 0) return;
+  if (!stuck.length) return;
+  log("warn", "Recovering HooshPay invoices with versioned wallet ledger or pending notification", {
+    cycleId, count: stuck.length,
+  });
 
-  log("warn", `Found ${stuck.length} stuck invoice(s) — re-running Phase-2`, { cycleId });
-
-  for (const inv of stuck) {
-    const cid = randomUUID();
+  for (const invoice of stuck) {
+    if (!leaseState.healthy) break;
     try {
-      await fulfillHooshOrder({ invoice: inv, bot, chatId: inv.userId, correlationId: cid });
-    } catch (err) {
-      log("error", "Recovery failed for invoice", { cycleId, cid, uid: inv.uid, error: err.message });
-    }
-  }
-}
-
-/**
- * Reconciliation: for pending invoices older than RECONCILE_MINUTES,
- * query the HooshPay verify API to check if the payment was actually made
- * but the webhook was missed.
- */
-async function _reconcilePendingInvoices(bot, cycleId) {
-  const cutoff = new Date(Date.now() - RECONCILE_MINUTES * 60 * 1000);
-  const pending = await HooshPayInvoice.find({
-    status: "pending",
-    createdAt: { $lt: cutoff },
-    fulfilled: false,
-  })
-    .limit(BATCH_SIZE)
-    .lean();
-
-  if (pending.length === 0) return;
-
-  log("info", `Reconciling ${pending.length} pending invoice(s) with HooshPay API`, { cycleId });
-
-  for (const inv of pending) {
-    const cid = randomUUID();
-    try {
-      const verifyResult = await apiVerify(inv.uid);
-      const isPaid = verifyResult?.paid === true || verifyResult?.status === "paid";
-
-      if (isPaid) {
-        log("info", "PAYMENT_RECONCILIATION_STARTED — webhook missed but payment confirmed", {
-          cycleId, cid, uid: inv.uid,
-        });
-
-        // Store tracking code if returned
-        if (verifyResult?.data?.tracking_code) {
-          await HooshPayInvoice.findByIdAndUpdate(inv._id, {
-            $set: { trackingCode: verifyResult.data.tracking_code },
-          });
-        }
-
-        await fulfillHooshOrder({ invoice: inv, bot, chatId: inv.userId, correlationId: cid });
-      }
-    } catch (err) {
-      log("warn", "Reconciliation API call failed for invoice", {
-        cycleId, cid, uid: inv.uid, error: err.message,
+      await fulfillHooshOrder({
+        invoice,
+        bot,
+        chatId: invoice.userId,
+        correlationId: randomUUID(),
+      });
+    } catch (error) {
+      log("error", "Invoice recovery failed", {
+        cycleId, uid: invoice.uid, errorType: error?.name || "Error",
+        code: typeof error?.code === "string" || typeof error?.code === "number" ? error.code : undefined,
       });
     }
   }
 }
 
-async function _expireStaleInvoices(cycleId) {
-  const cutoff = new Date(Date.now() - EXPIRY_MINUTES * 60 * 1000);
+function verifyAmountMatches(invoice, result) {
+  const data = result?.data && typeof result.data === "object" ? result.data : result;
+  if (data?.uid != null && String(data.uid) !== String(invoice.uid)) return false;
+  if (data?.amount != null && (!Number.isSafeInteger(Number(data.amount)) || Number(data.amount) !== Number(invoice.amount))) return false;
+  if (data?.merchant_credit != null && invoice.merchantCredit != null && Number(data.merchant_credit) !== Number(invoice.merchantCredit)) return false;
+  return true;
+}
+
+async function reconcilePendingInvoices(bot, cycleId, leaseState) {
+  const cutoff = new Date(Date.now() - RECONCILE_MINUTES * 60_000);
+  const pending = await HooshPayInvoice.find({
+    status: "pending",
+    createdAt: { $lt: cutoff },
+    fulfilled: false,
+  }).sort({ createdAt: 1 }).limit(BATCH_SIZE).lean();
+  if (!pending.length) return;
+
+  log("info", "Reconciling pending HooshPay invoices", { cycleId, count: pending.length });
+  for (const invoice of pending) {
+    if (!leaseState.healthy) break;
+    try {
+      const result = await apiVerify(invoice.uid);
+      const status = String(result.status ?? result.data?.status ?? "").toLowerCase();
+      const paid = result.paid === true || status === "paid";
+      if (paid) {
+        if (!verifyAmountMatches(invoice, result)) {
+          log("error", "HooshPay verification did not match local invoice", { cycleId, uid: invoice.uid });
+          continue;
+        }
+        const trackingCode = result.data?.tracking_code ?? result.tracking_code;
+        if (typeof trackingCode === "string" && trackingCode.length <= 128) {
+          await HooshPayInvoice.findOneAndUpdate(
+            { _id: invoice._id, status: "pending", fulfilled: false },
+            { $set: { trackingCode } }
+          );
+        }
+        await fulfillHooshOrder({
+          invoice,
+          bot,
+          chatId: invoice.userId,
+          correlationId: randomUUID(),
+          paidAt: result.data?.paid_at ?? result.paid_at,
+        });
+      } else if (["expired", "cancelled", "failed"].includes(status)) {
+        await HooshPayInvoice.findOneAndUpdate(
+          { _id: invoice._id, status: "pending", fulfilled: false },
+          { $set: { status } }
+        );
+      }
+    } catch (error) {
+      log("warn", "Pending invoice verification failed", {
+        cycleId, uid: invoice.uid, errorType: error?.name || "HooshPayApiError",
+        code: typeof error?.code === "string" || typeof error?.code === "number" ? error.code : undefined,
+      });
+    }
+  }
+}
+
+async function expireStaleInvoices(cycleId) {
+  const now = new Date();
+  const createdCutoff = new Date(now.getTime() - EXPIRY_GRACE_MINUTES * 60_000);
   const result = await HooshPayInvoice.updateMany(
-    { status: "pending", createdAt: { $lt: cutoff } },
+    {
+      status: "pending",
+      fulfilled: false,
+      $or: [
+        { expiresAt: { $lte: now } },
+        { expiresAt: null, createdAt: { $lt: createdCutoff } },
+      ],
+    },
     { $set: { status: "expired" } }
   );
-  if (result.modifiedCount > 0) {
-    log("info", `Expired ${result.modifiedCount} stale pending invoice(s)`, { cycleId });
-  }
+  if (result.modifiedCount) log("info", "Expired stale HooshPay invoices", { cycleId, count: result.modifiedCount });
 }

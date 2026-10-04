@@ -10,7 +10,7 @@
  *     a UX convenience, never a source of financial truth, so a Redis outage
  *     must not crash a message handler.
  */
-import client from "./redisClient.js";
+import client, { isRedisReady } from "./redisClient.js";
 
 const prefix = "session:";
 
@@ -23,13 +23,14 @@ const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
  * @returns {Promise<object>} session object, or {} when absent/unavailable
  */
 export const getSession = async (userId) => {
+  if (!client || !isRedisReady()) return {};
   try {
     const data = await client.get(prefix + userId);
     if (!data) return {};
     const parsed = JSON.parse(data);
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch (err) {
-    console.warn(`[sessionStore] getSession failed (${err.message}) — continuing with empty session`);
+    console.warn(`[sessionStore] getSession failed (${err?.name || "RedisError"}) — continuing with empty session`);
     return {};
   }
 };
@@ -40,12 +41,13 @@ export const getSession = async (userId) => {
  * @returns {Promise<void>}
  */
 export const setSession = async (userId, sessionData) => {
+  if (!client || !isRedisReady()) return;
   try {
     await client.set(prefix + userId, JSON.stringify(sessionData), {
       EX: SESSION_TTL_SECONDS,
     });
   } catch (err) {
-    console.warn(`[sessionStore] setSession failed (${err.message}) — session not persisted`);
+    console.warn(`[sessionStore] setSession failed (${err?.name || "RedisError"}) — session not persisted`);
   }
 };
 
@@ -54,10 +56,11 @@ export const setSession = async (userId, sessionData) => {
  * @returns {Promise<void>}
  */
 export const clearSession = async (userId) => {
+  if (!client || !isRedisReady()) return;
   try {
     await client.del(prefix + userId);
   } catch (err) {
-    console.warn(`[sessionStore] clearSession failed (${err.message})`);
+    console.warn(`[sessionStore] clearSession failed (${err?.name || "RedisError"})`);
   }
 };
 

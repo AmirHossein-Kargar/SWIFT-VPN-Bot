@@ -85,10 +85,11 @@ describe("HooshPay signature verification (real implementation)", () => {
     assert.equal(verifyHooshPaySignature("string", "ab", SECRET), false);
   });
 
-  test("canonicalPayload sorts nested keys recursively", () => {
+  test("canonicalPayload sorts top-level keys and preserves nested object order", () => {
     const a = { card: { number: "6037", bank: "x" }, amount: 100 };
     const b = { amount: 100, card: { bank: "x", number: "6037" } };
-    assert.equal(canonicalPayload(a), canonicalPayload(b));
+    assert.notEqual(canonicalPayload(a), canonicalPayload(b), "PHP ksort applies to top-level keys only");
+    assert.equal(canonicalPayload(a), '{"amount":100,"card":{"number":"6037","bank":"x"}}');
     assert.equal(canonicalPayload({ b: 1, a: 2 }), '{"a":2,"b":1}');
   });
 

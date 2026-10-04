@@ -43,6 +43,7 @@ import payTrx from "../paymentHandlers/payTrx.js";
 import { sendTrxWallet } from "../paymentHandlers/handleTrxAmount.js";
 import { payHoosh } from "../paymentHandlers/payHoosh.js";
 import { verifyHooshPayment } from "../services/hooshpay/verifyHooshPayment.js";
+import { confirmBankPayment } from "../services/payments/confirmBankPayment.js";
 import { isAdmin } from "../utils/auth.js";
 
 // ─── Authorization helpers ─────────────────────────────────────────────────
@@ -663,109 +664,69 @@ const handleCallbackQuery = async (bot, query) => {
   // ── Dynamic callback handlers (startsWith) ─────────────────────────────────
 
   if (data.startsWith("confirm_payment_")) {
-    // ADMIN ONLY — this callback moves real money into a wallet.
     if (!isAdmin(chatId, userId)) { await denyAdmin(bot, query.id); return; }
 
-    const parts = data.split("_");
-    if (parts.length < 5) return;
-    const paymentId = parts[4];
-
+    // New callbacks contain only the invoice ID. Older receipt messages also
+    // included an untrusted user ID and amount, so retain compatibility by
+    // reading just the last field and ignoring the rest.
+    const encoded = data.slice("confirm_payment_".length);
+    const paymentId = encoded.includes("_") ? encoded.slice(encoded.lastIndexOf("_") + 1) : encoded;
     try {
-      // ── Atomic claim ────────────────────────────────────────────────────
-      // Only the first click can move the invoice into "confirmed". A rapid
-      // double-click (or a replayed callback) finds status already confirmed
-      // and is rejected, so the wallet can never be credited twice.
-      const claimed = await invoice.findOneAndUpdate(
-        { paymentId, status: { $ne: "confirmed" } },
-        { $set: { status: "confirmed", confirmedAt: new Date(), confirmedBy: String(userId) } },
-        { new: true }
-      );
-
-      if (!claimed) {
-        await bot.answerCallbackQuery(query.id, {
-          text: "⚠️ این پرداخت قبلاً تایید شده است",
-          show_alert: true,
-        });
-        await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId }).catch(() => {});
-        return;
-      }
-
-      // ── Amount and recipient come from the persisted invoice ────────────
-      // Never trust the amount embedded in callback_data.
-      const amount = Number(claimed.amount);
-      const creditedTelegramId = String(claimed.userId);
-
-      const user = await User.findOneAndUpdate(
-        { telegramId: creditedTelegramId },
-        { $inc: { balance: amount, successfulPayments: 1 } },
-        { new: true }
-      );
-
-      if (!user) {
-        // Roll the claim back so an admin can still action this receipt.
-        await invoice.findOneAndUpdate(
-          { paymentId, status: "confirmed" },
-          { $set: { status: "waiting_for_approval", confirmedAt: null, confirmedBy: null } }
-        );
-        await bot.answerCallbackQuery(query.id, { text: "❌ کاربر یافت نشد", show_alert: true });
-        return;
-      }
-
+      const result = await confirmBankPayment({ paymentId, adminId: userId, bot });
       await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId }).catch(() => {});
-      await bot.sendMessage(chatId, "✅ پرداخت تایید شد و موجودی کاربر افزایش یافت.");
-      try {
-        await bot.sendMessage(
-          creditedTelegramId,
-          `✅ پرداخت شما تایید شد!\n💰 مبلغ ${amount.toLocaleString("en-US")} تومان به کیف پول شما اضافه شد.`,
-          { reply_markup: keyboard.reply_markup }
-        );
-      } catch (tgErr) {
-        console.warn("[confirm_payment] user notify failed:", tgErr.message);
+
+      if (result.status === "credited" || result.status === "recovered") {
+        await bot.sendMessage(chatId, "✅ پرداخت تأیید شد و موجودی کاربر ثبت شد.");
+        await bot.answerCallbackQuery(query.id, { text: "✅ پرداخت تأیید شد" });
+      } else if (result.status === "already_confirmed") {
+        await bot.answerCallbackQuery(query.id, { text: "⚠️ این پرداخت قبلاً تأیید شده است", show_alert: true });
+      } else if (result.status === "user_not_found") {
+        await bot.answerCallbackQuery(query.id, { text: "❌ حساب کاربر یافت نشد؛ فاکتور به صف بررسی بازگشت", show_alert: true });
+      } else if (result.status === "manual_review") {
+        await bot.answerCallbackQuery(query.id, { text: "⚠️ فاکتور قدیمی است و به تطبیق دستی نیاز دارد", show_alert: true });
+      } else if (result.status === "invalid") {
+        await bot.answerCallbackQuery(query.id, { text: "❌ شناسه فاکتور نامعتبر است", show_alert: true });
+      } else {
+        await bot.answerCallbackQuery(query.id, { text: "⚠️ این فاکتور در انتظار تأیید نیست", show_alert: true });
       }
-      await bot.answerCallbackQuery(query.id, { text: "✅ پرداخت تایید شد" });
-    } catch (err) {
-      console.error("Error confirming payment:", err);
-      await bot.answerCallbackQuery(query.id, { text: "❌ خطا در تایید پرداخت", show_alert: true });
+    } catch (error) {
+      console.error("Bank payment confirmation failed:", error?.name || "PaymentError");
+      await bot.answerCallbackQuery(query.id, { text: "❌ تأیید پرداخت موقتاً انجام نشد؛ دوباره تلاش کنید", show_alert: true });
     }
     return;
   }
 
   if (data.startsWith("reject_payment_")) {
-    // ADMIN ONLY
     if (!isAdmin(chatId, userId)) { await denyAdmin(bot, query.id); return; }
 
-    const rest = data.split("reject_payment_")[1];
-    const underscoreIdx = rest.indexOf("_");
-    if (underscoreIdx === -1) { console.error("❗ reject_payment_ missing userId"); return; }
-    const paymentId = rest.slice(0, underscoreIdx);
-    const targetUserId = rest.slice(underscoreIdx + 1);
-
+    const encoded = data.slice("reject_payment_".length);
+    const paymentId = encoded.includes("_") ? encoded.slice(0, encoded.indexOf("_")) : encoded;
     try {
-      // Deleting is the claim: a second click finds nothing and stays silent,
-      // so the user is not spammed with duplicate rejection notices.
-      const deleted = await invoice.findOneAndDelete({ paymentId });
-
+      const rejected = await invoice.findOneAndUpdate(
+        { paymentId, paymentType: "bank", status: "waiting_for_approval", balanceCredited: false },
+        { $set: { status: "rejected", rejectedAt: new Date(), rejectedBy: String(userId) } },
+        { new: true }
+      );
       await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId }).catch(() => {});
-
-      if (!deleted) {
-        await bot.answerCallbackQuery(query.id, { text: "⚠️ این پرداخت قبلاً بررسی شده است", show_alert: true });
+      if (!rejected) {
+        await bot.answerCallbackQuery(query.id, { text: "⚠️ این فاکتور قبلاً بررسی شده است", show_alert: true });
         return;
       }
 
       await bot.sendMessage(chatId, "❌ پرداخت رد شد.");
       try {
         await bot.sendMessage(
-          targetUserId,
-          "❌ پرداخت شما توسط ادمین رد شد. در صورت نیاز با پشتیبانی تماس بگیرید.",
+          String(rejected.userId),
+          "❌ رسید پرداخت شما توسط ادمین رد شد. در صورت نیاز با پشتیبانی تماس بگیرید.",
           { reply_markup: keyboard.reply_markup }
         );
-      } catch (tgErr) {
-        console.warn("[reject_payment] user notify failed:", tgErr.message);
+      } catch (error) {
+        console.warn("Bank rejection notification failed:", error?.name || "TelegramError");
       }
       await bot.answerCallbackQuery(query.id, { text: "❌ پرداخت رد شد" });
-    } catch (err) {
-      console.error("Error rejecting payment:", err);
-      await bot.answerCallbackQuery(query.id, { text: "❌ خطا در رد پرداخت", show_alert: true });
+    } catch (error) {
+      console.error("Bank payment rejection failed:", error?.name || "DatabaseError");
+      await bot.answerCallbackQuery(query.id, { text: "❌ رد پرداخت موقتاً انجام نشد", show_alert: true });
     }
     return;
   }

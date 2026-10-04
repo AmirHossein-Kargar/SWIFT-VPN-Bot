@@ -20,7 +20,7 @@ const BASE_MONGO_URL =
 /** Split a MongoDB URI into prefix / database name / query string. */
 function splitMongoUrl(url) {
   const m = url.match(/^(mongodb(?:\+srv)?:\/\/[^/?]+)(?:\/([^?]*))?(\?.*)?$/);
-  if (!m) throw new Error(`TEST_MONGO_URL is not a valid MongoDB URI: ${url}`);
+  if (!m) throw new Error("TEST_MONGO_URL is not a valid MongoDB URI");
   return { prefix: m[1], dbName: m[2] || "", query: m[3] || "" };
 }
 
@@ -53,7 +53,8 @@ export async function connectTestDB() {
     await Promise.all(Object.values(mongoose.models).map((m) => m.syncIndexes()));
     return true;
   } catch (err) {
-    console.warn(`[tests] MongoDB unavailable at ${TEST_MONGO_URL} — DB tests will be skipped: ${err.message}`);
+    await mongoose.disconnect().catch(() => {});
+    console.warn(`[tests] MongoDB unavailable — real-database integration tests are skipped (${err?.name || "ConnectionError"}).`);
     return false;
   }
 }

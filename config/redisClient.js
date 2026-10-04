@@ -1,88 +1,121 @@
-/**
- * Redis client.
- *
- * IMPORTANT — startup must never block on Redis.
- *
- * A top-level `await client.connect()` would hang the whole process when Redis
- * is unreachable: node-redis keeps retrying per its reconnect strategy, so the
- * promise never settles, the `catch` never runs, and the module graph (and
- * therefore Mongo, Express and the Telegram bot) never loads.
- *
- * Instead we connect in the background. Callers handle outages explicitly:
- *   - verifyLock      → fail-OPEN  (MongoDB is authoritative for money)
- *   - hooshpay cron   → fail-CLOSED (skip the cycle rather than double-run)
- *   - sessionStore    → degrade to empty/no-op sessions
- *   - trxWalletScanner→ fail-OPEN  (in-process `isScanning` guard still applies)
- */
 import { createClient } from "redis";
 import { resolveRedisConfig } from "./env.js";
 
-// Resolve through config/env.js so REDIS_URL and the platform-native names
-// (REDISHOST / REDISPORT / REDISUSER / REDISPASSWORD) all work as-is.
+const REDIS_TIMEOUT_MS = 8_000;
 const redisConfig = resolveRedisConfig();
+let lastError = null;
+let lastLoggedAt = 0;
+let connectPromise = null;
 
-const sharedOptions = {
-  // CRITICAL: do NOT queue commands issued while disconnected.
-  // With the default offline queue, a command sent during a Redis outage waits
-  // for a reconnect that may never come — every webhook and every cron cycle
-  // would hang forever instead of taking its documented fallback path.
+const reconnectStrategy = (retries) => Math.min(250 * 2 ** Math.min(retries, 5), 5_000);
+const common = {
   disableOfflineQueue: true,
+  socket: { connectTimeout: 5_000, reconnectStrategy },
 };
 
-const client = createClient(
-  redisConfig?.url
-    ? { ...sharedOptions, url: redisConfig.url }
-    : {
-        ...sharedOptions,
-        username: redisConfig?.username || "default",
-        password: redisConfig?.password || undefined,
-        socket: {
-          host: redisConfig?.host,
-          port: redisConfig?.port,
-          connectTimeout: 5000,
-          // Keep retrying forever so the app recovers when Redis comes back,
-          // but with a capped backoff so we do not hammer a dead endpoint.
-          reconnectStrategy: (retries) => Math.min(retries * 200, 5000),
-        },
-      }
-);
+const client = redisConfig
+  ? createClient(
+      redisConfig.url
+        ? { ...common, url: redisConfig.url }
+        : {
+            ...common,
+            username: redisConfig.username || "default",
+            password: redisConfig.password || undefined,
+            socket: {
+              ...common.socket,
+              host: redisConfig.host,
+              port: redisConfig.port,
+              tls: redisConfig.tls,
+            },
+          }
+    )
+  : null;
 
-client.on("error", (err) => {
-  // node-redis emits on every retry — keep it to one concise line.
-  console.error("\x1b[41m\x1b[37m❌ Redis Client Error:\x1b[0m", err.message);
-});
+function safeLogError(event, error) {
+  lastError = error instanceof Error ? error : new Error("Redis connection error");
+  const now = Date.now();
+  // Redis emits an error for every reconnect attempt. Keep logs bounded and do
+  // not print command arguments or connection URLs that might contain secrets.
+  if (now - lastLoggedAt < 60_000) return;
+  lastLoggedAt = now;
+  console.error(JSON.stringify({
+    ts: new Date().toISOString(),
+    service: "redis",
+    level: "error",
+    event,
+    errorType: error?.name || "Error",
+    code: typeof error?.code === "string" ? error.code : undefined,
+    source: redisConfig?.source,
+  }));
+}
 
-client.on("ready", () => {
-  console.log("\x1b[32m%s\x1b[0m", "✔ Redis connected");
-});
-
-// Fire-and-forget: never awaited at module scope.
-let _connectError = null;
-client
-  .connect()
-  .then(() => { _connectError = null; })
-  .catch((err) => {
-    _connectError = err;
-    console.error(
-      "\x1b[41m\x1b[37m❌ Redis connection failed — continuing with fallbacks:\x1b[0m",
-      err.message
-    );
+if (client) {
+  client.on("error", (error) => safeLogError("client_error", error));
+  client.on("ready", () => {
+    lastError = null;
+    console.log(`Redis connected (configuration: ${redisConfig.source})`);
   });
+  client.on("end", () => {
+    lastError = new Error("Redis connection ended");
+  });
+}
 
-/**
- * Is Redis usable right now?
- * @returns {boolean}
- */
+function withTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+      timer.unref?.();
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/** Connect explicitly during application startup; this module has no side effects. */
+export async function connectRedis({ timeoutMs = REDIS_TIMEOUT_MS } = {}) {
+  if (!client || !redisConfig) throw new Error("Redis is not configured; set REDIS_URL or Railway Redis variables.");
+  if (client.isOpen && client.isReady) return client;
+
+  try {
+    if (!connectPromise) {
+      connectPromise = (client.isOpen ? Promise.resolve() : client.connect())
+        .then(() => client.ping())
+        .then((reply) => {
+          if (reply !== "PONG") throw new Error("Redis ping returned an unexpected response");
+          lastError = null;
+        });
+    }
+    await withTimeout(connectPromise, timeoutMs, "Redis startup connection");
+    return client;
+  } catch (error) {
+    lastError = error;
+    connectPromise = null;
+    // Do not allow an unready client with an infinite reconnect loop to keep a
+    // failed startup process alive. A Railway restart starts with a clean client.
+    try { client.destroy(); } catch { /* best effort */ }
+    const code = typeof error?.code === "string" ? `, code ${error.code}` : "";
+    throw new Error(`Redis connection failed (${redisConfig.source}${code}); verify the Railway service reference and network access.`);
+  }
+}
+
 export function isRedisReady() {
-  return client.isOpen === true && client.isReady === true;
+  return Boolean(client?.isOpen && client?.isReady);
 }
 
-/**
- * Last connection error, if any (for /health style diagnostics).
- * @returns {Error|null}
- */
+/** Returns a safe error summary, never a raw connection URL or credentials. */
 export function getRedisError() {
-  return _connectError;
+  if (!lastError) return null;
+  return { name: lastError.name || "Error", code: typeof lastError.code === "string" ? lastError.code : undefined };
 }
 
+export async function closeRedis() {
+  if (!client?.isOpen) return;
+  try {
+    await withTimeout(client.quit(), 2_000, "Redis shutdown");
+  } catch {
+    try { client.destroy(); } catch { /* best effort */ }
+  }
+}
+
+export { redisConfig };
 export default client;

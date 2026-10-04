@@ -14,7 +14,10 @@ const KEYS = [
   "MONGOHOST", "MONGOPORT", "MONGOUSER", "MONGOPASSWORD", "MONGO_HOST", "MONGO_PORT",
   "REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_USERNAME", "REDIS_PASSWORD",
   "REDISHOST", "REDISPORT", "REDISUSER", "REDISPASSWORD",
-  "BOT_TOKEN", "ADMINS", "GROUP_ID",
+  "BOT_TOKEN", "ADMINS", "GROUP_ID", "WIZARD_API_URL", "VPN_API_KEY",
+  "HOOSHPAY_API_KEY", "HOOSHPAY_WEBHOOK_SECRET", "WEBHOOK_BASE_URL",
+  "CARD_NUMBER", "TRX_WALLET", "MONGO_DB_NAME", "REDIS_TLS", "PORT",
+  "WEBHOOK_RATE_LIMIT_PER_MIN", "NODE_ENV", "HOOSHPAY_API_BASE_URL",
 ];
 
 let saved;
@@ -161,40 +164,47 @@ describe("resolveRedisConfig", () => {
 });
 
 describe("inspectEnv", () => {
-  test("reports BOT_TOKEN and MongoDB as fatal when absent", () => {
+  test("reports missing runtime dependencies and business integrations as fatal", () => {
     const { missing, fatalCount } = inspectEnv();
     const fatalKeys = missing.filter((m) => m.fatal).map((m) => m.key);
     assert.ok(fatalKeys.includes("BOT_TOKEN"));
     assert.ok(fatalKeys.includes("__MONGO__"));
-    assert.equal(fatalCount, 2);
+    assert.ok(fatalKeys.includes("__REDIS__"));
+    assert.ok(fatalKeys.includes("WIZARD_API_URL"));
+    assert.ok(fatalKeys.includes("HOOSHPAY_WEBHOOK_SECRET"));
+    assert.ok(fatalCount >= 10);
   });
 
-  test("non-fatal gaps are reported but never fatal", () => {
-    process.env.BOT_TOKEN = "1:A";
-    process.env.MONGO_URL = "mongodb://host/db";
+  test("missing admin and payment settings are not treated as optional", () => {
+    process.env.BOT_TOKEN = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+    process.env.MONGO_URL = "mongodb://mongo.example.test/db";
+    process.env.REDISHOST = "redis.example.test";
     const { missing, fatalCount } = inspectEnv();
-    assert.equal(fatalCount, 0, "a working bot+db must not be blocked by optional gaps");
+    assert.ok(fatalCount > 0);
     const keys = missing.map((m) => m.key);
     assert.ok(keys.includes("ADMINS"));
+    assert.ok(keys.includes("GROUP_ID"));
     assert.ok(keys.includes("HOOSHPAY_WEBHOOK_SECRET"));
   });
 
   test("a fully configured environment reports nothing missing", () => {
-    process.env.BOT_TOKEN = "1:A";
-    process.env.MONGO_URL = "mongodb://host/db";
-    process.env.REDISHOST = "localhost";
-    process.env.ADMINS = "1";
-    process.env.GROUP_ID = "-100";
-    process.env.WIZARD_API_URL = "https://p";
-    process.env.VPN_API_KEY = "k";
-    process.env.HOOSHPAY_API_KEY = "k";
-    process.env.HOOSHPAY_WEBHOOK_SECRET = "s";
-    process.env.WEBHOOK_BASE_URL = "https://w";
+    process.env.BOT_TOKEN = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+    process.env.MONGO_URL = "mongodb://mongo.example.test/db";
+    process.env.REDISHOST = "redis.example.test";
+    process.env.ADMINS = "123456";
+    process.env.GROUP_ID = "-100123456";
+    process.env.WIZARD_API_URL = "https://wizard.example.test";
+    process.env.VPN_API_KEY = "vpn-test-key";
+    process.env.HOOSHPAY_API_KEY = "hoosh-test-key";
+    process.env.HOOSHPAY_WEBHOOK_SECRET = "s".repeat(48);
+    process.env.WEBHOOK_BASE_URL = "https://webhook.example.test";
     process.env.CARD_NUMBER = "6219861000000000";
     process.env.TRX_WALLET = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
+    process.env.NODE_ENV = "production";
 
-    const { missing, fatalCount } = inspectEnv();
+    const { missing, invalid, fatalCount } = inspectEnv();
     assert.equal(fatalCount, 0);
-    assert.deepEqual(missing, [], "no gaps expected");
+    assert.deepEqual(missing, [], "no missing settings expected");
+    assert.deepEqual(invalid, [], "no malformed settings expected");
   });
 });

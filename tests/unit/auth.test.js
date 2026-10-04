@@ -78,10 +78,10 @@ describe("utils/auth — admin policy is fail-CLOSED", () => {
     assert.equal(isAdmin(12345, 556), false, "non-admin outside the group");
   });
 
-  test("isAdmin without GROUP_ID only checks the admin list", () => {
+  test("isAdmin requires GROUP_ID instead of granting private-chat admin access", () => {
     process.env.ADMINS = "555";
     delete process.env.GROUP_ID;
-    assert.equal(isAdmin(12345, 555), true);
+    assert.equal(isAdmin(12345, 555), false);
     assert.equal(isAdmin(12345, 556), false);
   });
 });

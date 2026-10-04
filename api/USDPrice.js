@@ -1,21 +1,20 @@
 import axios from "axios";
 
+/** Return live Toman per USD pricing. A stale constant must never price deposits. */
 export async function USDPrice() {
+  let response;
   try {
-    const url = "https://api.tetherland.com/currencies";
-
-    const response = await axios.get(url);
-
-    // Check if response has the expected structure
-    if (!response.data?.data?.currencies?.USDT?.price) {
-      throw new Error("Invalid response structure from API");
-    }
-
-    const usdtPrice = response.data.data.currencies.USDT.price;
-
-    return usdtPrice;
-  } catch (error) {
-    // Return a fallback price if API fails
-    return 100000; // Fallback rate
+    response = await axios.get("https://api.tetherland.com/currencies", { timeout: 8_000 });
+  } catch {
+    throw new Error("USD/Toman rate provider is unavailable");
   }
+
+  const raw = response.data?.data?.currencies?.USDT?.price;
+  const rate = Number(raw);
+  if (!Number.isFinite(rate) || rate <= 0) {
+    throw new Error("USD/Toman rate provider returned an invalid quote");
+  }
+  return rate;
 }
+
+export default USDPrice;
