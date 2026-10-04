@@ -77,6 +77,8 @@ export async function refundPurchaseReservation(purchase, { allowProvisioning = 
 export async function commitProvisionedPurchase(purchase, bot) {
   if (!purchase.serviceUsername) throw new Error("Provisioned purchase is missing its service username");
 
+  const provisionedAt = purchase.provisionedAt || purchase.completedAt || new Date();
+  const expiresAt = purchase.expiresAt || new Date(provisionedAt.getTime() + Number(purchase.days) * 24 * 60 * 60 * 1000);
   const user = await User.findOneAndUpdate(
     {
       telegramId: String(purchase.telegramId),
@@ -84,7 +86,16 @@ export async function commitProvisionedPurchase(purchase, bot) {
       "services.purchaseId": { $ne: purchase.purchaseId },
     },
     {
-      $push: { services: { username: purchase.serviceUsername, purchaseId: purchase.purchaseId } },
+      $push: {
+        services: {
+          username: purchase.serviceUsername,
+          purchaseId: purchase.purchaseId,
+          productId: purchase.planId,
+          trafficGb: Number(purchase.gig),
+          createdAt: provisionedAt,
+          expiresAt,
+        },
+      },
       $addToSet: { completedPurchaseIds: purchase.purchaseId },
       $inc: { totalServices: 1 },
     },
@@ -106,7 +117,10 @@ export async function commitProvisionedPurchase(purchase, bot) {
       $set: {
         status: "completed",
         completedAt: purchase.completedAt || new Date(),
+        provisionedAt,
+        expiresAt,
         notificationPending: true,
+        recoveryStatus: "none",
       },
       $unset: { recoveryClaimedAt: 1 },
     },
@@ -387,6 +401,8 @@ export async function createWalletPurchase(bot, chatId, userId, plan) {
   const serviceLink = typeof result.sub_link === "string" && result.sub_link.length <= 4096 ? result.sub_link : null;
   const singleLink = Array.isArray(result.tak_links) && typeof result.tak_links[0] === "string" && result.tak_links[0].length <= 4096 ? result.tak_links[0] : "";
 
+  const provisionedAt = new Date();
+  const expiresAt = new Date(provisionedAt.getTime() + Number(plan.days) * 24 * 60 * 60 * 1000);
   try {
     purchase = await WalletPurchase.findOneAndUpdate(
       { _id: purchase._id, status: "provisioning" },
@@ -397,6 +413,8 @@ export async function createWalletPurchase(bot, chatId, userId, plan) {
           serviceHash: hash,
           serviceLink,
           singleLink,
+          provisionedAt,
+          expiresAt,
         },
       },
       { new: true }

@@ -6,6 +6,7 @@ import app, { PORT, setRuntimeReadiness } from "./server.js";
 import { startHooshpayRecoveryCron, stopHooshpayRecoveryCron } from "./services/hooshpay/hooshpayRecoveryCron.js";
 import mongoose from "mongoose";
 import { connectRedis, closeRedis } from "./config/redisClient.js";
+import { seedDefaultProducts } from "./services/plans.js";
 
 // ── Process-level safety net ─────────────────────────────────────────────────
 // Registered inside startBot() so that simply importing this module (in tests,
@@ -77,6 +78,13 @@ export default async function startBot() {
   try {
     await connectDB();
     console.log("\x1b[32m%s\x1b[0m", "✔ DB Ready");
+    // Seed the shared product catalog (never overwrites admin edits).
+    try {
+      const seeded = await seedDefaultProducts();
+      if (seeded > 0) console.log("\x1b[32m%s\x1b[0m", `✔ Product catalog seeded (${seeded} defaults added)`);
+    } catch (error) {
+      console.warn("⚠️  Product catalog seeding skipped:", error?.name || "DatabaseError");
+    }
     await connectRedis();
     console.log("\x1b[32m%s\x1b[0m", "✔ Redis Ready");
   } catch (error) {

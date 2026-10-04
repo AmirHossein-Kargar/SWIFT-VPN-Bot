@@ -90,8 +90,17 @@ const hooshPayInvoiceSchema = new mongoose.Schema({
   notificationPending: { type: Boolean, default: false },
   notificationClaimedAt: { type: Date, default: null },
   notifiedAt: { type: Date, default: null },
+  recoveryStatus: { type: String, enum: ["none", "required", "resolved"], default: "none", index: true },
+  recoveryReason: { type: String, default: null, maxlength: 500 },
+  recoveryResolvedAt: { type: Date, default: null },
+  recoveryResolvedBy: { type: String, default: null },
+  retryCount: { type: Number, default: 0, min: 0 },
+  lastRetryAt: { type: Date, default: null },
+  lastRetryOperationId: { type: String, default: null, maxlength: 80 },
+  nextRetryAt: { type: Date, default: null },
+  lastErrorCode: { type: String, default: null, maxlength: 80 },
 
-  createdAt: { type: Date, default: Date.now },
+  createdAt: { type: Date, default: Date.now, index: true },
   paidAt:    { type: Date, default: null },
 
   // Webhook audit log
@@ -155,6 +164,7 @@ hooshPayInvoiceSchema.index(
 
 // Index for user invoice lookup (profile, admin search)
 hooshPayInvoiceSchema.index({ userId: 1, createdAt: -1 }, { name: "idx_user_recent" });
+hooshPayInvoiceSchema.index({ recoveryStatus: 1, status: 1, createdAt: 1 }, { name: "idx_hoosh_recovery_queue" });
 
 const HooshPayInvoice = mongoose.model("HooshPayInvoice", hooshPayInvoiceSchema);
 export default HooshPayInvoice;

@@ -35,6 +35,7 @@ import { getSession } from "../config/sessionStore.js";
 import mongoose from "mongoose";
 import { acquireRedisLease, releaseRedisLease, startRedisLeaseHeartbeat } from "./redisLease.js";
 import { creditWalletOnce } from "./walletCredit.js";
+import { recordJobRun } from "./admin/monitoring.js";
 
 const TRX_CRON_LOCK_KEY = "trx:scan:cron";
 const TRX_CRON_LOCK_TTL = 270; // 4.5 min — just under the 5-min scan interval
@@ -229,10 +230,12 @@ class TRXWalletScanner {
         rejected: summary.rejectedInvoices,
         recovered: summary.recoveredInvoices,
       });
+      this.recordScanOutcome(summary);
 
       return summary;
     } catch (error) {
       log("error", "Scan failed", { errorType: error?.name || "Error" });
+      this.recordScanOutcome({ error: "scan_failed" });
       return { ...emptySummary, error: "TRX scan failed" };
     } finally {
       this.isScanning = false;
@@ -241,6 +244,20 @@ class TRXWalletScanner {
         try { await releaseRedisLease(redisLease); } catch { /* TTL will clean up */ }
       }
     }
+  }
+
+  /** Report the outcome of the last scan to the admin monitoring service. */
+  recordScanOutcome(summary) {
+    try {
+      const failed = typeof summary?.error === "string";
+      recordJobRun("trx-scanner", {
+        ok: !failed,
+        meta: {
+          lastScanTime: this.lastScanTime ? new Date(this.lastScanTime).toISOString() : null,
+          scanCount: this.scanCount,
+        },
+      });
+    } catch { /* monitoring must never affect the scanner */ }
   }
 
   // ── TronScan reads ─────────────────────────────────────────────────────────
@@ -740,6 +757,27 @@ class TRXWalletScanner {
   async manualScan() {
     log("info", "Manual TRX wallet scan initiated");
     return this.scanWallet();
+  }
+
+  /**
+   * Complete a single stuck TRX invoice (paid but not yet credited/notified).
+   * Reuses the same idempotent Phase-2 path as the scanner, so calling it twice
+   * can never credit twice. Returns false when the invoice is not recoverable.
+   */
+  async recoverInvoice(invoiceId) {
+    if (typeof invoiceId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(invoiceId)) return false;
+    try {
+      const invoice = await CryptoInvoice.findOne({ invoiceId }).lean();
+      if (!invoice || invoice.status !== "paid" || invoice.balanceCredited) {
+        return Boolean(invoice && invoice.balanceCredited);
+      }
+      return await this.creditAndNotify(invoice, { hash: invoice.transactionHash || "admin-recovery", confirmed: true, contractRet: "SUCCESS" });
+    } catch (error) {
+      log("error", "Admin-requested invoice recovery failed", {
+        invoiceId, errorType: error?.name || "DatabaseError",
+      });
+      return false;
+    }
   }
 
   async checkTronScanStatus() {

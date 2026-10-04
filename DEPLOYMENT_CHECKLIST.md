@@ -178,14 +178,24 @@ Complete these after the preflight script passes.
 - [ ] `POST https://your-domain.com/api/hooshpay/webhook` returns `200`
 - [ ] Test: `curl -X POST https://your-domain.com/api/hooshpay/webhook -H "Content-Type: application/json" -d '{}'` → `200 OK`
 
-### 4.6 Bot Startup
+### 4.6 Web Admin Dashboard (new)
+
+- [ ] Open `https://your-domain.com/admin` — the sign-in page loads
+- [ ] Enter your Telegram ID (must be listed in `ADMINS`)
+- [ ] Receive the one-time code from the bot in a private chat
+- [ ] Sign in — the dashboard loads with live metrics
+- [ ] `/api/admin/dashboard` without a session returns `401`
+- [ ] Sign out works and the session cookie is cleared
+
+### 4.7 Bot Startup
 
 - [ ] Start with `npm start` and check for errors in console
 - [ ] Confirm `✔ DB Ready` appears
 - [ ] Confirm `✔ Webhook server listening on port 3000` appears
 - [ ] Confirm `✔ HooshPay Recovery Cron Started` appears
 - [ ] Send `/start` to the bot in Telegram — it should respond
-- [ ] Send `پنل` in the admin group — admin panel should appear
+- [ ] Send `پنل` or `/admin` in the admin group — the 👑 SWIFT ADMIN panel should appear
+- [ ] Send `/admin` to the bot in a private chat (as an allowlisted admin) — the panel opens
 
 ### 4.7 Payment Flow Smoke Test
 
@@ -430,3 +440,18 @@ pm2 start ecosystem.config.cjs
 | .env not committed to git | ⬜ | |
 
 **Deploy only when all boxes are checked.**
+
+---
+
+## Section 7 — Admin Panel (web + Telegram)
+
+| Topic | Notes |
+|---|---|
+| URL | `<WEBHOOK_BASE_URL>/admin` — served by the same Railway service, no extra deploy |
+| Auth | Telegram allowlist (`ADMINS`) + one-time code DM + Redis session (HttpOnly cookie, CSRF token) |
+| Session TTL | `ADMIN_SESSION_TTL_SECONDS` (default 8 h, min 15 min, max 24 h) |
+| Telegram panel | `/admin` or `پنل` — private chat for allowlisted admins; group requires `GROUP_ID` |
+| Audit | Every sensitive action lands in `AdminAuditLog` with actor, target, reason and IP (web) |
+| Products | `AdminProduct` catalog (CRUD, reorder, enable) powers panel product-mix & profit analytics; defaults are seeded on first boot. The Telegram shop still sells the built-in plan list — catalog-driven checkout is a follow-up (README §12.5) |
+| Broadcasts | Rate-limited (~25 msg/s), cancellable, resume from the last acknowledged recipient |
+| Backups | Include the new collections: `AdminAuditLog`, `AdminProduct`, `AdminBroadcast`, `SystemHealth` |

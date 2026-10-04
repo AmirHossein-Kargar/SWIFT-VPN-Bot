@@ -6,6 +6,7 @@ import { startRedisLeaseHeartbeat } from "../redisLease.js";
 import { verifyInvoice as apiVerify } from "./hooshpayClient.js";
 import { recoverWalletPurchases } from "../buyService/purchaseLedger.js";
 import { recoverTestServiceAttempts } from "../createTestService.js";
+import { recordJobRun } from "../admin/monitoring.js";
 
 const INTERVAL_MS = 5 * 60_000;
 const EXPIRY_GRACE_MINUTES = 35;
@@ -64,11 +65,13 @@ async function runCycle(bot) {
     if (leaseState.healthy) await reconcilePendingInvoices(bot, cycleId, leaseState);
     if (leaseState.healthy) await expireStaleInvoices(cycleId);
     log("info", "Recovery cycle complete", { cycleId, leaseHealthy: leaseState.healthy });
+    recordJobRun("hooshpay-recovery-cron", { ok: true, meta: { cycleId } });
   } catch (error) {
     log("error", "Recovery cycle failed", {
       cycleId, errorType: error?.name || "Error",
       code: typeof error?.code === "string" || typeof error?.code === "number" ? error.code : undefined,
     });
+    recordJobRun("hooshpay-recovery-cron", { ok: false, meta: { cycleId } });
   } finally {
     stopHeartbeat();
     await releaseCronLock(lease);

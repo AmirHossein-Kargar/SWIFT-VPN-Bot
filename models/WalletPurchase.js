@@ -20,7 +20,19 @@ const walletPurchaseSchema = new mongoose.Schema({
   serviceHash: { type: String, default: null },
   serviceLink: { type: String, default: null },
   singleLink: { type: String, default: null },
+  provisionedAt: { type: Date, default: null },
+  expiresAt: { type: Date, default: null, index: true },
+  revokedAt: { type: Date, default: null },
+  revokedBy: { type: String, default: null },
   errorCode: { type: String, default: null },
+  retryCount: { type: Number, default: 0, min: 0 },
+  lastRetryAt: { type: Date, default: null },
+  lastRetryOperationId: { type: String, default: null, maxlength: 80 },
+  nextRetryAt: { type: Date, default: null },
+  recoveryStatus: { type: String, enum: ["none", "required", "resolved"], default: "none", index: true },
+  recoveryReason: { type: String, default: null, maxlength: 500 },
+  recoveryResolvedAt: { type: Date, default: null },
+  recoveryResolvedBy: { type: String, default: null },
   refundedAt: { type: Date, default: null },
   completedAt: { type: Date, default: null },
   notificationPending: { type: Boolean, default: false },
@@ -33,5 +45,6 @@ const walletPurchaseSchema = new mongoose.Schema({
 
 walletPurchaseSchema.index({ status: 1, createdAt: 1 }, { name: "idx_wallet_purchase_recovery" });
 walletPurchaseSchema.index({ telegramId: 1, createdAt: -1 }, { name: "idx_wallet_purchase_user_recent" });
+walletPurchaseSchema.index({ recoveryStatus: 1, status: 1, createdAt: 1 }, { name: "idx_wallet_purchase_recovery_queue" });
 
 export default mongoose.models.WalletPurchase || mongoose.model("WalletPurchase", walletPurchaseSchema);

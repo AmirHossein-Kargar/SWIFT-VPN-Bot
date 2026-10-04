@@ -1,5 +1,10 @@
 // * 🗂️ Models
+import { randomBytes } from "node:crypto";
 import User from "../models/User.js";
+
+function generateReferralCode() {
+  return `SWIFT-${randomBytes(4).toString("hex").toUpperCase()}`;
+}
 import keyboard from "../keyboards/mainKeyboard.js";
 import handleProfile from "./message/handleProfile.js";
 
@@ -69,6 +74,8 @@ const handleContact = async (bot, msg, afterVerify) => {
           successfulPayments: 0,
           totalServices: 0,
           phoneNumber: phoneNumber,
+          referralCode: generateReferralCode(),
+          lastActivityAt: new Date(),
         });
 
         await bot.sendMessage(
@@ -111,6 +118,8 @@ const handleContact = async (bot, msg, afterVerify) => {
       // به‌روزرسانی شماره تلفن کاربر موجود
       try {
         user.phoneNumber = phoneNumber;
+        if (!user.referralCode) user.referralCode = generateReferralCode();
+        user.lastActivityAt = new Date();
         await user.save();
         await bot.sendMessage(
           chatId,

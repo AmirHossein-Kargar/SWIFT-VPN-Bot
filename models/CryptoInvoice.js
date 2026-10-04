@@ -46,8 +46,17 @@ const cryptoInvoiceSchema = new mongoose.Schema({
   notificationPending: { type: Boolean, default: false },
   notificationClaimedAt: { type: Date, default: null },
   notifiedAt: { type: Date, default: null },
+  recoveryStatus: { type: String, enum: ["none", "required", "resolved"], default: "none", index: true },
+  recoveryReason: { type: String, default: null, maxlength: 500 },
+  recoveryResolvedAt: { type: Date, default: null },
+  recoveryResolvedBy: { type: String, default: null },
+  retryCount: { type: Number, default: 0, min: 0 },
+  lastRetryAt: { type: Date, default: null },
+  lastRetryOperationId: { type: String, default: null, maxlength: 80 },
+  nextRetryAt: { type: Date, default: null },
+  lastErrorCode: { type: String, default: null, maxlength: 80 },
 
-  createdAt: { type: Date, default: Date.now },
+  createdAt: { type: Date, default: Date.now, index: true },
 });
 
 // Scanner matching query: { status: "unpaid", paymentType: "trx", currency: "TRX" }
@@ -61,6 +70,8 @@ cryptoInvoiceSchema.index(
   { status: 1, balanceCredited: 1 },
   { name: "idx_crypto_recovery" }
 );
+cryptoInvoiceSchema.index({ userId: 1, createdAt: -1 }, { name: "idx_crypto_user_recent" });
+cryptoInvoiceSchema.index({ recoveryStatus: 1, status: 1, createdAt: 1 }, { name: "idx_crypto_recovery_queue" });
 
 const CryptoInvoice = mongoose.model("CryptoInvoice", cryptoInvoiceSchema);
 export default CryptoInvoice;

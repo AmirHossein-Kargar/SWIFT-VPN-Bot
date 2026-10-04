@@ -45,6 +45,7 @@ import { payHoosh } from "../paymentHandlers/payHoosh.js";
 import { verifyHooshPayment } from "../services/hooshpay/verifyHooshPayment.js";
 import { confirmBankPayment } from "../services/payments/confirmBankPayment.js";
 import { isAdmin } from "../utils/auth.js";
+import { handleAdminPanelCallbacks } from "./admin/panel.js";
 
 // ─── Authorization helpers ─────────────────────────────────────────────────
 // isAdmin comes from utils/auth.js (fail-CLOSED: no ADMINS => no admins).
@@ -119,6 +120,12 @@ const handleCallbackQuery = async (bot, query) => {
         show_alert: true,
       });
     } catch { /* ignore */ }
+    return;
+  }
+
+  // ── SWIFT Admin Panel (adm:*) — shared services, audited actions ──────────
+  if (data.startsWith("adm:") ) {
+    await handleAdminPanelCallbacks(bot, query);
     return;
   }
 

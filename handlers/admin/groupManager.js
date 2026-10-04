@@ -4,6 +4,7 @@ import invoice from "../../models/invoice.js";
 import User from "../../models/User.js";
 import { plans30, plans60, plans90 } from "../../services/plans.js";
 import { isAdmin } from "../../utils/auth.js";
+import { handleAdminPanelCommand } from "./panel.js";
 
 // ارسال پیام به گروه ادمین
 const sendToAdminGroup = async (bot, message, keyboard = null) => {
@@ -81,40 +82,13 @@ const handleGroupMessage = async (bot, msg) => {
   }
 
   switch (text) {
+    case "/admin":
     case "/panel":
     case "پنل": {
-      await bot.sendMessage(chatId, "🔒 پنل مدیریت", {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "🔍 اسکن ولت TRX",
-                callback_data: "admin_scan_trx_wallet",
-              },
-              {
-                text: "📊 وضعیت سیستم",
-                callback_data: "admin_status",
-              },
-            ],
-            [
-              {
-                text: "💰 گزارش مالی",
-                callback_data: "admin_financial_report",
-              },
-              {
-                text: "🛒 خرید از API",
-                callback_data: "admin_api_service_purchase",
-              },
-            ],
-            [
-              {
-                text: "📨 ارسال پیام به کاربر",
-                callback_data: "admin_send_message_to_user",
-              },
-            ],
-          ],
-        },
-      });
+      // 👑 SWIFT ADMIN — the full inline panel (same backend as the web
+      // dashboard). The legacy group tools remain available via their text
+      // commands and the "admin_*" callbacks below.
+      await handleAdminPanelCommand(bot, msg);
       break;
     }
     case "🔍 اسکن ولت TRX":
