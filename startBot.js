@@ -7,6 +7,7 @@ import { startHooshpayRecoveryCron, stopHooshpayRecoveryCron } from "./services/
 import mongoose from "mongoose";
 import { connectRedis, closeRedis } from "./config/redisClient.js";
 import { seedDefaultProducts } from "./services/plans.js";
+import { cleanupLegacyPhoneData } from "./services/migrations/cleanupLegacyPhoneData.js";
 
 // ── Process-level safety net ─────────────────────────────────────────────────
 // Registered inside startBot() so that simply importing this module (in tests,
@@ -78,6 +79,17 @@ export default async function startBot() {
   try {
     await connectDB();
     console.log("\x1b[32m%s\x1b[0m", "✔ DB Ready");
+    // Idempotently erase legacy phone/contact fields before accepting bot traffic.
+    try {
+      const cleanup = await cleanupLegacyPhoneData();
+      if (cleanup.modifiedDocuments > 0) {
+        console.log(`Legacy contact-field cleanup updated ${cleanup.modifiedDocuments} database document(s).`);
+      }
+    } catch (error) {
+      // Phone data is no longer read or written anywhere in the bot. Keep all
+      // payment/VPN services available if a one-time cleanup needs a retry.
+      console.warn("Legacy contact-field cleanup will retry on a later startup:", error?.name || "DatabaseError");
+    }
     // Seed the shared product catalog (never overwrites admin edits).
     try {
       const seeded = await seedDefaultProducts();

@@ -4,7 +4,6 @@ import "dotenv/config";
 // * 🔌 Core
 import startBot from "./startBot.js";
 import handleCallbackQuery from "./handlers/handleCallbackQuery.js";
-import handleContact from "./handlers/contactHandler.js";
 
 // * 📦 Services & Handlers
 import createTestService from "./services/createTestService.js";
@@ -13,15 +12,15 @@ import handleGuide from "./handlers/message/handleGuide.js";
 import handleMessage from "./handlers/onMessage.js";
 import handleProfile from "./handlers/message/handleProfile.js";
 import handleSupport from "./handlers/message/handleSupport.js";
-import keyboard from "./keyboards/mainKeyboard.js";
+import showHome from "./handlers/message/showHome.js";
 import sendServiceSelectionMenu from "./services/manageServices/sendServiceSelectionMenu.js";
 import showPaymentMethods from "./handlers/message/showPaymentMethods.js";
 import supportMessageHandler from "./handlers/supportMessageHandler.js";
 
 // * 📦 Utilities & Config
 import { getSession, setSession } from "./config/sessionStore.js";
-import hideKeyboard from "./utils/hideKeyboard.js";
-import { WELCOME_MESSAGE } from "./messages/staticMessages.js";
+import { renderUiScreen, deleteIncomingPrivateMessage, isPrivateUserMessage } from "./utils/telegramUi.js";
+import ensureTelegramUser from "./services/users/ensureTelegramUser.js";
 import { getUnsupportedMediaMessage, getSupportDirectButton } from "./messages/supportContact.js";
 
 /** Edit the standing support notice with the unsupported-media message. */
@@ -33,22 +32,19 @@ async function showUnsupportedMediaNotice(bot, chatId, session) {
       [{ text: "🏠 بازگشت به منوی اصلی", callback_data: "back_to_home" }],
     ],
   };
-  try {
-    await bot.editMessageText(getUnsupportedMediaMessage(), {
-      chat_id: chatId,
-      message_id: session.supportMessageId,
-      reply_markup,
-    });
-  } catch (editError) {
-    console.log("❗️خطا در ویرایش پیام پشتیبانی:", editError.message);
-    await bot
-      .sendMessage(chatId, getUnsupportedMediaMessage(), { reply_markup })
-      .catch(() => {});
+  const rendered = await renderUiScreen(
+    bot,
+    chatId,
+    session.supportMessageId ?? session.uiMessageId ?? session.mainMessageId,
+    getUnsupportedMediaMessage(),
+    { reply_markup },
+    { support: true }
+  ).catch(() => null);
+  if (rendered?.message_id != null) {
+    const latest = await getSession(chatId);
+    await setSession(chatId, { ...latest, supportMessageId: Number(rendered.message_id) });
   }
 }
-
-// * 📦 Models
-import User from "./models/User.js";
 
 // * 📦 API
 import { StatusApi } from "./api/wizardApi.js";
@@ -87,11 +83,18 @@ import { handleGroupMessage } from "./handlers/admin/groupManager.js";
 // Every inbound update is contained: a failure in one handler must never take
 // down the bot or leave the user without feedback.
 bot.on("message", async (msg) => {
+  // Photo/video and unsupported media have dedicated handlers below; they must
+  // finish forwarding/receipt processing before their private input is deleted.
+  const hasDedicatedMediaHandler = Boolean(
+    msg.photo || msg.video || msg.voice || msg.video_note || msg.document
+  );
+  let session = {};
   try {
     const chatId = msg.chat.id;
     const userId = msg.from?.id;
     const userText = msg.text;
-    const session = await getSession(chatId);
+    session = await getSession(chatId);
+    const uiMessageId = session.uiMessageId ?? session.mainMessageId ?? session.messageId;
 
     // Best-effort activity tracking for admin dashboards (throttled).
     if (msg.chat?.type === "private" && userId) {
@@ -111,7 +114,10 @@ bot.on("message", async (msg) => {
 
     switch (userText) {
       case "/start": {
-        await bot.sendMessage(chatId, WELCOME_MESSAGE, keyboard);
+        if (msg.chat?.type === "private" && userId) {
+          await ensureTelegramUser(msg.from).catch(() => {});
+        }
+        await showHome(bot, chatId, uiMessageId);
         break;
       }
       case "/panel":
@@ -142,37 +148,32 @@ bot.on("message", async (msg) => {
         break;
       }
       case "🎁 سرویس تست":
-        await createTestService(bot, msg);
+        await createTestService(bot, msg, { uiMessageId });
         break;
       case "🛒 خرید سرویس":
-        await handleBuyService(bot, chatId);
+        await handleBuyService(bot, chatId, uiMessageId);
         break;
-      case "💰 افزایش موجودی": {
-        await hideKeyboard(bot, chatId);
-        const user = await User.findOne({ telegramId: userId });
-        if (!user || !user.phoneNumber) {
-          await handleContact(bot, msg, async () => {
-            await showPaymentMethods(bot, chatId);
-          });
-        } else {
-          await showPaymentMethods(bot, chatId);
-        }
+      case "💰 افزایش موجودی":
+        await showPaymentMethods(bot, chatId, uiMessageId);
         break;
-      }
       case "👤 پروفایل من":
-        await handleProfile(bot, chatId, userId);
+        await handleProfile(bot, chatId, userId, { messageId: uiMessageId, telegramUser: msg.from });
         break;
       case "📖 راهنما":
-        await handleGuide(bot, chatId);
+        await handleGuide(bot, chatId, uiMessageId);
         break;
       case "🛠 پشتیبانی":
-        await handleSupport(bot, chatId, userId);
+        await handleSupport(bot, chatId, userId, uiMessageId);
         break;
       case "📦 سرویس‌های من":
-        await sendServiceSelectionMenu(bot, chatId, userId);
+        await sendServiceSelectionMenu(bot, chatId, userId, uiMessageId);
         break;
       default:
-        await handleMessage(bot, msg);
+        if (session?.support && !msg.text && !hasDedicatedMediaHandler) {
+          await supportMessageHandler(bot, msg);
+        } else {
+          await handleMessage(bot, msg);
+        }
     }
   } catch (err) {
     console.error(
@@ -185,22 +186,24 @@ bot.on("message", async (msg) => {
       })
     );
     try {
-      await bot.sendMessage(
-        msg.chat.id,
-        "❌ خطایی رخ داد. لطفاً دوباره تلاش کنید."
-      );
+      if (msg.chat?.type === "private") {
+        await renderUiScreen(
+          bot,
+          msg.chat.id,
+          session.uiMessageId ?? session.mainMessageId ?? session.messageId,
+          "❌ خطایی رخ داد. لطفاً دوباره تلاش کنید.",
+          { reply_markup: { inline_keyboard: [[{ text: "🏠 منوی اصلی", callback_data: "back_to_home" }]] } }
+        );
+      } else {
+        await bot.sendMessage(msg.chat.id, "❌ خطایی رخ داد. لطفاً دوباره تلاش کنید.");
+      }
     } catch { /* chat unreachable — nothing more we can do */ }
-  }
-});
-
-// * ☎️ Contact Handler
-bot.on("contact", async (msg) => {
-  try {
-    await handleContact(bot, msg);
-  } catch (err) {
-    console.error("❌ Error in bot.on('contact'):", err);
-    const chatId = msg.chat.id;
-    await bot.sendMessage(chatId, "❌ مشکلی در ذخیره شماره تلفن رخ داد.");
+  } finally {
+    // Delete after the command/input has been consumed; Telegram failures must
+    // not affect an already-completed payment, order, or support action.
+    if (!hasDedicatedMediaHandler && isPrivateUserMessage(msg)) {
+      await deleteIncomingPrivateMessage(bot, msg);
+    }
   }
 });
 
@@ -234,6 +237,8 @@ bot.on("photo", async (msg) => {
     }
   } catch (err) {
     console.error("❌ Error in bot.on('photo'):", err.message);
+  } finally {
+    if (isPrivateUserMessage(msg)) await deleteIncomingPrivateMessage(bot, msg);
   }
 });
 
@@ -248,77 +253,43 @@ bot.on("video", async (msg) => {
     }
   } catch (err) {
     console.error("❌ Error in bot.on('video'):", err.message);
+  } finally {
+    if (isPrivateUserMessage(msg)) await deleteIncomingPrivateMessage(bot, msg);
   }
 });
 
 // * 🔊 Voice Handler (unsupported media types for support)
 bot.on("voice", async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  const session = await getSession(userId);
-
-  if (session?.support) {
-    try {
-      // Delete the unsupported message
-      try {
-        await bot.deleteMessage(chatId, msg.message_id);
-      } catch (deleteError) {
-        console.log("❗️خطا در حذف پیام voice:", deleteError.message);
-        // Continue even if message deletion fails
-      }
-
-      // Edit the previous support message to show error
-      await showUnsupportedMediaNotice(bot, chatId, session);
-    } catch (error) {
-      console.error("❌ Error deleting unsupported voice message:", error);
-    }
+  try {
+    const session = await getSession(msg.from?.id ?? msg.chat.id);
+    if (session?.support) await showUnsupportedMediaNotice(bot, msg.chat.id, session);
+  } catch (error) {
+    console.error("❌ Error handling unsupported voice message:", error?.message || error);
+  } finally {
+    if (isPrivateUserMessage(msg)) await deleteIncomingPrivateMessage(bot, msg);
   }
 });
 
 // * 🎥 Video Note Handler (unsupported media types for support)
 bot.on("video_note", async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  const session = await getSession(userId);
-
-  if (session?.support) {
-    try {
-      // Delete the unsupported message
-      try {
-        await bot.deleteMessage(chatId, msg.message_id);
-      } catch (deleteError) {
-        console.log("❗️خطا در حذف پیام video_note:", deleteError.message);
-        // Continue even if message deletion fails
-      }
-
-      // Edit the previous support message to show error
-      await showUnsupportedMediaNotice(bot, chatId, session);
-    } catch (error) {
-      console.error("❌ Error deleting unsupported video_note message:", error);
-    }
+  try {
+    const session = await getSession(msg.from?.id ?? msg.chat.id);
+    if (session?.support) await showUnsupportedMediaNotice(bot, msg.chat.id, session);
+  } catch (error) {
+    console.error("❌ Error handling unsupported video note:", error?.message || error);
+  } finally {
+    if (isPrivateUserMessage(msg)) await deleteIncomingPrivateMessage(bot, msg);
   }
 });
 
 // * 📄 Document Handler (unsupported media types for support)
 bot.on("document", async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  const session = await getSession(userId);
-
-  if (session?.support) {
-    try {
-      // Delete the unsupported message
-      try {
-        await bot.deleteMessage(chatId, msg.message_id);
-      } catch (deleteError) {
-        console.log("❗️خطا در حذف پیام document:", deleteError.message);
-        // Continue even if message deletion fails
-      }
-
-      // Edit the previous support message to show error
-      await showUnsupportedMediaNotice(bot, chatId, session);
-    } catch (error) {
-      console.error("❌ Error deleting unsupported document message:", error);
-    }
+  try {
+    const session = await getSession(msg.from?.id ?? msg.chat.id);
+    if (session?.support) await showUnsupportedMediaNotice(bot, msg.chat.id, session);
+  } catch (error) {
+    console.error("❌ Error handling unsupported document:", error?.message || error);
+  } finally {
+    if (isPrivateUserMessage(msg)) await deleteIncomingPrivateMessage(bot, msg);
   }
 });

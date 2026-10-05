@@ -1,28 +1,28 @@
-// * This function handles the "Buy Service" feature.
-// * Duration groups are derived from the Admin Panel product catalog (the
-// * authoritative source), with the shipped 30/60/90 groups as fallback.
+// * Duration groups come from the Admin Panel product catalog (authoritative).
 import { getAvailableDurations } from "../plans.js";
+import { renderUiScreen } from "../../utils/telegramUi.js";
 
 const DURATION_ICONS = { 30: "🔹", 60: "🔸", 90: "🔷" };
 
-const handleBuyService = async (bot, chatId) => {
-  const message = `🛒 در 2 مرحله سرویس اختصاصی بگیرید ..
-
-🔻 ابتدا مدت زمان سرویس را انتخاب کنید:`;
-
+const handleBuyService = async (bot, chatId, messageId) => {
   const durations = await getAvailableDurations();
   const durationButtons = {
-    reply_markup: {
-      inline_keyboard: [
-        ...durations.map((days) => [
-          { text: `${DURATION_ICONS[days] || "▫️"} ${days} روزه`, callback_data: `duration_${days}` },
-        ]),
-        [{ text: "🔙 بازگشت", callback_data: "buy_service_back_to_main" }],
-      ],
-    },
+    inline_keyboard: [
+      ...durations.map((days) => [
+        { text: `${DURATION_ICONS[days] || "▫️"} ${days} روزه`, callback_data: `duration_${days}` },
+      ]),
+      [{ text: "🏠 منوی اصلی", callback_data: "buy_service_back_to_main" }],
+    ],
   };
 
-  await bot.sendMessage(chatId, message, durationButtons);
+  return renderUiScreen(
+    bot,
+    chatId,
+    messageId,
+    `🛒 <b>خرید سرویس</b>\n\nمدت‌زمان سرویس را انتخاب کنید:`,
+    { parse_mode: "HTML", reply_markup: durationButtons },
+    { step: null, support: false, supportMessageId: null }
+  );
 };
 
 export default handleBuyService;

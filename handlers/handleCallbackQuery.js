@@ -23,10 +23,13 @@ import {
   setSession,
 } from "../config/sessionStore.js";
 import keyboard from "../keyboards/mainKeyboard.js";
-import { CHOOSE_OPTION_MESSAGE } from "../messages/staticMessages.js";
 import promptForReceipt from "../paymentHandlers/promptForReceipt.js";
 import { getActiveProducts, getActiveProductById } from "../services/plans.js";
 import handleBuyService from "../services/buyService/buyService.js";
+import createTestService from "../services/createTestService.js";
+import handleGuide from "./message/handleGuide.js";
+import handleSupport from "./message/handleSupport.js";
+import showHome from "./message/showHome.js";
 import generatePlanButtons from "../keyboards/generatePlanButtons.js";
 import confirmOrder from "../services/buyService/confirmOrder.js";
 import orderService from "../services/buyService/orderService.js";
@@ -46,6 +49,7 @@ import { payHoosh } from "../paymentHandlers/payHoosh.js";
 import { verifyHooshPayment } from "../services/hooshpay/verifyHooshPayment.js";
 import { confirmBankPayment } from "../services/payments/confirmBankPayment.js";
 import { isAdmin } from "../utils/auth.js";
+import { isPrivateUserCallback } from "../utils/telegramUi.js";
 import { handleAdminPanelCallbacks } from "./admin/panel.js";
 
 // ─── Authorization helpers ─────────────────────────────────────────────────
@@ -57,6 +61,15 @@ async function denyAdmin(bot, queryId) {
     text: "⛔️ دسترسی غیرمجاز",
     show_alert: true,
   });
+}
+
+function isAdminCallbackData(data) {
+  return data.startsWith("adm:") ||
+    data.startsWith("admin_") ||
+    data.startsWith("confirm_payment_") ||
+    data.startsWith("reject_payment_") ||
+    data.startsWith("send_config_to_user_") ||
+    data.startsWith("register_vpn_id");
 }
 
 /**
@@ -124,6 +137,16 @@ const handleCallbackQuery = async (bot, query) => {
     return;
   }
 
+  // Customer screens may contain balances, orders, or service links. Reject
+  // copied/forwarded/group callbacks unless they are explicit admin actions.
+  if (!isPrivateUserCallback(query) && !isAdminCallbackData(data)) {
+    await bot.answerCallbackQuery(query.id, {
+      text: "⛔️ این منو فقط در گفتگوی خصوصی صاحب حساب قابل استفاده است.",
+      show_alert: true,
+    }).catch(() => {});
+    return;
+  }
+
   // ── SWIFT Admin Panel (adm:*) — shared services, audited actions ──────────
   if (data.startsWith("adm:") ) {
     await handleAdminPanelCallbacks(bot, query);
@@ -131,6 +154,42 @@ const handleCallbackQuery = async (bot, query) => {
   }
 
   const session = await getSession(chatId);
+
+  // Home actions replace the same bot message; normal navigation creates no
+  // new chat messages and never consumes user-authored text.
+  if (data.startsWith("home_")) {
+    await bot.answerCallbackQuery(query.id).catch(() => {});
+    switch (data) {
+      case "home_buy_service":
+        await handleBuyService(bot, chatId, messageId);
+        break;
+      case "home_my_services":
+        await sendServiceSelectionMenu(bot, chatId, userId, messageId);
+        break;
+      case "home_topup":
+        await showPaymentMethods(bot, chatId, messageId);
+        break;
+      case "home_test_service":
+        await createTestService(
+          bot,
+          { chat: { id: chatId }, from: query.from },
+          { uiMessageId: messageId }
+        );
+        break;
+      case "home_profile":
+        await handleProfile(bot, chatId, userId, { messageId, telegramUser: query.from });
+        break;
+      case "home_guide":
+        await handleGuide(bot, chatId, messageId);
+        break;
+      case "home_support":
+        await handleSupport(bot, chatId, userId, messageId);
+        break;
+      default:
+        await bot.answerCallbackQuery(query.id, { text: "⚠️ این گزینه معتبر نیست." }).catch(() => {});
+    }
+    return;
+  }
 
   // ── hoosh_verify:<uid> — manual "I've Paid" verification ─────────────────
   if (data.startsWith("hoosh_verify:")) {
@@ -350,9 +409,7 @@ const handleCallbackQuery = async (bot, query) => {
       break;
 
     // ── Cancel / back ────────────────────────────────────────────────────────
-    case "back_to_topup":
-      await bot.deleteMessage(chatId, messageId);
-
+    case "back_to_topup": {
       // Clean up any pending invoice for the current payment type
       if (session?.paymentId) {
         const { paymentType, paymentId } = session;
@@ -374,17 +431,17 @@ const handleCallbackQuery = async (bot, query) => {
       }
 
       await clearSession(chatId);
-      await showPaymentMethods(bot, chatId);
-      break;
+      await showPaymentMethods(bot, chatId, messageId);
+      return;
+    }
 
     case "back_to_home":
-      try { await bot.deleteMessage(chatId, messageId); } catch (_) {}
-      await clearSession(chatId);
       if (session?.supportMessageId && session.supportMessageId !== messageId) {
         try { await bot.deleteMessage(chatId, session.supportMessageId); } catch (_) {}
       }
-      await bot.sendMessage(chatId, CHOOSE_OPTION_MESSAGE, keyboard);
-      break;
+      await clearSession(chatId);
+      await showHome(bot, chatId, messageId);
+      return;
 
     // ── Service purchase ─────────────────────────────────────────────────────
     // (duration groups and plan selection are handled by the dynamic
@@ -392,14 +449,12 @@ const handleCallbackQuery = async (bot, query) => {
     // they read the authoritative Admin Panel product catalog.)
 
     case "buy_service_back_to_main":
-      await bot.deleteMessage(chatId, messageId);
-      await bot.sendMessage(chatId, CHOOSE_OPTION_MESSAGE);
-      break;
+      await showHome(bot, chatId, messageId);
+      return;
 
     case "buy_service_back":
-      await bot.deleteMessage(chatId, messageId);
-      await handleBuyService(bot, chatId);
-      break;
+      await handleBuyService(bot, chatId, messageId);
+      return;
 
     // ── Admin: back to panel ─────────────────────────────────────────────────
     case "admin_back_to_panel": {
@@ -789,11 +844,20 @@ const handleCallbackQuery = async (bot, query) => {
     // the authoritative catalog record, never from a stale button.
     const selectedPlan = await getActiveProductById(planId);
     if (!selectedPlan) {
-      await bot.sendMessage(chatId, "❌ این پلن در حال حاضر فعال نیست یا حذف شده است. لطفاً از منوی خرید دوباره انتخاب کنید.", keyboard.reply_markup);
+      await bot.editMessageText("❌ این پلن در حال حاضر فعال نیست یا حذف شده است. لطفاً دوباره از منوی خرید انتخاب کنید.", {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: { inline_keyboard: [[{ text: "🔙 بازگشت به پلن‌ها", callback_data: "buy_service_back" }]] },
+      });
       return;
     }
-    await bot.deleteMessage(chatId, messageId);
-    await orderService(bot, chatId, userId, selectedPlan);
+    await bot.answerCallbackQuery(query.id, { text: "⏳ سفارش در حال ثبت است..." }).catch(() => {});
+    await bot.editMessageText("⏳ سفارش شما در حال ثبت و ساخت سرویس است؛ لطفاً چند لحظه صبر کنید.", {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: { inline_keyboard: [] },
+    });
+    await orderService(bot, chatId, userId, selectedPlan, { messageId });
     return;
   }
 
@@ -823,16 +887,24 @@ const handleCallbackQuery = async (bot, query) => {
   if (data.startsWith("delete_service_")) {
     const username = data.split("delete_service_")[1];
     if (!(await userOwnsService(userId, username))) { await denyOwnership(bot, query.id); return; }
-    await bot.editMessageText("آیا می خواهید این سرویس را حذف کنید؟", {
+    await bot.editMessageText("آیا می‌خواهید این سرویس را حذف کنید؟", {
       chat_id: chatId,
       message_id: messageId,
       reply_markup: {
         inline_keyboard: [
           [{ text: "❌ خیر", callback_data: `show_service_${username}` }, { text: "✅ بله", callback_data: `confirm_delete_service_${username}` }],
+          [{ text: "🏠 منوی اصلی", callback_data: "back_to_home" }],
         ],
       },
     });
-    await setSession(chatId, { step: "confirm_delete_service", username });
+    await setSession(chatId, {
+      ...session,
+      step: "confirm_delete_service",
+      username,
+      messageId,
+      uiMessageId: messageId,
+      mainMessageId: messageId,
+    });
     return;
   }
 
@@ -850,6 +922,12 @@ const handleCallbackQuery = async (bot, query) => {
     await bot.editMessageText(res.result ? "✅ سرویس با موفقیت حذف شد." : "❌ خطا در حذف سرویس.", {
       chat_id: chatId,
       message_id: messageId,
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "📦 سرویس‌های من", callback_data: "home_my_services" }],
+          [{ text: "🏠 منوی اصلی", callback_data: "back_to_home" }],
+        ],
+      },
     });
     return;
   }
@@ -878,21 +956,18 @@ const handleCallbackQuery = async (bot, query) => {
   }
 
   if (data.startsWith("back_to_profile")) {
-    await bot.deleteMessage(chatId, messageId);
-    await handleProfile(bot, chatId, userId);
+    await handleProfile(bot, chatId, userId, { messageId, telegramUser: query.from });
     return;
   }
 
-  // Profile quick actions
+  // Profile quick actions reuse the profile message.
   if (data === "topup_from_profile") {
-    await bot.deleteMessage(chatId, messageId).catch(() => {});
-    await showPaymentMethods(bot, chatId);
+    await showPaymentMethods(bot, chatId, messageId);
     return;
   }
 
   if (data === "my_services_from_profile") {
-    await bot.deleteMessage(chatId, messageId).catch(() => {});
-    await sendServiceSelectionMenu(bot, chatId, userId);
+    await sendServiceSelectionMenu(bot, chatId, userId, messageId);
     return;
   }
 

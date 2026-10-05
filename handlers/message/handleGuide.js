@@ -1,36 +1,33 @@
-// * This function handles the "guide" section of the bot
+import { renderUiScreen } from "../../utils/telegramUi.js";
 
 export const guideButtons = {
   reply_markup: {
     inline_keyboard: [
       [
-        // * Android connection guide
         { text: "📲 اتصال در اندروید", url: "https://t.me/swift_shield/7" },
-        // * iOS connection guide
         { text: "📱 اتصال در آیفون", url: "https://t.me/swift_shield/6" },
       ],
-      [
-        // * Windows connection guide
-        { text: "💻 اتصال در ویندوز", url: "https://t.me/swift_shield/8" },
-      ],
-      [
-        // * Guide for purchasing from the bot
-        { text: "🛒 آموزش خرید از ربات", url: "https://t.me/swift_shield/6" },
-      ],
+      [{ text: "💻 اتصال در ویندوز", url: "https://t.me/swift_shield/8" }],
+      [{ text: "🛒 آموزش خرید از ربات", url: "https://t.me/swift_shield/6" }],
+      [{ text: "🏠 منوی اصلی", callback_data: "back_to_home" }],
     ],
   },
 };
 
-const handleGuide = (bot, chatId) => {
-  // * Main message shown to the user
-  const guideMessage = `📕 به بخش راهنمای ربات خوش آمدید
+const handleGuide = async (bot, chatId, messageId) => {
+  const guideMessage = `📕 <b>راهنمای سویفت</b>
 
-📱 اتصال به سرویس‌ها در همه نوع دیوایس‌ها (آیفون، اندروید، ویندوز) امکان‌پذیر است
-🔗 نحوه اتصال به سرویس‌ها را از طریق لینک‌های زیر مطالعه بفرمایید:
-(برنامه مورد نیاز + آموزش قدم به قدم)`;
+📱 اتصال به سرویس‌ها در اندروید، آیفون و ویندوز امکان‌پذیر است.
+🔗 راهنمای دستگاه خود را از دکمه‌های زیر باز کنید.`;
 
-  // * Send the message and the inline keyboard to the user
-  bot.sendMessage(chatId, guideMessage, guideButtons);
+  return renderUiScreen(
+    bot,
+    chatId,
+    messageId,
+    guideMessage,
+    { parse_mode: "HTML", ...guideButtons },
+    { step: null, support: false, supportMessageId: null }
+  );
 };
 
 export default handleGuide;

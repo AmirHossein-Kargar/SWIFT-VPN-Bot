@@ -1,29 +1,51 @@
 import User from "../../models/User.js";
+import { renderUiScreen } from "../../utils/telegramUi.js";
 
-async function sendServiceSelectionMenu(bot, chatId, userId) {
+async function sendServiceSelectionMenu(bot, chatId, userId, messageId) {
   try {
-    const user = await User.findOne({ telegramId: userId });
-    if (!user || !Array.isArray(user.services) || user.services.length === 0) {
-      await bot.sendMessage(chatId, "⚠️ شما هیچ سرویسی ندارید.");
-      return;
-    }
-
-    // * create buttons for services (each button should be an array for inline_keyboard)
-    const serviceButtons = user.services.map((service) => [
+    const user = await User.findOne({ telegramId: String(userId) }).lean();
+    const services = Array.isArray(user?.services) ? user.services : [];
+    const serviceButtons = services.map((service) => [
       {
         text: service.username || "بدون نام",
         callback_data: `show_service_${service.username || ""}`,
       },
     ]);
 
-    await bot.sendMessage(chatId, "📌 یکی از اشتراک‌های زیر را انتخاب کنید:", {
-      reply_markup: {
-        inline_keyboard: serviceButtons,
-      },
-    });
+    const reply_markup = services.length
+      ? {
+          inline_keyboard: [
+            ...serviceButtons,
+            [{ text: "🏠 منوی اصلی", callback_data: "back_to_home" }],
+          ],
+        }
+      : {
+          inline_keyboard: [
+            [{ text: "🛒 خرید سرویس", callback_data: "home_buy_service" }],
+            [{ text: "🏠 منوی اصلی", callback_data: "back_to_home" }],
+          ],
+        };
+
+    return await renderUiScreen(
+      bot,
+      chatId,
+      messageId,
+      services.length
+        ? "📌 یکی از اشتراک‌های خود را انتخاب کنید:"
+        : "⚠️ هنوز سرویسی در حساب شما ثبت نشده است.",
+      { reply_markup },
+      { step: null, support: false, supportMessageId: null }
+    );
   } catch (error) {
-    console.error("Error sending service selection menu:", error);
-    await bot.sendMessage(chatId, "❌ خطایی رخ داد، لطفا دوباره تلاش کنید.");
+    console.error("Error sending service selection menu:", error?.name || "Error");
+    return renderUiScreen(
+      bot,
+      chatId,
+      messageId,
+      "❌ خطایی رخ داد، لطفاً دوباره تلاش کنید.",
+      { reply_markup: { inline_keyboard: [[{ text: "🏠 منوی اصلی", callback_data: "back_to_home" }]] } },
+      { step: null, support: false, supportMessageId: null }
+    ).catch(() => {});
   }
 }
 

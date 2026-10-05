@@ -4,7 +4,6 @@ const userSchema = new mongoose.Schema({
   lastName: { type: String, default: null },
   username: { type: String, default: null },
   telegramId: { type: String, required: true, unique: true },
-  phoneNumber: { type: String, default: null },
   balance: { type: Number, default: 0 },
   successfulPayments: { type: Number, default: 0 },
   // Durable idempotency ledger for wallet credits. A payment ID is added in the

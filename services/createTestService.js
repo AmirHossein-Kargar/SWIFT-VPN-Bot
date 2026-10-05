@@ -2,6 +2,9 @@ import { randomUUID } from "node:crypto";
 import User from "../models/User.js";
 import { getTestServiceMessage, guideButtons } from "../messages/staticMessages.js";
 import { createTestService as createTestServiceApi } from "../api/wizardApi.js";
+import ensureTelegramUser from "./users/ensureTelegramUser.js";
+import keyboard from "../keyboards/mainKeyboard.js";
+import { renderUiScreen } from "../utils/telegramUi.js";
 
 const NOTIFICATION_CLAIM_MS = 5 * 60_000;
 const RECOVERY_STALE_MS = 5 * 60_000;
@@ -99,14 +102,41 @@ async function alertAdmin(user, bot, reason) {
   }
 }
 
-const createTestService = async (bot, msg) => {
+const createTestService = async (bot, msg, { uiMessageId } = {}) => {
   const chatId = msg.chat.id;
   const userId = String(msg.from.id);
+  let currentUiMessageId = uiMessageId;
+  const showStatus = async (text, { busy = false } = {}) => {
+    const reply_markup = busy
+      ? { inline_keyboard: [] }
+      : keyboard.reply_markup;
+    if (currentUiMessageId == null) {
+      const sent = await bot.sendMessage(chatId, text, { reply_markup }).catch(() => null);
+      if (sent?.message_id != null) currentUiMessageId = sent.message_id;
+      return sent;
+    }
+    try {
+      const rendered = await renderUiScreen(
+        bot,
+        chatId,
+        currentUiMessageId,
+        text,
+        { reply_markup },
+        { step: null, support: false, supportMessageId: null }
+      );
+      if (rendered?.message_id != null) currentUiMessageId = rendered.message_id;
+      return rendered;
+    } catch {
+      return null;
+    }
+  };
+
+  await showStatus("⏳ در حال آماده‌سازی سرویس تست ...", { busy: true });
   try {
-    await User.updateOne({ telegramId: userId }, { $setOnInsert: { telegramId: userId } }, { upsert: true });
+    await ensureTelegramUser(msg.from);
   } catch (error) {
     log("error", "Could not load test-service account", { errorType: error?.name || "DatabaseError" });
-    await bot.sendMessage(chatId, "❌ خطا در ارتباط با پایگاه داده. لطفاً بعداً تلاش کنید.");
+    await showStatus("❌ خطا در ارتباط با پایگاه داده. لطفاً بعداً تلاش کنید.");
     return;
   }
 
@@ -138,26 +168,25 @@ const createTestService = async (bot, msg) => {
     );
   } catch (error) {
     log("error", "Could not claim test-service attempt", { errorType: error?.name || "DatabaseError" });
-    await bot.sendMessage(chatId, "❌ درخواست در حال حاضر ثبت نشد. لطفاً بعداً تلاش کنید.");
+    await showStatus("❌ درخواست در حال حاضر ثبت نشد. لطفاً بعداً تلاش کنید.");
     return;
   }
 
   if (!user) {
     const existing = await User.findOne({ telegramId: userId }).select("hasReceivedTest testServiceStatus").lean();
     if (existing?.hasReceivedTest || existing?.testServiceStatus === "completed") {
-      await bot.sendMessage(chatId, "⚠️ شما قبلاً این سرویس را دریافت کرده‌اید.");
+      await showStatus("⚠️ شما قبلاً این سرویس را دریافت کرده‌اید.");
     } else if (["provisioning", "manual_review"].includes(existing?.testServiceStatus)) {
-      await bot.sendMessage(chatId, "⏳ درخواست قبلی شما هنوز در حال بررسی است؛ لطفاً برای جلوگیری از ساخت تکراری با پشتیبانی تماس بگیرید.");
+      await showStatus("⏳ درخواست قبلی شما هنوز در حال بررسی است؛ لطفاً برای جلوگیری از ساخت تکراری با پشتیبانی تماس بگیرید.");
     } else {
-      await bot.sendMessage(chatId, "❌ درخواست در حال حاضر ثبت نشد. لطفاً دوباره تلاش کنید.");
+      await showStatus("❌ درخواست در حال حاضر ثبت نشد. لطفاً دوباره تلاش کنید.");
     }
     return;
   }
 
-  let loadingMsg;
   let panelResponseReceived = false;
   try {
-    loadingMsg = await bot.sendMessage(chatId, "⏳ در حال ساخت سرویس ...");
+    await showStatus("⏳ در حال ساخت سرویس ...", { busy: true });
     const data = await createTestServiceApi();
     panelResponseReceived = true;
     const result = data.result;
@@ -185,13 +214,13 @@ const createTestService = async (bot, msg) => {
     );
     if (!updated) throw new Error("Test-service result could not be committed to the owner account");
 
-    if (loadingMsg?.message_id) bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
     const delivered = await notifyTestServiceOnce(updated, bot);
-    if (!delivered) {
-      await bot.sendMessage(chatId, "✅ سرویس ساخته و به حساب شما اضافه شد، اما ارسال لینک با تأخیر روبه‌رو شد. کمی بعد دوباره بررسی کنید.").catch(() => {});
-    }
+    await showStatus(
+      delivered
+        ? "✅ سرویس تست با موفقیت ساخته شد؛ جزئیات اتصال در پیام سرویس ارسال شد."
+        : "✅ سرویس ساخته و به حساب شما اضافه شد، اما ارسال لینک با تأخیر روبه‌رو شد. کمی بعد دوباره بررسی کنید."
+    );
   } catch (error) {
-    if (loadingMsg?.message_id) bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
     const current = await User.findOne({ telegramId: userId, testServiceAttemptId: attemptId }).lean().catch(() => null);
 
     if (error?.ambiguous || (panelResponseReceived && current?.testServiceStatus !== "completed")) {
@@ -206,12 +235,14 @@ const createTestService = async (bot, msg) => {
         code: error?.code || "UNKNOWN",
       });
       if (uncertain) await alertAdmin(uncertain, bot, error.code || "PANEL_RESULT_UNKNOWN");
-      await bot.sendMessage(chatId, "⏳ وضعیت ساخت سرویس تست از پنل مشخص نیست. برای جلوگیری از ساخت تکراری، درخواست شما تا بررسی پشتیبانی متوقف شده است.");
+      await showStatus("⏳ وضعیت ساخت سرویس تست از پنل مشخص نیست. برای جلوگیری از ساخت تکراری، درخواست شما تا بررسی پشتیبانی متوقف شده است.");
     } else if (current?.testServiceStatus === "completed") {
       const delivered = await notifyTestServiceOnce(current, bot).catch(() => false);
-      if (!delivered) {
-        await bot.sendMessage(chatId, "✅ سرویس تست ساخته و به حساب شما اضافه شد؛ ارسال لینک در حال بازیابی است.").catch(() => {});
-      }
+      await showStatus(
+        delivered
+          ? "✅ سرویس تست شما آماده است؛ جزئیات اتصال در پیام سرویس ارسال شد."
+          : "✅ سرویس تست ساخته و به حساب شما اضافه شد؛ ارسال لینک در حال بازیابی است."
+      );
     } else if (current?.testServiceStatus === "provisioning") {
       await User.updateOne(
         { telegramId: userId, testServiceAttemptId: attemptId, testServiceStatus: "provisioning" },
@@ -222,14 +253,14 @@ const createTestService = async (bot, msg) => {
         errorType: error?.name || "PanelError",
         code: error?.code || "TEST_SERVICE_FAILED",
       });
-      await bot.sendMessage(chatId, "❌ ساخت سرویس تست انجام نشد. لطفاً بعداً دوباره تلاش کنید.");
+      await showStatus("❌ ساخت سرویس تست انجام نشد. لطفاً بعداً دوباره تلاش کنید.");
     } else {
       log("error", "Test service attempt state could not be recovered", {
         attemptId,
         errorType: error?.name || "RecoveryError",
       });
       if (current) await alertAdmin(current, bot, "TEST_SERVICE_STATE_UNAVAILABLE");
-      await bot.sendMessage(chatId, "⏳ وضعیت درخواست سرویس تست در حال بررسی است؛ لطفاً دوباره درخواست ساخت نفرستید.");
+      await showStatus("⏳ وضعیت درخواست سرویس تست در حال بررسی است؛ لطفاً دوباره درخواست ساخت نفرستید.");
     }
   }
 };

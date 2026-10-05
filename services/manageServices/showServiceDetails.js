@@ -1,6 +1,7 @@
 import User from "../../models/User.js";
 import { getServiceView } from "../../services/wizardServiceStatus.js";
 import formatDate from "../../utils/formatDate.js";
+import { renderUiScreen } from "../../utils/telegramUi.js";
 
 const HOME_BUTTON = [{ text: "🔙 بازگشت به منوی اصلی", callback_data: "buy_service_back_to_main" }];
 
@@ -27,7 +28,14 @@ function escapeHtml(value) {
 const showServiceDetails = async (bot, chatId, username, messageId) => {
   try {
     if (typeof username !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(username)) {
-      await bot.sendMessage(chatId, "❌ شناسه سرویس نامعتبر است.");
+      await renderUiScreen(
+        bot,
+        chatId,
+        messageId,
+        "❌ شناسه سرویس نامعتبر است.",
+        { reply_markup: { inline_keyboard: [[{ text: "🏠 منوی اصلی", callback_data: "back_to_home" }]] } },
+        { step: null, support: false, supportMessageId: null }
+      );
       return;
     }
 
@@ -45,13 +53,10 @@ const showServiceDetails = async (bot, chatId, username, messageId) => {
           HOME_BUTTON,
         ],
       };
-      if (messageId) {
-        try {
-          await bot.editMessageText(messageText, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
-          return;
-        } catch { /* fall through to send */ }
-      }
-      await bot.sendMessage(chatId, messageText, { parse_mode: "HTML", reply_markup: keyboard });
+      await renderUiScreen(bot, chatId, messageId, messageText, {
+        parse_mode: "HTML",
+        reply_markup: keyboard,
+      }, { step: null, support: false, supportMessageId: null });
       return;
     }
 
@@ -102,7 +107,14 @@ ${record.sub_link ? `🔗 لینک اتصال (Subscription):\n<code>${escapeHtm
     await sendDetailsMessage(bot, chatId, messageId, message, username, null);
   } catch (error) {
     console.error("showServiceDetails error:", error?.name || "Error");
-    await bot.sendMessage(chatId, "❌ خطایی رخ داد، لطفا دوباره تلاش کنید.");
+    await renderUiScreen(
+      bot,
+      chatId,
+      messageId,
+      "❌ خطایی رخ داد، لطفاً دوباره تلاش کنید.",
+      { reply_markup: { inline_keyboard: [[{ text: "🏠 منوی اصلی", callback_data: "back_to_home" }]] } },
+      { step: null, support: false, supportMessageId: null }
+    ).catch(() => {});
   }
 };
 
@@ -141,15 +153,10 @@ async function sendDetailsMessage(bot, chatId, messageId, message, username, sta
   inlineKeyboard.push([{ text: "🔄 بروزرسانی وضعیت", callback_data: `show_service_${username}` }]);
   inlineKeyboard.push(HOME_BUTTON);
 
-  if (messageId) {
-    try {
-      await bot.deleteMessage(chatId, messageId);
-    } catch { /* message deletion failed, continue */ }
-  }
-  await bot.sendMessage(chatId, message, {
+  await renderUiScreen(bot, chatId, messageId, message, {
     parse_mode: "HTML",
     reply_markup: { inline_keyboard: inlineKeyboard },
-  });
+  }, { step: null, support: false, supportMessageId: null });
 }
 
 // Kept for backward compatibility with any external callers.

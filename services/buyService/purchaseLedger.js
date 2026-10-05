@@ -3,6 +3,7 @@ import User from "../../models/User.js";
 import WalletPurchase from "../../models/WalletPurchase.js";
 import { getSuccessServiceMessage, guideButtons } from "../../messages/staticMessages.js";
 import keyboard from "../../keyboards/mainKeyboard.js";
+import { renderUiScreen } from "../../utils/telegramUi.js";
 
 const NOTIFICATION_CLAIM_MS = 5 * 60_000;
 const RECOVERY_STALE_MS = 5 * 60_000;
@@ -285,12 +286,33 @@ export async function recoverWalletPurchases(bot) {
   }
 }
 
-export async function createWalletPurchase(bot, chatId, userId, plan) {
+export async function createWalletPurchase(bot, chatId, userId, plan, { messageId } = {}) {
+  let uiMessageId = messageId;
+  const showStatus = async (text, { busy = false } = {}) => {
+    const reply_markup = busy ? { inline_keyboard: [] } : keyboard.reply_markup;
+    if (uiMessageId == null) {
+      const sent = await bot.sendMessage(chatId, text, { reply_markup });
+      if (sent?.message_id != null) uiMessageId = sent.message_id;
+      return sent;
+    }
+    const rendered = await renderUiScreen(
+      bot,
+      chatId,
+      uiMessageId,
+      text,
+      { reply_markup },
+      { step: null, support: false, supportMessageId: null }
+    );
+    if (rendered?.message_id != null) uiMessageId = rendered.message_id;
+    return rendered;
+  };
+
+  await showStatus("⏳ سفارش شما در حال ثبت است ...", { busy: true });
   const telegramId = String(userId);
   const purchaseId = randomUUID();
   const amount = Number(plan?.price);
   if (!Number.isSafeInteger(amount) || amount <= 0 || !Number.isSafeInteger(Number(plan?.gig)) || Number(plan.gig) <= 0 || !Number.isSafeInteger(Number(plan?.days)) || Number(plan.days) <= 0) {
-    await bot.sendMessage(chatId, "❌ اطلاعات پلن نامعتبر است؛ لطفاً با پشتیبانی تماس بگیرید.");
+    await showStatus("❌ اطلاعات پلن نامعتبر است؛ لطفاً با پشتیبانی تماس بگیرید.");
     return;
   }
 
@@ -308,7 +330,7 @@ export async function createWalletPurchase(bot, chatId, userId, plan) {
     });
   } catch (error) {
     log("error", "Could not create purchase ledger", { errorType: error?.name || "DatabaseError" });
-    await bot.sendMessage(chatId, "❌ خرید در حال حاضر انجام نشد. موجودی شما تغییری نکرده است.");
+    await showStatus("❌ خرید در حال حاضر انجام نشد. موجودی شما تغییری نکرده است.");
     return;
   }
 
@@ -317,14 +339,14 @@ export async function createWalletPurchase(bot, chatId, userId, plan) {
     reserved = await reserveBalance(telegramId, amount, purchaseId);
   } catch (error) {
     log("error", "Wallet reservation failed", { purchaseId, errorType: error?.name || "DatabaseError" });
-    await bot.sendMessage(chatId, "❌ وضعیت خرید مشخص نیست؛ لطفاً تا بررسی پشتیبانی دوباره تلاش نکنید.");
+    await showStatus("❌ وضعیت خرید مشخص نیست؛ لطفاً تا بررسی پشتیبانی دوباره تلاش نکنید.");
     await alertAdmin(bot, purchase, "RESERVATION_RESULT_UNKNOWN");
     return;
   }
 
   if (!reserved) {
     await WalletPurchase.updateOne({ _id: purchase._id, status: "reserving" }, { $set: { status: "failed", errorCode: "INSUFFICIENT_BALANCE" } });
-    await bot.sendMessage(chatId, "⚠️ موجودی شما کافی نیست. لطفاً ابتدا حساب خود را شارژ کنید.");
+    await showStatus("⚠️ موجودی شما کافی نیست. لطفاً ابتدا حساب خود را شارژ کنید.");
     return;
   }
 
@@ -340,7 +362,7 @@ export async function createWalletPurchase(bot, chatId, userId, plan) {
       purchaseId,
       errorType: error?.name || "DatabaseError",
     });
-    await bot.sendMessage(chatId, "⏳ خرید شما در حال بررسی است؛ لطفاً دوباره سفارش ثبت نکنید.");
+    await showStatus("⏳ خرید شما در حال بررسی است؛ لطفاً دوباره سفارش ثبت نکنید.");
     await alertAdmin(bot, { ...purchase?.toObject?.(), _id: purchase?._id, purchaseId, telegramId, amount, planName: plan.name, status: "reserving" }, "RESERVATION_LEDGER_RECOVERY");
     return;
   }
@@ -354,7 +376,7 @@ export async function createWalletPurchase(bot, chatId, userId, plan) {
     if (!purchase) throw new Error("Provisioning claim failed");
   } catch (error) {
     log("error", "Wallet purchase provisioning was not started", { purchaseId, errorType: error?.name || "DatabaseError" });
-    await bot.sendMessage(chatId, "⏳ خرید شما ثبت شده و در حال بازیابی است؛ لطفاً سفارش دیگری ثبت نکنید.");
+    await showStatus("⏳ خرید شما ثبت شده و در حال بازیابی است؛ لطفاً سفارش دیگری ثبت نکنید.");
     await alertAdmin(bot, { _id: purchase?._id, purchaseId, telegramId, amount, planName: plan.name, status: "reserved" }, "PROVISIONING_NOT_STARTED");
     return;
   }
@@ -373,7 +395,7 @@ export async function createWalletPurchase(bot, chatId, userId, plan) {
       log("error", "Wizard panel outcome is ambiguous; reservation retained", {
         purchaseId, errorType: error?.name || "PanelError", code: error?.code || "UNKNOWN",
       });
-      await bot.sendMessage(chatId, "⏳ وضعیت ساخت سرویس از پنل مشخص نیست و مبلغ شما موقتاً رزرو شده است. لطفاً برای جلوگیری از ساخت تکراری، دوباره خرید نکنید تا پشتیبانی نتیجه را بررسی کند.");
+      await showStatus("⏳ وضعیت ساخت سرویس از پنل مشخص نیست و مبلغ شما موقتاً رزرو شده است. لطفاً برای جلوگیری از ساخت تکراری، دوباره خرید نکنید تا پشتیبانی نتیجه را بررسی کند.");
       if (uncertain) await alertAdmin(bot, uncertain, error.code || "PANEL_RESULT_UNKNOWN");
       return;
     }
@@ -386,13 +408,13 @@ export async function createWalletPurchase(bot, chatId, userId, plan) {
         errorType: refundError?.name || "RefundError",
       });
       await alertAdmin(bot, purchase, "REFUND_PENDING");
-      await bot.sendMessage(chatId, "❌ درخواست پنل انجام نشد، اما بازپرداخت هنوز در حال پردازش است. لطفاً دوباره خرید نکنید تا موجودی نهایی شود.");
+      await showStatus("❌ درخواست پنل انجام نشد، اما بازپرداخت هنوز در حال پردازش است. لطفاً دوباره خرید نکنید تا موجودی نهایی شود.");
       return;
     }
     log("warn", "Wizard panel definitively rejected purchase; reservation refunded", {
       purchaseId, errorType: error?.name || "PanelError", code: error?.code || "PANEL_REJECTED",
     });
-    await bot.sendMessage(chatId, "❌ ایجاد سرویس انجام نشد و مبلغ رزروشده به کیف پول شما بازگشت.");
+    await showStatus("❌ ایجاد سرویس انجام نشد و مبلغ رزروشده به کیف پول شما بازگشت.");
     return;
   }
 
@@ -424,7 +446,7 @@ export async function createWalletPurchase(bot, chatId, userId, plan) {
     log("error", "Panel created a service but its purchase record needs reconciliation", {
       purchaseId, errorType: error?.name || "DatabaseError",
     });
-    await bot.sendMessage(chatId, "✅ پنل سرویس را ساخته است، اما ثبت نهایی در حال بازیابی است. مبلغ شما کسر شده و سرویس برای شما ثبت خواهد شد؛ لطفاً خرید را تکرار نکنید.");
+    await showStatus("✅ پنل سرویس را ساخته است، اما ثبت نهایی در حال بازیابی است. مبلغ شما کسر شده و سرویس برای شما ثبت خواهد شد؛ لطفاً خرید را تکرار نکنید.");
     await alertAdmin(bot, { ...purchase?.toObject?.(), _id: purchase?._id, purchaseId, telegramId, amount, planName: plan.name, status: "provisioning" }, "PROVISIONED_RESULT_NEEDS_RECOVERY");
     return;
   }
@@ -432,15 +454,17 @@ export async function createWalletPurchase(bot, chatId, userId, plan) {
   try {
     const finalized = await commitProvisionedPurchase(purchase, bot);
     log("info", "PURCHASE_COMPLETED", { purchaseId, userId: telegramId, planId: purchase.planId });
-    if (!finalized.notified) {
-      await bot.sendMessage(chatId, "✅ سرویس ساخته و به حساب شما اضافه شد. لینک‌های سرویس در پیام بعدی ارسال می‌شوند.").catch(() => {});
-    }
+    await showStatus(
+      finalized.notified
+        ? "✅ سرویس با موفقیت ساخته شد؛ جزئیات اتصال در پیام سرویس ارسال شد."
+        : "✅ سرویس ساخته و به حساب شما اضافه شد. ارسال لینک‌های سرویس در حال بازیابی است."
+    ).catch(() => {});
   } catch (error) {
     log("error", "Provisioned purchase needs database recovery", {
       purchaseId, errorType: error?.name || "DatabaseError",
     });
     await alertAdmin(bot, purchase, "PROVISIONED_SERVICE_COMMIT_PENDING");
-    await bot.sendMessage(chatId, "✅ سرویس ساخته شده است، اما ثبت نهایی آن در حال بازیابی است. لطفاً خرید را تکرار نکنید.").catch(() => {});
+    await showStatus("✅ سرویس ساخته شده است، اما ثبت نهایی آن در حال بازیابی است. لطفاً خرید را تکرار نکنید.").catch(() => {});
   }
 }
 
