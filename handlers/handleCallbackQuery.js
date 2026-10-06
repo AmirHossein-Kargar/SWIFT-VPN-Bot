@@ -25,7 +25,7 @@ import {
 import keyboard from "../keyboards/mainKeyboard.js";
 import { CHOOSE_OPTION_MESSAGE } from "../messages/staticMessages.js";
 import promptForReceipt from "../paymentHandlers/promptForReceipt.js";
-import { getActiveProducts, getActiveProductById } from "../services/plans.js";
+import { getActiveProducts, getCustomerPlans, getCustomerPlanById } from "../services/plans.js";
 import handleBuyService from "../services/buyService/buyService.js";
 import generatePlanButtons from "../keyboards/generatePlanButtons.js";
 import confirmOrder from "../services/buyService/confirmOrder.js";
@@ -649,16 +649,15 @@ const handleCallbackQuery = async (bot, query) => {
 
   // ── Dynamic callback handlers (startsWith) ─────────────────────────────────
 
-  // Plan group for a duration. Products and prices come from the Admin Panel
-  // catalog; the shipped static catalog is only a fallback when the DB is
-  // empty or unreachable.
+  // Customer selling plans and prices are resolved from the fixed server-side
+  // catalog. AdminProduct edits never change the customer checkout price.
   if (data.startsWith("duration_")) {
     const days = Number(data.slice("duration_".length));
     if (!Number.isSafeInteger(days) || days < 1 || days > 3650) {
       await bot.answerCallbackQuery(query.id, { text: "⚠️ مدت زمان نامعتبر است.", show_alert: true });
       return;
     }
-    const products = await getActiveProducts({ durationDays: days });
+    const products = getCustomerPlans({ durationDays: days });
     if (!products.length) {
       await bot.editMessageText("⚠️ در حال حاضر پلن فعالی برای این مدت زمان موجود نیست.", {
         chat_id: chatId,
@@ -761,9 +760,8 @@ const handleCallbackQuery = async (bot, query) => {
 
   if (data.startsWith("plan_")) {
     const planId = data.slice("plan_".length);
-    // Authoritative product record (DB price, enabled state). Never trust the
-    // button label over the catalog.
-    const selectedPlan = await getActiveProductById(planId);
+    // Render the server-defined customer plan; callback data contains only its id.
+    const selectedPlan = getCustomerPlanById(planId);
     if (!selectedPlan) {
       await bot.editMessageText("❌ این پلن در حال حاضر فعال نیست یا حذف شده است.", {
         chat_id: chatId,
@@ -784,16 +782,16 @@ const handleCallbackQuery = async (bot, query) => {
   }
 
   if (data.startsWith("confirm_order_")) {
-    const planId = data.split("confirm_order_")[1];
-    // Re-resolve the product at charge time so the price always comes from
-    // the authoritative catalog record, never from a stale button.
-    const selectedPlan = await getActiveProductById(planId);
+    const planId = data.slice("confirm_order_".length);
+    // Re-resolve server-defined terms at charge time; never pass price, traffic,
+    // or duration supplied by the callback/UI into the business layer.
+    const selectedPlan = getCustomerPlanById(planId);
     if (!selectedPlan) {
       await bot.sendMessage(chatId, "❌ این پلن در حال حاضر فعال نیست یا حذف شده است. لطفاً از منوی خرید دوباره انتخاب کنید.", keyboard.reply_markup);
       return;
     }
-    await bot.deleteMessage(chatId, messageId);
-    await orderService(bot, chatId, userId, selectedPlan);
+    await bot.deleteMessage(chatId, messageId).catch(() => {});
+    await orderService(bot, chatId, userId, planId, { messageId });
     return;
   }
 

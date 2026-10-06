@@ -1,8 +1,6 @@
-import { randomUUID } from "node:crypto";
 import User from "../../models/User.js";
 import WalletPurchase from "../../models/WalletPurchase.js";
 import { getSuccessServiceMessage, guideButtons } from "../../messages/staticMessages.js";
-import keyboard from "../../keyboards/mainKeyboard.js";
 
 const NOTIFICATION_CLAIM_MS = 5 * 60_000;
 const RECOVERY_STALE_MS = 5 * 60_000;
@@ -19,10 +17,27 @@ function log(level, message, meta = {}) {
   );
 }
 
-export async function reserveBalance(telegramId, amount, purchaseId) {
-  return User.findOneAndUpdate(
+function validateWalletOperation({ telegramId, amount, purchaseId }) {
+  const normalizedId = String(telegramId ?? "").trim();
+  if (!/^\d{1,32}$/.test(normalizedId)) throw new TypeError("telegramId must be a numeric Telegram ID");
+  if (!Number.isSafeInteger(amount) || amount <= 0) throw new TypeError("amount must be a positive safe integer");
+  if (typeof purchaseId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(purchaseId)) {
+    throw new TypeError("purchaseId must be a safe order identifier");
+  }
+  return normalizedId;
+}
+
+/**
+ * Atomically reserve one customer-price amount. The conditional balance check
+ * and decrement are a single MongoDB document operation, so concurrent orders
+ * cannot spend the same funds. The per-user purchase key also makes retries
+ * idempotent if the balance write succeeded but its response was lost.
+ */
+export async function reserveBalance(telegramId, amount, purchaseId, { userModel = User } = {}) {
+  const normalizedId = validateWalletOperation({ telegramId, amount, purchaseId });
+  const user = await userModel.findOneAndUpdate(
     {
-      telegramId: String(telegramId),
+      telegramId: normalizedId,
       balance: { $gte: amount },
       appliedPurchaseReservations: { $ne: purchaseId },
     },
@@ -32,54 +47,159 @@ export async function reserveBalance(telegramId, amount, purchaseId) {
     },
     { new: true }
   );
+
+  if (user) return { user, reserved: true, alreadyReserved: false, exists: true };
+
+  const alreadyReserved = await userModel.findOne({
+    telegramId: normalizedId,
+    appliedPurchaseReservations: purchaseId,
+  }).select("_id balance appliedPurchaseReservations refundedPurchaseIds").lean();
+  if (alreadyReserved) return { user: alreadyReserved, reserved: true, alreadyReserved: true, exists: true };
+
+  const existingUser = await userModel.findOne({ telegramId: normalizedId }).select("_id balance").lean();
+  return {
+    user: existingUser,
+    reserved: false,
+    alreadyReserved: false,
+    exists: Boolean(existingUser),
+  };
 }
 
-export async function refundPurchaseReservation(purchase, { allowProvisioning = false } = {}) {
+/**
+ * Refund a prior reservation exactly once. Refund metadata is written to the
+ * existing WalletPurchase record before crediting the wallet; the User ledger
+ * key and increment then change atomically. A retry after any crash resumes
+ * from refund_pending without issuing a second credit.
+ */
+export async function refundPurchaseReservation(
+  purchase,
+  { allowProvisioning = false, reason, errorCode, userModel = User, purchaseModel = WalletPurchase } = {}
+) {
+  const purchaseId = String(purchase?.purchaseId ?? "");
+  const telegramId = String(purchase?.telegramId ?? "");
+  const amount = Number(purchase?.amount);
+  validateWalletOperation({ telegramId, amount, purchaseId });
+
+  const safeReason = String(reason || purchase?.errorCode || "PURCHASE_FAILED")
+    .replace(/[^A-Za-z0-9_-]/g, "_")
+    .slice(0, 80) || "PURCHASE_FAILED";
   const allowedStates = ["reserving", "reserved", "refund_pending"];
   if (allowProvisioning) allowedStates.push("provisioning");
-  await WalletPurchase.findOneAndUpdate(
-    { _id: purchase._id, status: { $in: allowedStates } },
-    { $set: { status: "refund_pending" } }
-  );
 
-  const refundedUser = await User.findOneAndUpdate(
+  let refundIntent;
+  try {
+    refundIntent = await purchaseModel.findOneAndUpdate(
+      { purchaseId, status: { $in: allowedStates } },
+      {
+        $set: {
+          status: "refund_pending",
+          refundStatus: "pending",
+          refundAmount: amount,
+          refundReason: safeReason,
+          ...(typeof errorCode === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(errorCode)
+            ? { errorCode }
+            : {}),
+        },
+      },
+      { new: true }
+    );
+  } catch (error) {
+    error.code = error.code || "REFUND_INTENT_WRITE_FAILED";
+    throw error;
+  }
+
+  if (!refundIntent) {
+    const current = await purchaseModel.findOne({ purchaseId }).lean();
+    if (current?.status === "refunded" && current.refundStatus === "completed") {
+      return { refunded: true, alreadyRefunded: true, purchase: current };
+    }
+    if (current?.status === "refund_pending" && current.refundStatus === "pending") {
+      refundIntent = current;
+    } else {
+      const error = new Error("Purchase is not in a refundable state");
+      error.code = "PURCHASE_NOT_REFUNDABLE";
+      throw error;
+    }
+  }
+
+  const refundAmount = Number(refundIntent.refundAmount ?? amount);
+  if (!Number.isSafeInteger(refundAmount) || refundAmount <= 0 || refundAmount !== amount) {
+    const error = new Error("Purchase refund amount does not match its original wallet debit");
+    error.code = "REFUND_AMOUNT_MISMATCH";
+    throw error;
+  }
+
+  const creditedUser = await userModel.findOneAndUpdate(
     {
-      telegramId: String(purchase.telegramId),
-      appliedPurchaseReservations: purchase.purchaseId,
-      refundedPurchaseIds: { $ne: purchase.purchaseId },
+      telegramId,
+      appliedPurchaseReservations: purchaseId,
+      refundedPurchaseIds: { $ne: purchaseId },
     },
     {
-      $inc: { balance: Number(purchase.amount) },
-      $addToSet: { refundedPurchaseIds: purchase.purchaseId },
+      $inc: { balance: refundAmount },
+      $addToSet: { refundedPurchaseIds: purchaseId },
     },
     { new: true }
   );
 
-  if (!refundedUser) {
-    const alreadyRefunded = await User.exists({
-      telegramId: String(purchase.telegramId),
-      refundedPurchaseIds: purchase.purchaseId,
-    });
-    if (!alreadyRefunded) {
-      const error = new Error("Purchase refund is pending manual recovery");
+  let alreadyCredited = false;
+  if (!creditedUser) {
+    alreadyCredited = Boolean(await userModel.exists({ telegramId, refundedPurchaseIds: purchaseId }));
+    if (!alreadyCredited) {
+      await purchaseModel.updateOne(
+        { purchaseId, status: "refund_pending" },
+        { $set: { recoveryStatus: "required", recoveryReason: "REFUND_LEDGER_NOT_APPLIED" } }
+      ).catch(() => {});
+      const error = new Error("Purchase refund is pending financial recovery");
       error.code = "REFUND_NOT_APPLIED";
       throw error;
     }
   }
 
-  await WalletPurchase.findOneAndUpdate(
-    { _id: purchase._id, status: "refund_pending" },
-    { $set: { status: "refunded", refundedAt: new Date() }, $unset: { recoveryClaimedAt: 1 } }
+  const completed = await purchaseModel.findOneAndUpdate(
+    { purchaseId, status: "refund_pending", refundStatus: "pending" },
+    {
+      $set: {
+        status: "refunded",
+        refundStatus: "completed",
+        refundAmount,
+        refundReason: safeReason,
+        refundedAt: new Date(),
+        walletDebitStatus: "refunded",
+        recoveryStatus: "none",
+        recoveryReason: null,
+      },
+      $unset: { recoveryClaimedAt: 1 },
+    },
+    { new: true }
   );
-  return refundedUser;
+
+  if (!completed) {
+    const current = await purchaseModel.findOne({ purchaseId }).lean();
+    if (current?.status !== "refunded" || current.refundStatus !== "completed") {
+      const error = new Error("Refund was credited but its purchase ledger needs recovery");
+      error.code = "REFUND_LEDGER_PENDING";
+      throw error;
+    }
+    return { refunded: true, alreadyRefunded: true, purchase: current };
+  }
+
+  return { refunded: true, alreadyRefunded: alreadyCredited, purchase: completed, user: creditedUser || null };
 }
 
-export async function commitProvisionedPurchase(purchase, bot) {
-  if (!purchase.serviceUsername) throw new Error("Provisioned purchase is missing its service username");
+/** Persist provider fulfillment to the owning user and finalize the debit. */
+export async function commitProvisionedPurchase(
+  purchase,
+  bot,
+  { userModel = User, purchaseModel = WalletPurchase } = {}
+) {
+  if (!purchase?.purchaseId || typeof purchase.serviceUsername !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(purchase.serviceUsername)) {
+    throw new Error("Provisioned purchase is missing a valid service username");
+  }
 
   const provisionedAt = purchase.provisionedAt || purchase.completedAt || new Date();
   const expiresAt = purchase.expiresAt || new Date(provisionedAt.getTime() + Number(purchase.days) * 24 * 60 * 60 * 1000);
-  const user = await User.findOneAndUpdate(
+  const user = await userModel.findOneAndUpdate(
     {
       telegramId: String(purchase.telegramId),
       completedPurchaseIds: { $ne: purchase.purchaseId },
@@ -89,6 +209,7 @@ export async function commitProvisionedPurchase(purchase, bot) {
       $push: {
         services: {
           username: purchase.serviceUsername,
+          sub_link: purchase.serviceLink || null,
           purchaseId: purchase.purchaseId,
           productId: purchase.planId,
           trafficGb: Number(purchase.gig),
@@ -102,33 +223,45 @@ export async function commitProvisionedPurchase(purchase, bot) {
     { new: true }
   );
 
-  if (!user) {
-    const existing = await User.findOne({
+  let owner = user;
+  if (!owner) {
+    owner = await userModel.findOne({
       telegramId: String(purchase.telegramId),
       completedPurchaseIds: purchase.purchaseId,
       "services.purchaseId": purchase.purchaseId,
     });
-    if (!existing) throw new Error("Could not persist provisioned service to its wallet owner");
+    if (!owner) throw new Error("Could not persist provisioned service to its wallet owner");
   }
 
-  const completed = await WalletPurchase.findOneAndUpdate(
-    { _id: purchase._id, status: { $in: ["provisioned", "completed"] } },
+  let completed = await purchaseModel.findOneAndUpdate(
+    { purchaseId: purchase.purchaseId, status: "provisioned" },
     {
       $set: {
         status: "completed",
+        walletDebitStatus: "finalized",
         completedAt: purchase.completedAt || new Date(),
         provisionedAt,
         expiresAt,
         notificationPending: true,
         recoveryStatus: "none",
+        recoveryReason: null,
       },
       $unset: { recoveryClaimedAt: 1 },
     },
     { new: true }
   );
-  if (!completed) throw new Error("Purchase was committed to the user but its ledger needs recovery");
 
-  const notified = await notifyPurchaseOnce(completed, bot, user || await User.findOne({ telegramId: String(purchase.telegramId) }));
+  if (!completed) {
+    completed = await purchaseModel.findOne({ purchaseId: purchase.purchaseId, status: "completed" });
+    if (!completed) throw new Error("Purchase was committed to the user but its ledger needs recovery");
+    // Additive for legacy completed records. Never re-open or re-notify a settled purchase.
+    await purchaseModel.updateOne(
+      { purchaseId: purchase.purchaseId, status: "completed" },
+      { $set: { walletDebitStatus: "finalized" } }
+    );
+  }
+
+  const notified = await notifyPurchaseOnce(completed, bot, owner);
   return { purchase: completed, notified };
 }
 
@@ -215,9 +348,9 @@ export async function notifyPurchaseRecovery(purchase, bot) {
 }
 
 /**
- * Recovery never repeats a non-idempotent WizardXray create request. A worker
- * finding an in-flight request after a restart holds the reservation and asks
- * an admin to reconcile it against the panel.
+ * Recovery never replays a non-idempotent WizardXray create request. An
+ * in-flight request found after a restart keeps its reservation for
+ * reconciliation; a reservation that never reached the provider is refunded.
  */
 export async function recoverWalletPurchases(bot) {
   const now = new Date();
@@ -251,11 +384,14 @@ export async function recoverWalletPurchases(bot) {
           appliedPurchaseReservations: claimed.purchaseId,
         });
         if (user) {
-          await refundPurchaseReservation(claimed);
+          await refundPurchaseReservation(claimed, { reason: "RECOVERED_UNFULFILLED_ORDER" });
         } else {
           await WalletPurchase.findOneAndUpdate(
             { _id: claimed._id, status: { $in: ["reserving", "reserved"] } },
-            { $set: { status: "failed", errorCode: "RESERVATION_NOT_APPLIED" }, $unset: { recoveryClaimedAt: 1 } }
+            {
+              $set: { status: "failed", errorCode: "RESERVATION_NOT_APPLIED", walletDebitStatus: "not_debited" },
+              $unset: { recoveryClaimedAt: 1 },
+            }
           );
         }
       } else if (claimed.status === "provisioned") {
@@ -285,165 +421,12 @@ export async function recoverWalletPurchases(bot) {
   }
 }
 
-export async function createWalletPurchase(bot, chatId, userId, plan) {
-  const telegramId = String(userId);
-  const purchaseId = randomUUID();
-  const amount = Number(plan?.price);
-  if (!Number.isSafeInteger(amount) || amount <= 0 || !Number.isSafeInteger(Number(plan?.gig)) || Number(plan.gig) <= 0 || !Number.isSafeInteger(Number(plan?.days)) || Number(plan.days) <= 0) {
-    await bot.sendMessage(chatId, "❌ اطلاعات پلن نامعتبر است؛ لطفاً با پشتیبانی تماس بگیرید.");
-    return;
-  }
-
-  let purchase;
-  try {
-    purchase = await WalletPurchase.create({
-      purchaseId,
-      telegramId,
-      planId: String(plan.id || "unknown"),
-      planName: String(plan.name || ""),
-      gig: Number(plan.gig),
-      days: Number(plan.days),
-      amount,
-      status: "reserving",
-    });
-  } catch (error) {
-    log("error", "Could not create purchase ledger", { errorType: error?.name || "DatabaseError" });
-    await bot.sendMessage(chatId, "❌ خرید در حال حاضر انجام نشد. موجودی شما تغییری نکرده است.");
-    return;
-  }
-
-  let reserved;
-  try {
-    reserved = await reserveBalance(telegramId, amount, purchaseId);
-  } catch (error) {
-    log("error", "Wallet reservation failed", { purchaseId, errorType: error?.name || "DatabaseError" });
-    await bot.sendMessage(chatId, "❌ وضعیت خرید مشخص نیست؛ لطفاً تا بررسی پشتیبانی دوباره تلاش نکنید.");
-    await alertAdmin(bot, purchase, "RESERVATION_RESULT_UNKNOWN");
-    return;
-  }
-
-  if (!reserved) {
-    await WalletPurchase.updateOne({ _id: purchase._id, status: "reserving" }, { $set: { status: "failed", errorCode: "INSUFFICIENT_BALANCE" } });
-    await bot.sendMessage(chatId, "⚠️ موجودی شما کافی نیست. لطفاً ابتدا حساب خود را شارژ کنید.");
-    return;
-  }
-
-  try {
-    purchase = await WalletPurchase.findOneAndUpdate(
-      { _id: purchase._id, status: "reserving" },
-      { $set: { status: "reserved", reservedAt: new Date() } },
-      { new: true }
-    );
-    if (!purchase) throw new Error("Reservation ledger state changed unexpectedly");
-  } catch (error) {
-    log("error", "Wallet reservation recorded but purchase ledger needs recovery", {
-      purchaseId,
-      errorType: error?.name || "DatabaseError",
-    });
-    await bot.sendMessage(chatId, "⏳ خرید شما در حال بررسی است؛ لطفاً دوباره سفارش ثبت نکنید.");
-    await alertAdmin(bot, { ...purchase?.toObject?.(), _id: purchase?._id, purchaseId, telegramId, amount, planName: plan.name, status: "reserving" }, "RESERVATION_LEDGER_RECOVERY");
-    return;
-  }
-
-  try {
-    purchase = await WalletPurchase.findOneAndUpdate(
-      { _id: purchase._id, status: "reserved" },
-      { $set: { status: "provisioning", provisioningStartedAt: new Date() } },
-      { new: true }
-    );
-    if (!purchase) throw new Error("Provisioning claim failed");
-  } catch (error) {
-    log("error", "Wallet purchase provisioning was not started", { purchaseId, errorType: error?.name || "DatabaseError" });
-    await bot.sendMessage(chatId, "⏳ خرید شما ثبت شده و در حال بازیابی است؛ لطفاً سفارش دیگری ثبت نکنید.");
-    await alertAdmin(bot, { _id: purchase?._id, purchaseId, telegramId, amount, planName: plan.name, status: "reserved" }, "PROVISIONING_NOT_STARTED");
-    return;
-  }
-
-  let apiResponse;
-  try {
-    const { createVpnService } = await import("../../api/wizardApi.js");
-    apiResponse = await createVpnService(Number(plan.gig), Number(plan.days), 0);
-  } catch (error) {
-    if (error?.ambiguous) {
-      const uncertain = await WalletPurchase.findOneAndUpdate(
-        { _id: purchase._id, status: "provisioning" },
-        { $set: { status: "manual_review", errorCode: error.code || "PANEL_RESULT_UNKNOWN" } },
-        { new: true }
-      );
-      log("error", "Wizard panel outcome is ambiguous; reservation retained", {
-        purchaseId, errorType: error?.name || "PanelError", code: error?.code || "UNKNOWN",
-      });
-      await bot.sendMessage(chatId, "⏳ وضعیت ساخت سرویس از پنل مشخص نیست و مبلغ شما موقتاً رزرو شده است. لطفاً برای جلوگیری از ساخت تکراری، دوباره خرید نکنید تا پشتیبانی نتیجه را بررسی کند.");
-      if (uncertain) await alertAdmin(bot, uncertain, error.code || "PANEL_RESULT_UNKNOWN");
-      return;
-    }
-
-    try {
-      await refundPurchaseReservation(purchase, { allowProvisioning: true });
-    } catch (refundError) {
-      log("error", "Purchase refund requires recovery", {
-        purchaseId,
-        errorType: refundError?.name || "RefundError",
-      });
-      await alertAdmin(bot, purchase, "REFUND_PENDING");
-      await bot.sendMessage(chatId, "❌ درخواست پنل انجام نشد، اما بازپرداخت هنوز در حال پردازش است. لطفاً دوباره خرید نکنید تا موجودی نهایی شود.");
-      return;
-    }
-    log("warn", "Wizard panel definitively rejected purchase; reservation refunded", {
-      purchaseId, errorType: error?.name || "PanelError", code: error?.code || "PANEL_REJECTED",
-    });
-    await bot.sendMessage(chatId, "❌ ایجاد سرویس انجام نشد و مبلغ رزروشده به کیف پول شما بازگشت.");
-    return;
-  }
-
-  const result = apiResponse.result;
-  const hash = typeof result.hash === "string" && /^[A-Za-z0-9_-]{1,256}$/.test(result.hash) ? result.hash : null;
-  const serviceLink = typeof result.sub_link === "string" && result.sub_link.length <= 4096 ? result.sub_link : null;
-  const singleLink = Array.isArray(result.tak_links) && typeof result.tak_links[0] === "string" && result.tak_links[0].length <= 4096 ? result.tak_links[0] : "";
-
-  const provisionedAt = new Date();
-  const expiresAt = new Date(provisionedAt.getTime() + Number(plan.days) * 24 * 60 * 60 * 1000);
-  try {
-    purchase = await WalletPurchase.findOneAndUpdate(
-      { _id: purchase._id, status: "provisioning" },
-      {
-        $set: {
-          status: "provisioned",
-          serviceUsername: result.username,
-          serviceHash: hash,
-          serviceLink,
-          singleLink,
-          provisionedAt,
-          expiresAt,
-        },
-      },
-      { new: true }
-    );
-    if (!purchase) throw new Error("Provisioned service could not be durably recorded");
-  } catch (error) {
-    log("error", "Panel created a service but its purchase record needs reconciliation", {
-      purchaseId, errorType: error?.name || "DatabaseError",
-    });
-    await bot.sendMessage(chatId, "✅ پنل سرویس را ساخته است، اما ثبت نهایی در حال بازیابی است. مبلغ شما کسر شده و سرویس برای شما ثبت خواهد شد؛ لطفاً خرید را تکرار نکنید.");
-    await alertAdmin(bot, { ...purchase?.toObject?.(), _id: purchase?._id, purchaseId, telegramId, amount, planName: plan.name, status: "provisioning" }, "PROVISIONED_RESULT_NEEDS_RECOVERY");
-    return;
-  }
-
-  try {
-    const finalized = await commitProvisionedPurchase(purchase, bot);
-    log("info", "PURCHASE_COMPLETED", { purchaseId, userId: telegramId, planId: purchase.planId });
-    if (!finalized.notified) {
-      await bot.sendMessage(chatId, "✅ سرویس ساخته و به حساب شما اضافه شد. لینک‌های سرویس در پیام بعدی ارسال می‌شوند.").catch(() => {});
-    }
-  } catch (error) {
-    log("error", "Provisioned purchase needs database recovery", {
-      purchaseId, errorType: error?.name || "DatabaseError",
-    });
-    await alertAdmin(bot, purchase, "PROVISIONED_SERVICE_COMMIT_PENDING");
-    await bot.sendMessage(chatId, "✅ سرویس ساخته شده است، اما ثبت نهایی آن در حال بازیابی است. لطفاً خرید را تکرار نکنید.").catch(() => {});
-  }
-}
-
 export async function deliverPurchaseNotification(purchase, bot) {
   return notifyPurchaseOnce(purchase, bot, await User.findOne({ telegramId: String(purchase.telegramId) }));
+}
+
+export async function deliverPurchaseNotificationById(purchaseId, bot) {
+  const purchase = await WalletPurchase.findOne({ purchaseId, status: "completed" });
+  if (!purchase) return false;
+  return deliverPurchaseNotification(purchase, bot);
 }

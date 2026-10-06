@@ -1,14 +1,10 @@
 /**
- * Product catalog as the shop's source of truth (services/plans.js).
+ * AdminProduct catalog helpers (services/plans.js).
  *
- * The Telegram shop must sell only what the admin panel manages: enabled
- * products with database prices. These tests inject an in-memory product
- * model through the test seam and pin the money-path behaviours:
- *   - shop menus read active (enabled) products only
- *   - checkout resolves authoritative prices by product id
- *   - a populated catalog never falls back to stale hardcoded prices
- *   - duration groups are derived from the catalog
- *   - an empty/unreachable catalog falls back to the shipped catalog
+ * Admin management/analytics can still read the editable product catalog.
+ * Customer purchases use the separate fixed customerPlans configuration and
+ * are covered by customerPlans.test.js and catalogShop.test.js. These tests pin
+ * the legacy AdminProduct helper behavior without treating it as checkout data:
  */
 import { test, describe, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";

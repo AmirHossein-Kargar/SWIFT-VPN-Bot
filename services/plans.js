@@ -1,5 +1,46 @@
 import AdminProduct from "../models/AdminProduct.js";
 
+/**
+ * Customer-facing selling plans.
+ *
+ * This is the only source of customer price, duration, and traffic values.
+ * The AdminProduct collection remains a separate management/analytics catalog;
+ * it is deliberately never consulted by the customer purchase flow.
+ */
+export const customerPlans = Object.freeze([
+  { id: "test", name: "Test", days: 1, gig: 1, price: 1_000 },
+  { id: "mini", name: "Mini", days: 7, gig: 5, price: 25_000 },
+  { id: "basic", name: "Basic", days: 15, gig: 10, price: 45_000 },
+  { id: "standard", name: "Standard", days: 30, gig: 20, price: 79_000 },
+  { id: "plus", name: "Plus", days: 30, gig: 30, price: 109_000 },
+  { id: "pro", name: "Pro", days: 30, gig: 50, price: 169_000 },
+  { id: "premium", name: "Premium", days: 30, gig: 75, price: 229_000 },
+  { id: "ultra", name: "Ultra", days: 30, gig: 100, price: 279_000 },
+  { id: "max", name: "Max", days: 30, gig: 150, price: 389_000 },
+  { id: "max_plus", name: "Max+", days: 30, gig: 200, price: 499_000 },
+].map((plan) => Object.freeze(plan)));
+
+const customerPlanById = new Map(customerPlans.map((plan) => [plan.id, plan]));
+
+/** Return copies so callers cannot mutate the server-side selling catalog. */
+export function getCustomerPlans({ durationDays } = {}) {
+  const plans = Number.isSafeInteger(durationDays)
+    ? customerPlans.filter((plan) => plan.days === durationDays)
+    : customerPlans;
+  return plans.map((plan) => ({ ...plan }));
+}
+
+/** Resolve only a known customer plan; all customer-supplied terms are ignored. */
+export function getCustomerPlanById(planId) {
+  if (typeof planId !== "string" || !/^[a-z][a-z0-9_]{0,31}$/.test(planId)) return null;
+  const plan = customerPlanById.get(planId);
+  return plan ? { ...plan } : null;
+}
+
+export function getCustomerDurations() {
+  return [...new Set(customerPlans.map((plan) => plan.days))].sort((a, b) => a - b);
+}
+
 export const plans30 = [
   { id: "plan30_10", name: "🔹 10 گیگ - 30 روزه", days: 30, gig: 10, price: 18000 },
   { id: "plan30_50", name: "🔹 50 گیگ - 30 روزه", days: 30, gig: 50, price: 42000 },

@@ -1,16 +1,7 @@
 /**
- * Catalog-driven purchase flow (REAL MongoDB).
- *
- * Requirement 13: the Telegram shop must sell what the admin panel manages.
- * This suite drives the REAL duration menu (services/buyService) and the REAL
- * callback routing (handlers/handleCallbackQuery) against the REAL product
- * collection:
- *   - duration buttons come from the catalog, not a hardcoded list
- *   - plan buttons offer only ACTIVE products for the chosen duration
- *   - checkout re-resolves the price from the catalog at charge time
- *   - a disabled product disappears everywhere immediately
- *
- * Needs MongoDB; skips with an explicit reason when it is not reachable.
+ * Customer shop presentation boundary (REAL callbacks, optionally REAL MongoDB).
+ * The customer catalog is the centralized selling-plan configuration and is
+ * intentionally independent from the AdminProduct management catalog.
  */
 import { test, describe, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -21,7 +12,9 @@ process.env.ADMINS = "920001";
 const dbAvailable = await connectTestDB();
 const skip = (name, fn) => test(name, { skip: dbAvailable ? false : "MongoDB unavailable" }, fn);
 
-let handleBuyService, handleCallbackQuery, AdminProduct;
+let handleBuyService;
+let handleCallbackQuery;
+let AdminProduct;
 if (dbAvailable) {
   ({ default: handleBuyService } = await import("../../services/buyService/buyService.js"));
   ({ default: handleCallbackQuery } = await import("../../handlers/handleCallbackQuery.js"));
@@ -40,7 +33,7 @@ after(async () => {
   await disconnectTestDB();
 });
 
-function query(bot, data) {
+function query(data) {
   return {
     id: `q_${Math.random().toString(36).slice(2)}`,
     message: { chat: { id: CHAT, type: "private" }, message_id: 77 },
@@ -54,71 +47,60 @@ function lastKeyboard(bot) {
   return JSON.stringify(message?.opts?.reply_markup || {});
 }
 
-describe("duration menu is catalog-driven", () => {
-  skip("renders exactly the durations present in the catalog", async () => {
+describe("customer plan menu is server-configured", () => {
+  skip("renders only the four durations in the customer selling-plan configuration", async () => {
     await AdminProduct.create([
-      { productId: "cat30", name: "پلن ۳۰", durationDays: 30, trafficGb: 20, priceToman: 20000, enabled: true, displayOrder: 0 },
-      { productId: "cat45", name: "پلن ۴۵", durationDays: 45, trafficGb: 20, priceToman: 28000, enabled: true, displayOrder: 1 },
-      { productId: "cat180", name: "پلن ۱۸۰", durationDays: 180, trafficGb: 20, priceToman: 90000, enabled: true, displayOrder: 2 },
+      { productId: "admin45", name: "Admin 45 day product", durationDays: 45, trafficGb: 20, priceToman: 1, costToman: 0, enabled: true, displayOrder: 0 },
+      { productId: "admin180", name: "Admin 180 day product", durationDays: 180, trafficGb: 20, priceToman: 1, costToman: 0, enabled: true, displayOrder: 1 },
     ]);
     const bot = makeBotStub();
     await handleBuyService(bot, CHAT);
     const keyboard = lastKeyboard(bot);
-    assert.match(keyboard, /duration_30/);
-    assert.match(keyboard, /duration_45/);
-    assert.match(keyboard, /duration_180/);
-    assert.doesNotMatch(keyboard, /duration_60/, "no hardcoded 60-day group without a catalog product");
-    assert.doesNotMatch(keyboard, /duration_90/, "no hardcoded 90-day group without a catalog product");
-    assert.match(keyboard, /۳۰|30 روزه/);
+    for (const days of [1, 7, 15, 30]) assert.match(keyboard, new RegExp(`duration_${days}`));
+    assert.doesNotMatch(keyboard, /duration_45|duration_180/);
   });
 
-  skip("falls back to the shipped 30/60/90 groups when the catalog is empty", async () => {
-    const bot = makeBotStub();
-    await handleBuyService(bot, CHAT);
-    const keyboard = lastKeyboard(bot);
-    for (const days of [30, 60, 90]) assert.match(keyboard, new RegExp(`duration_${days}`));
-  });
-
-  skip("a disabled duration disappears from the menu", async () => {
+  skip("duration and plan selection ignore AdminProduct changes and show central customer prices", async () => {
     await AdminProduct.create([
-      { productId: "cat30", name: "پلن ۳۰", durationDays: 30, trafficGb: 20, priceToman: 20000, enabled: true, displayOrder: 0 },
-      { productId: "cat60", name: "پلن ۶۰", durationDays: 60, trafficGb: 20, priceToman: 40000, enabled: false, displayOrder: 1 },
+      { productId: "mini", name: "Tampered customer plan", durationDays: 7, trafficGb: 500, priceToman: 1, costToman: 0, enabled: true, displayOrder: 0 },
+      { productId: "extra", name: "Extra admin plan", durationDays: 7, trafficGb: 5, priceToman: 2, costToman: 0, enabled: true, displayOrder: 1 },
     ]);
-    const bot = makeBotStub();
-    await handleBuyService(bot, CHAT);
-    const keyboard = lastKeyboard(bot);
-    assert.match(keyboard, /duration_30/);
-    assert.doesNotMatch(keyboard, /duration_60/);
-  });
-});
 
-describe("plan selection follows the catalog", () => {
-  skip("duration with no active products shows a Persian warning instead of an empty list", async () => {
-    await AdminProduct.create([
-      { productId: "cat30", name: "پلن ۳۰", durationDays: 30, trafficGb: 20, priceToman: 20000, enabled: true, displayOrder: 0 },
-    ]);
-    const bot = makeBotStub();
-    await handleCallbackQuery(bot, query(bot, "duration_60"));
-    const answered = bot.sent.some((entry) => entry.kind === "answer" && /پلن فعالی برای این مدت زمان موجود نیست/.test(entry.opts?.text || ""));
-    const edited = bot.sent.some((entry) => entry.kind === "edit" && /پلن فعالی برای این مدت زمان موجود نیست/.test(entry.text || ""));
-    assert.ok(answered || edited, "user must get a Persian empty-catalog notice");
+    const listBot = makeBotStub();
+    await handleCallbackQuery(listBot, query("duration_7"));
+    const list = lastKeyboard(listBot);
+    assert.match(list, /plan_mini/);
+    assert.doesNotMatch(list, /plan_extra/);
+    assert.match(list, /25,000/);
+    assert.doesNotMatch(list, /Tampered customer plan|500/);
+
+    const confirmBot = makeBotStub();
+    await handleCallbackQuery(confirmBot, query("plan_mini"));
+    const confirmation = confirmBot.sent.find((entry) => entry.kind === "edit")?.text || "";
+    assert.match(confirmation, /7 روز/);
+    assert.match(confirmation, /5 گیگ/);
+    assert.match(confirmation, /25,000 تومان/);
   });
 
-  skip("plan callback for a disabled product is rejected with a Persian notice", async () => {
+  skip("unknown admin-only products and unsupported durations are rejected", async () => {
     await AdminProduct.create([
-      { productId: "cat30off", name: "پلن خاموش", durationDays: 30, trafficGb: 20, priceToman: 20000, enabled: false, displayOrder: 0 },
+      { productId: "admin45", name: "Admin 45 day product", durationDays: 45, trafficGb: 20, priceToman: 1, costToman: 0, enabled: true, displayOrder: 0 },
     ]);
-    const bot = makeBotStub();
-    await handleCallbackQuery(bot, query(bot, "plan_cat30off"));
-    const rejected = bot.sent.some((entry) =>
+    const disabledPlanBot = makeBotStub();
+    await handleCallbackQuery(disabledPlanBot, query("plan_admin45"));
+    const rejected = disabledPlanBot.sent.some((entry) =>
       /این پلن در حال حاضر فعال نیست یا حذف شده است/.test(String(entry.text || entry.opts?.text || "")));
-    assert.ok(rejected, "disabled product must not be purchasable");
+    assert.ok(rejected);
+
+    const durationBot = makeBotStub();
+    await handleCallbackQuery(durationBot, query("duration_45"));
+    assert.ok(durationBot.sent.some((entry) => /پلن فعالی برای این مدت زمان موجود نیست/.test(String(entry.text || entry.opts?.text || ""))));
   });
 
-  skip("hostile duration values are rejected without touching the database", async () => {
+  skip("hostile duration values are rejected without touching the plan config", async () => {
     for (const hostile of ["duration_abc", "duration_-1", "duration_0", "duration_99999", "duration_30;drop"]) {
       const bot = makeBotStub();
-      await handleCallbackQuery(bot, query(bot, hostile));
+      await handleCallbackQuery(bot, query(hostile));
       const warned = bot.sent.some((entry) => /مدت زمان نامعتبر/.test(String(entry.opts?.text || entry.text || "")));
       assert.ok(warned, `hostile duration rejected: ${hostile}`);
     }
