@@ -41,12 +41,27 @@ function getClient() {
 
 function safeError(operation, error, { mutation = false } = {}) {
   const status = Number.isInteger(error?.response?.status) ? error.response.status : undefined;
-  const code = typeof error?.code === "string" ? error.code : undefined;
+  const code = status === 402
+    ? "provider_insufficient_balance"
+    : (typeof error?.code === "string" ? error.code : undefined);
   return new WizardApiError(operation, {
     status,
     code,
     ambiguous: mutation && (!status || status >= 500),
   });
+}
+
+// Keep only a coarse, non-sensitive rejection category. Never persist or log
+// the raw provider response because it may contain supplier pricing details.
+function panelRejectionCode(body, status) {
+  if (status === 402) return "provider_insufficient_balance";
+  const details = [body?.code, body?.error, body?.message]
+    .filter((value) => typeof value === "string")
+    .join(" ");
+  if (/insufficient(?:\s+provider)?\s+balance|not enough(?:\s+provider)?\s+balance|balance.{0,24}insufficient/i.test(details)) {
+    return "provider_insufficient_balance";
+  }
+  return "panel_rejected_request";
 }
 
 async function request(operation, method, path, form, { mutation = false } = {}) {
@@ -68,7 +83,7 @@ async function request(operation, method, path, form, { mutation = false } = {})
     if (body.ok !== true) {
       throw new WizardApiError(operation, {
         status: response.status,
-        code: "panel_rejected_request",
+        code: panelRejectionCode(body, response.status),
         ambiguous: false,
       });
     }

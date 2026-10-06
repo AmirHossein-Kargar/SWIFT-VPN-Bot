@@ -24,7 +24,9 @@ function recoveryItem(provider, record, kind) {
     lastRetryAt: record.lastRetryAt || null,
     nextRetryAt: record.nextRetryAt || null,
     lastError: record.lastErrorCode || record.errorCode || record.recoveryReason || null,
-    retrySafe: kind !== "provisioning-uncertain",
+    retrySafe: provider === "wallet"
+      ? ["provisioning-commit-pending", "delivery-notification-pending"].includes(kind)
+      : kind !== "provisioning-uncertain",
   };
 }
 
@@ -50,7 +52,7 @@ async function collectRecoveryCandidates(now) {
     }).select("invoiceId userId amount status balanceCredited confirmedAt createdAt retryCount lastRetryAt nextRetryAt lastErrorCode recoveryStatus recoveryReason").lean().limit(500),
     WalletPurchase.find({
       $or: [
-        { status: { $in: ["uncertain", "manual_review"] } },
+        { status: { $in: ["uncertain", "manual_review", "refund_pending"] } },
         { status: "provisioned" },
         { status: "completed", notificationPending: true },
         { status: "provisioning", provisioningStartedAt: { $lt: new Date(now.getTime() - STALE_PROVISIONING_MS) } },
@@ -71,7 +73,8 @@ async function collectRecoveryCandidates(now) {
   for (const record of trx) items.push(recoveryItem("trx", record, record.balanceCredited === false ? "paid-not-fulfilled" : "manual-review"));
   for (const record of wallet) {
     let kind = "manual-review";
-    if (record.status === "provisioned") kind = "provisioning-commit-pending";
+    if (record.status === "refund_pending") kind = "wallet-refund-pending";
+    else if (record.status === "provisioned") kind = "provisioning-commit-pending";
     else if (record.status === "completed" && record.notificationPending) kind = "delivery-notification-pending";
     else if (record.status === "provisioning") kind = "provisioning-stalled";
     else if (["uncertain", "manual_review"].includes(record.status)) kind = "provisioning-uncertain";

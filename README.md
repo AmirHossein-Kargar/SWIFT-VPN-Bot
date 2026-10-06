@@ -28,9 +28,9 @@ panel, and an admin panel that runs entirely inside a Telegram group.
 **User side**
 
 - `/start` — main menu.
-- **🛒 خرید سرویس** — pick a duration (30/60/90 days) then a plan; the plan price
-  is deducted from the wallet and a VLESS subscription is created on the panel
-  and delivered with a QR code.
+- **🛒 خرید سرویس** — choose a customer plan (1, 7, 15, or 30 days); its
+  server-configured selling price is deducted from the wallet and a VLESS
+  subscription is created on the panel and delivered with a QR code.
 - **💰 افزایش موجودی** — top up the wallet with one of three methods:
   - **HooshPay** — online gateway (card-to-card, automatic, webhook-confirmed)
   - **TRX** — Tron transfer, matched automatically by a background scanner
@@ -248,24 +248,55 @@ A receipt is posted to the admin group with a **✅ Confirm** button.
 
 ### 5.4 Purchasing a service (wallet → VPN)
 
+Customer selling plans are defined only in `customerPlans` in `services/plans.js`:
+
+| Plan | Duration | Traffic | Customer price |
+|---|---:|---:|---:|
+| Test | 1 day | 1 GB | 1,000 تومان |
+| Mini | 7 days | 5 GB | 25,000 تومان |
+| Basic | 15 days | 10 GB | 45,000 تومان |
+| Standard | 30 days | 20 GB | 79,000 تومان |
+| Plus | 30 days | 30 GB | 109,000 تومان |
+| Pro | 30 days | 50 GB | 169,000 تومان |
+| Premium | 30 days | 75 GB | 229,000 تومان |
+| Ultra | 30 days | 100 GB | 279,000 تومان |
+| Max | 30 days | 150 GB | 389,000 تومان |
+| Max+ | 30 days | 200 GB | 499,000 تومان |
+
+`purchaseService.purchasePlan(userId, planId, { purchaseId })` resolves the
+plan on the server. The request cannot set price, duration, or traffic. The
+AdminProduct management/analytics collection is not used for customer checkout.
+
 ```
-1. RESERVE   User.findOneAndUpdate({telegramId, balance:{$gte:price}}, {$inc:{balance:-price}})
-2. PROVISION POST /create to the WizardXray panel
-3. COMMIT    User.updateOne({telegramId}, {$push:{services}, $inc:{totalServices:1}})
-4. ROLLBACK  on any failure → User.$inc{balance:+price}  + admin-group alert
+1. INTENT    create one WalletPurchase identified by purchaseId
+2. DEBIT     atomic User.findOneAndUpdate(balance >= price, $inc balance:-price)
+3. PROVISION WizardXray create through the centralized api/wizardApi.js client
+4. COMMIT    atomically add the service to User and finalize the purchase ledger
+5. REFUND    on a definitive provider rejection, credit once and record refund
 ```
 
-- **No TOCTOU.** The reservation is atomic, so two concurrent purchases can never
-  both pass a balance check; the balance can never go negative.
-- **No lost updates.** Field-level `$inc`/`$push` replaced whole-document
-  `save()`, which could silently overwrite a balance a payment had just credited.
-- **No silent money loss.** If the panel returns an error or the request times
-  out, the reservation is refunded automatically and the user is told; the admin
-  group is alerted. If the refund *itself* fails, the group receives an explicit
-  “fix this balance manually” alert instead of failing quietly.
-- **One caveat:** if the panel creates the service but the DB commit fails, the
-  user keeps the config and is **not** refunded (they received value) — the admin
-  group is alerted to record the service manually.
+- **Concurrency-safe wallet.** MongoDB applies the sufficient-balance predicate
+  and debit in one update. Simultaneous orders cannot spend the same balance or
+  make it negative; a payment credit during checkout is preserved by `$inc`.
+- **Idempotent order identity.** `purchaseId` is unique and also keys the wallet
+  reservation, service commit, and refund. Telegram derives it from the
+  confirmation message, so a replayed callback cannot create a second service.
+  Other callers must reuse the same ID when retrying the same purchase intent.
+- **Exactly-once refund.** `refund_pending` is persisted before the wallet credit;
+  `User.refundedPurchaseIds` and the atomic balance increment prevent duplicate
+  refunds. The purchase row records the original price, refund amount/reason,
+  debit/refund timestamps, customer, plan and provider service.
+- **Definitive failures.** Insufficient WizardXray balance and other explicit
+  API rejections refund the customer price. The raw provider response is not
+  stored or shown to customers; only a coarse internal error code is retained.
+- **Ambiguous create results.** A timeout, unavailable panel, or malformed
+  response is never blindly retried and is never marked fulfilled. The debit
+  remains reserved in a recoverable `manual_review` state until the result can
+  be reconciled; the customer is told not to retry. The Task 3 manual-fulfillment
+  workflow is not part of this change.
+- **Crash recovery.** Existing recovery jobs refund a reservation that never
+  reached the provider, finish a durable successful response, or hold an
+  ambiguous in-flight request without calling WizardXray create again.
 
 ---
 
@@ -601,11 +632,10 @@ Pages: Dashboard (KPIs, revenue/orders/users charts, popular packages, live
 system health), Users (search/filters/sorts + profile with balance, block,
 payments, services), VPN Services (registry + WizardXray detail with
 change-link/disable/revoke), Payments (all providers, status tabs, full
-timeline incl. webhook events), Recovery (queue + safe retry-all), Products
-(CRUD/duplicate/reorder/enable — the panel catalog that powers product-mix &
-profit analytics; the Telegram shop still sells the built-in plan list, see
-§12.5),
-Broadcast (preview, audience, rate-limited delivery, cancel, progress),
+timeline incl. wallet debit/refund events and webhook events), Recovery
+(queue + safe retry-all), Products (CRUD/duplicate/reorder/enable — the separate panel
+catalog used by product-mix & profit analytics; it does not set customer selling
+prices), Broadcast (preview, audience, rate-limited delivery, cancel, progress),
 Analytics, Referrals, Audit Log, System health.
 
 JSON API (all session + CSRF protected, idempotent via `operationId`):
@@ -646,25 +676,22 @@ The panel stores long IDs in the chat session and references them by index so
 ### 12.4 New database collections
 
 `AdminAuditLog`, `AdminProduct`, `AdminBroadcast`, `SystemHealth` — plus
-additive fields on existing models (VPN expiry/traffic on services & purchases,
-recovery/retry bookkeeping on all invoice models, `lastActivityAt` /
-`referralCode` / block metadata on `User`). Indexes are created automatically
-at startup; nothing existing is dropped or rewritten.
+additive fields on existing models (VPN expiry/traffic and wallet debit/refund
+audit fields on purchases, recovery/retry bookkeeping on invoice models,
+`lastActivityAt` / `referralCode` / block metadata on `User`). Indexes are
+created automatically at startup; existing purchase/payment history is retained
+and no destructive migration is run.
 
 ### 12.5 Honest limitations
 
 - VPN **extend-time / increase-traffic / regenerate-config** are marked
   unavailable everywhere: the configured WizardXray client has no safe
   endpoint for them (the user-facing bot already shows the same notice).
-- **Product catalog scope:** the `AdminProduct` catalog is real data that
-  powers the panel's product-mix and profit analytics, but the Telegram
-  shop's checkout still sells the built-in plan list
-  (`plans30/60/90`). Editing a product does not change what the shop
-  charges. Wiring the checkout to the catalog
-  (`getActiveProducts`/`getActiveProductById` in `services/plans.js`,
-  which already fall back to the built-in list when the DB is empty or
-  unreachable) is a deliberate follow-up so it can ship with full
-  DB-backed integration coverage of the money path.
+- **Customer pricing scope:** the Telegram checkout uses the fixed ten-plan
+  customer selling configuration in `customerPlans` (`services/plans.js`).
+  `AdminProduct` continues to power management and analytics only; admin edits
+  cannot change customer price, duration, or traffic. The purchase service
+  validates the plan ID again at charge time.
 - Activity/referral tracking starts with this release — historical accounts
   appear on their next interaction.
 - `expired VPNs` counts tracked orders; services registered before this

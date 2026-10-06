@@ -1,16 +1,14 @@
-// * This function handles the "Buy Service" feature.
-// * Duration groups are derived from the Admin Panel product catalog (the
-// * authoritative source), with the shipped 30/60/90 groups as fallback.
-import { getAvailableDurations } from "../plans.js";
+// Customer duration choices come from the fixed server-side selling plans.
+import { getCustomerDurations } from "../plans.js";
 
-const DURATION_ICONS = { 30: "🔹", 60: "🔸", 90: "🔷" };
+const DURATION_ICONS = { 1: "🎁", 7: "🔹", 15: "🔸", 30: "🔷" };
 
 const handleBuyService = async (bot, chatId) => {
   const message = `🛒 در 2 مرحله سرویس اختصاصی بگیرید ..
 
 🔻 ابتدا مدت زمان سرویس را انتخاب کنید:`;
 
-  const durations = await getAvailableDurations();
+  const durations = getCustomerDurations();
   const durationButtons = {
     reply_markup: {
       inline_keyboard: [

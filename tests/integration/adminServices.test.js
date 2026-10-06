@@ -201,13 +201,15 @@ describe("product catalog", () => {
     );
   });
 
-  skip("the Telegram shop reads the shared catalog", async () => {
-    const { getActiveProducts, getActiveProductById } = await import("../../services/plans.js");
-    const active = await getActiveProducts(30);
+  skip("admin product catalog stays separate from fixed customer checkout plans", async () => {
+    const { getActiveProducts, getActiveProductById, getCustomerPlanById } = await import("../../services/plans.js");
+    const active = await getActiveProducts();
     assert.ok(active.length >= 3);
     assert.ok(active.every((plan) => Number.isInteger(plan.price) && Number.isInteger(plan.days) && Number.isInteger(plan.gig)));
     const first = await getActiveProductById(active[0].id);
     assert.equal(first.id, active[0].id);
+    assert.deepEqual(getCustomerPlanById("mini"), { id: "mini", name: "Mini", days: 7, gig: 5, price: 25_000 });
+    assert.equal(getCustomerPlanById(active[0].id), null, "editable AdminProduct IDs are not customer plan IDs");
   });
 });
 

@@ -184,12 +184,13 @@ function timelineFor(provider, record) {
   const add = (name, at, status = "done", detail = null) => { if (at) events.push({ name, at, status, detail }); };
   add("Order created", record.createdAt);
   if (provider === "wallet") {
-    add("Wallet balance reserved", record.reservedAt);
+    add("Wallet balance reserved", record.walletDebitedAt || record.reservedAt, "done", record.amount != null ? `${Number(record.amount).toLocaleString("en-US")} Toman (${record.walletDebitStatus || "reserved"})` : null);
     add("WizardXray provisioning started", record.provisioningStartedAt, record.status === "manual_review" || record.status === "uncertain" ? "warning" : "done");
     add("VPN created on WizardXray", record.provisionedAt);
     add("Service delivered to account", record.completedAt);
-    add("Wallet reservation refunded", record.refundedAt);
+    add("Wallet reservation refunded", record.refundedAt, record.refundStatus === "completed" ? "success" : "warning", record.refundAmount != null ? `${Number(record.refundAmount).toLocaleString("en-US")} Toman · ${String(record.refundReason || "refund")}` : null);
     if (record.status === "provisioning" && !record.provisionedAt) events.push({ name: "VPN creation result", at: null, status: "pending", detail: "The panel result may require reconciliation; do not submit another create request." });
+    if (record.refundStatus === "pending" && !record.refundedAt) events.push({ name: "Wallet refund pending", at: null, status: "pending", detail: `${Number(record.refundAmount || record.amount || 0).toLocaleString("en-US")} Toman · ${String(record.refundReason || "refund recovery")}` });
   } else {
     add("Payment initiated", record.createdAt);
     if (provider === "hooshpay") {
@@ -226,6 +227,13 @@ export async function getPaymentDetail({ actorId, key } = {}) {
       durationDays: Number(record.days || 0),
       expiresAt: record.expiresAt || null,
       errorCode: record.errorCode || null,
+      walletDebitStatus: record.walletDebitStatus
+        || (record.status === "completed" ? "finalized" : record.status === "refunded" ? "refunded" : record.reservedAt ? "reserved" : "not_debited"),
+      walletDebitedAt: record.walletDebitedAt || record.reservedAt || null,
+      refundStatus: record.refundStatus || "none",
+      refundAmount: record.refundAmount != null && Number.isSafeInteger(Number(record.refundAmount)) ? Number(record.refundAmount) : null,
+      refundReason: record.refundReason || null,
+      refundedAt: record.refundedAt || null,
     } : null,
     actions: {
       retryVerification: provider === "hooshpay" && ["pending", "expired", "cancelled", "failed"].includes(record.status),
