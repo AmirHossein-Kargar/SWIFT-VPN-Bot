@@ -1,24 +1,20 @@
 import { setSession } from "../../config/sessionStore.js";
 
-// * This function sends payment method options to the user.
-// * HooshPay is the primary online payment method; direct card-to-card was
-// * removed from the customer-facing flow (admin reconciliation of historical
-// * bank receipts remains available in the admin panel).
+export const HOOSH_PAY_BUTTON = "💳 پرداخت آنلاین – کارت به کارت (HooshPay)";
+export const NOWPAYMENTS_BUTTON = "₮ پرداخت با ترون (NOWPayments)";
+
+// HooshPay stays the first method and still uses its own provider.
+// New TRON top-ups use NOWPayments. The older direct TRX callback remains
+// routed so an already-open invoice can still be finished by the scanner.
 const showPaymentMethods = async (bot, chatId) => {
-  // * Main message shown to the user
-  const message = `
-<b>💰 افزایش موجودی کیف پول</b>
+  const message = "<b>💰 افزایش موجودی کیف پول</b>\n\nلطفاً روش پرداخت را انتخاب کنید.";
 
-لطفاً روش پرداخت را انتخاب کنید.
-  `;
-
-  // * Inline keyboard with different payment options
   const topUpButtons = {
     parse_mode: "HTML",
     reply_markup: {
       inline_keyboard: [
-        [{ text: "💳 پرداخت آنلاین (HooshPay)", callback_data: "pay_hoosh" }],
-        [{ text: "💸 پرداخت با ترون (TRX)", callback_data: "pay_trx" }],
+        [{ text: HOOSH_PAY_BUTTON, callback_data: "pay_hoosh" }],
+        [{ text: NOWPAYMENTS_BUTTON, callback_data: "pay_nowpayments" }],
         [{ text: "🔙 بازگشت", callback_data: "back_to_home" }],
       ],
     },

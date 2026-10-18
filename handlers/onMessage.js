@@ -3,6 +3,7 @@ import User from "../models/User.js";
 import payBank from "../paymentHandlers/payBank.js";
 import handleTrxAmount from "../paymentHandlers/handleTrxAmount.js";
 import { handleHooshAmount } from "../paymentHandlers/payHoosh.js";
+import { handleNowPaymentsAmount } from "../paymentHandlers/payNowPayments.js";
 import supportMessageHandler from "./supportMessageHandler.js";
 import {
   handleApiGigInput,
@@ -86,6 +87,11 @@ async function handleMessage(bot, msg) {
 
   if (session?.step === "waiting_for_hoosh_amount" && msg.text) {
     await handleHooshAmount(bot, msg, session);
+    return;
+  }
+
+  if ((session?.step === "waiting_for_nowpayments_amount" || session?.step === "nowpayments_confirm") && msg.text) {
+    await handleNowPaymentsAmount(bot, msg, session);
     return;
   }
 

@@ -167,7 +167,12 @@ authoritative list — every variable below is read somewhere in the codebase.
 | `REDIS_USERNAME` | `default` | Redis 6+ ACL username. Also accepts `REDISUSER`. |
 | `REDIS_PASSWORD` | *(empty)* | Redis password. Also accepts `REDISPASSWORD`. |
 | `MONGO_DB_NAME` | `swiftvpn` | Database name used when the Mongo URI does not specify one |
-| `CMC_API_KEY` | fallback `0.08` | CoinMarketCap key for the TRX quote. **Strongly recommended** — without it invoices are mis-priced by the fallback rate. |
+| `CMC_API_KEY` | fallback `0.08` | CoinMarketCap key for the legacy direct-TRX quote. Customer TRON top-up does not use it. |
+| `NOWPAYMENTS_API_KEY` | *(unset)* | API key for NOWPayments TRON invoices. Sent only as `x-api-key`. |
+| `NOWPAYMENTS_IPN_SECRET` | *(unset)* | HMAC-SHA512 secret for `POST /api/nowpayments/ipn`. If unset, every IPN is rejected. |
+| `NOWPAYMENTS_IPN_CALLBACK_URL` | derived from `WEBHOOK_BASE_URL` | Public HTTPS IPN URL. Set the same URL in the NOWPayments dashboard. |
+| `GHEYMAT_API_TOKEN` | *(unset)* | Optional paid-plan token for `GET /api/prices`. Sent only as `x-api-token`. Free use needs no token. |
+| `NOWPAYMENTS_PRICE_CURRENCY` | `usd` | Fiat currency sent to NOWPayments. Keep `usd`; the live quote is USDT/IRT and does not price `eur`. |
 | `PORT` | `3000` | Express port. Railway injects this — do not hardcode it there. |
 | `WEBHOOK_RATE_LIMIT_PER_MIN` | `600` | Per-IP webhook limit per 60 s window. `0` disables it. |
 | `COST_PER_DAY` | `200` | Cost per service-day (Toman) for admin profit reports |
@@ -220,6 +225,25 @@ Telegram confirmation
   invoice, or a paid webhook for an invoice already `reversed`.
 - **Reversals** (`reversed` / `refunded` / `chargedback`) move `paid → reversed`
   and alert the admin. A later `paid` webhook for a reversed invoice is ignored.
+
+### 5.1.1 NOWPayments TRON top-up
+
+New wallet top-ups in TRON use a hosted NOWPayments invoice (`pay_currency: trx`).
+The customer enters a toman amount, confirms it, and then an invoice is created.
+The USD invoice amount comes from Gheymat `USDT-IRT`. That API labels `IRT` as
+toman, so the buy price is not divided by 10. Gheymat does not list TRX.
+`GET /v1/estimate` is optional and, when it succeeds, is labeled as an estimate.
+It is not required before confirmation: the hosted invoice determines the payable
+TRX amount. If the invoice response includes `pay_amount` with `pay_currency: trx`,
+that amount is shown. Otherwise the customer is sent to the payment page.
+Creating the invoice does not credit the wallet. The wallet is credited only from
+a signature-valid IPN, or a later authenticated status check, when the provider
+status is `finished` and the stored fiat amount, currency, and TRON ticker match.
+The credited toman amount is the amount the customer confirmed, not a later market
+value. Duplicate IPNs credit once via `appliedPaymentKeys`. A missing, stale, or
+inconsistent quote, an ambiguous create, or a non-finished status does not credit
+and does not invent a rate. The older direct TRX scanner remains for invoices that
+were already created that way.
 
 ### 5.2 TRX (automatic scanner)
 

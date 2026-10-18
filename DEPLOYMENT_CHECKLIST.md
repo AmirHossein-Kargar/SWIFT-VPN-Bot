@@ -98,7 +98,11 @@ Paste the output into both your `.env` and the HooshPay dashboard.
 |---|---|---|
 | `CARD_NUMBER` | ✅ REQUIRED | 16-digit bank card number shown to users for card-to-card transfers |
 | `TRX_WALLET` | ✅ REQUIRED | Tron (TRC-20) wallet address. Starts with `T`, 34 characters. |
-| `CMC_API_KEY` | Optional | CoinMarketCap API key for live TRX/USD rate. Get free key at [coinmarketcap.com](https://pro.coinmarketcap.com/signup). If not set, TRX payments will fail. |
+| `CMC_API_KEY` | Optional | CoinMarketCap API key for the legacy direct TRX quote. If not set, that older flow cannot price invoices. |
+| `NOWPAYMENTS_API_KEY` | Required for TRON top-up | NOWPayments API key. Header `x-api-key` only. Not the public key. |
+| `NOWPAYMENTS_IPN_SECRET` | Required for TRON top-up | IPN secret from the NOWPayments dashboard. Never commit or print it. |
+| `NOWPAYMENTS_IPN_CALLBACK_URL` | Required for TRON top-up | Public `https://<host>/api/nowpayments/ipn`. Register the same URL in the dashboard. |
+| `GHEYMAT_API_TOKEN` | Optional | Paid-plan token for the live USDT/IRT quote. Free tier works without it. Never commit the value. |
 
 ### 2.7 Profit Calculation
 
@@ -200,7 +204,9 @@ Complete these after the preflight script passes.
 ### 4.7 Payment Flow Smoke Test
 
 - [ ] As a test user: tap **💰 افزایش موجودی**
-- [ ] Confirm **💳 پرداخت آنلاین (HooshPay)** button appears
+- [ ] Confirm **💳 پرداخت آنلاین – کارت به کارت (HooshPay)** appears before **₮ پرداخت با ترون (NOWPayments)**
+- [ ] In the NOWPayments dashboard, set the IPN secret and callback URL to `https://<host>/api/nowpayments/ipn`, and enable TRX
+- [ ] Confirm the bot can reach Gheymat `GET /api/prices` for USDT/IRT. Free tier is 250 requests/day; the default quote cache is 10 minutes. Set `GHEYMAT_API_TOKEN` only if a paid plan is used, and do not print it
 - [ ] Enter an amount (e.g. `50,000`)
 - [ ] Confirm an invoice is created (check HooshPay dashboard)
 - [ ] Confirm payment link opens correctly

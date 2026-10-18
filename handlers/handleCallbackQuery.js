@@ -40,9 +40,10 @@ import generateQRCode from "../services/manageServices/generateQRCode.js";
 import { deleteService, StatusApi } from "../api/wizardApi.js";
 import deactivateServiceButton from "../services/manageServices/deactiveServiceButton.js";
 import handleProfile from "./message/handleProfile.js";
-import payTrx from "../paymentHandlers/payTrx.js";
 import { sendTrxWallet } from "../paymentHandlers/handleTrxAmount.js";
 import { payHoosh } from "../paymentHandlers/payHoosh.js";
+import { confirmNowPaymentsTopUp, payNowPayments } from "../paymentHandlers/payNowPayments.js";
+import NowPaymentsInvoice from "../models/NowPaymentsInvoice.js";
 import { verifyHooshPayment } from "../services/hooshpay/verifyHooshPayment.js";
 import { confirmBankPayment } from "../services/payments/confirmBankPayment.js";
 import { sumAmount, sumUserBalances } from "../services/admin/collectionStats.js";
@@ -340,8 +341,16 @@ const handleCallbackQuery = async (bot, query) => {
       await payHoosh(bot, query, session);
       break;
 
+    case "pay_nowpayments":
+      await payNowPayments(bot, query, session);
+      break;
+
+    case "np_create":
+      await confirmNowPaymentsTopUp(bot, query, session);
+      break;
+
     case "pay_trx":
-      await payTrx(bot, query, session);
+      await payNowPayments(bot, query, session);
       break;
 
     case "send_trx_wallet":
@@ -364,6 +373,11 @@ const handleCallbackQuery = async (bot, query) => {
             await invoice.findOneAndDelete({ paymentId });
           } else if (paymentType === "trx" || paymentType === "crypto") {
             await CryptoInvoice.findOneAndDelete({ invoiceId: paymentId });
+          } else if (paymentType === "nowpayments") {
+            await NowPaymentsInvoice.findOneAndUpdate(
+              { orderId: paymentId, balanceCredited: false, status: { $in: ["pending", "waiting", "confirming", "confirmed", "sending"] } },
+              { $set: { status: "expired" }, $unset: { openCreateKey: 1 } },
+            );
           } else if (paymentType === "hoosh") {
             // Mark as expired rather than deleting (preserves audit trail)
             await HooshPayInvoice.findOneAndUpdate(
