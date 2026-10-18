@@ -172,6 +172,8 @@ const REQUIRED = [
   { key: "VPN_API_KEY", hint: "Wizard panel bearer token" },
   { key: "HOOSHPAY_API_KEY", hint: "HooshPay API key" },
   { key: "HOOSHPAY_WEBHOOK_SECRET", hint: "HooshPay HMAC-SHA256 webhook secret (32+ characters)" },
+  { key: "NOWPAYMENTS_API_KEY", hint: "NOWPayments API key (not the public key)" },
+  { key: "NOWPAYMENTS_IPN_SECRET", hint: "NOWPayments HMAC-SHA512 IPN secret (32+ characters)" },
   { key: "WEBHOOK_BASE_URL", hint: "Public HTTPS base URL for the webhook" },
   { key: "TRX_WALLET", hint: "TRON wallet address for TRX deposits" },
 ];

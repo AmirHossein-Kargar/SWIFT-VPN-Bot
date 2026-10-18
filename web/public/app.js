@@ -1365,7 +1365,7 @@
         </div>
         <div class="card chart-card">
           <div class="card-head"><h3>Revenue trend (${data.granularity})</h3>
-            <span class="sub">HooshPay + TRX + bank · ${Object.entries(m.revenue.byProviderMonth).map(([provider, amount]) => `${provider}: ${money(amount)}`).join(" · ")}</span>
+            <span class="sub">HooshPay + NOWPayments + TRX + bank · ${Object.entries(m.revenue.byProviderMonth).map(([provider, amount]) => `${provider}: ${money(amount)}`).join(" · ")}</span>
           </div>
           <div class="card-pad">${lineChart(data.series.map((row) => ({ date: row.date, value: row.revenue })), { format: compact })}</div>
         </div>

@@ -83,6 +83,7 @@ const paidPayload = (invoice) => ({
   order_id: invoice.orderId,
   status: "paid",
   amount: invoice.amount,
+  currency: "TOMAN",
   merchant_credit: invoice.amount,
 });
 
@@ -246,16 +247,15 @@ describe("HooshPay webhook — signature & body handling", () => {
     assert.equal(user.balance, 0, "reversal does not credit");
   });
 
-  test("a late payment on an expired invoice IS credited (funds confirmed by gateway)", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
+  test("a late paid callback cannot revive an expired invoice", { skip: dbAvailable ? false : "MongoDB not reachable" }, async () => {
     const invoice = await seedInvoice({ telegramId: "3008", amount: 20000, status: "expired" });
     const body = paidPayload(invoice);
 
-    await postWebhook(body, { signature: sign(body) });
+    assert.equal(await postWebhook(body, { signature: sign(body) }), 409);
 
-    const user = await waitFor(async () => {
-      const u = await User.findOne({ telegramId: "3008" });
-      return u?.balance === 20000 ? u : null;
-    });
-    assert.ok(user, "gateway-confirmed funds are never silently kept");
+    const user = await User.findOne({ telegramId: "3008" });
+    const stored = await HooshPayInvoice.findById(invoice._id);
+    assert.equal(user.balance, 0, "terminal invoices never credit");
+    assert.equal(stored.status, "expired");
   });
 });

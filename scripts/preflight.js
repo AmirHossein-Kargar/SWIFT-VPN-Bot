@@ -96,18 +96,20 @@ if (webhookBase && !report.invalid.some((item) => item.key === "WEBHOOK_BASE_URL
     warn(`Public /health probe did not complete (${safeError(error)}); run after deploy if not yet online`);
   }
 
-  try {
-    const response = await fetch(`${webhookBase}/api/hooshpay/webhook`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ preflight: true }),
-      signal: AbortSignal.timeout(8_000),
-    });
-    if ([400, 401, 415, 422].includes(response.status)) pass("Webhook route is reachable and rejects an unsigned probe");
-    else if (response.status >= 500) warn(`Webhook route returned HTTP ${response.status}; check app dependency readiness`);
-    else warn(`Webhook route returned HTTP ${response.status}; verify the deployed route and signature policy`);
-  } catch (error) {
-    warn(`Webhook route probe did not complete (${safeError(error)}); run after deploy if not yet online`);
+  for (const [provider, path] of [["HooshPay", "/api/hooshpay/webhook"], ["NOWPayments", "/api/nowpayments/ipn"]]) {
+    try {
+      const response = await fetch(`${webhookBase}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preflight: true }),
+        signal: AbortSignal.timeout(8_000),
+      });
+      if ([400, 401, 415, 422].includes(response.status)) pass(`${provider} webhook route is reachable and rejects an unsigned probe`);
+      else if (response.status >= 500) warn(`${provider} webhook route returned HTTP ${response.status}; check app dependency readiness`);
+      else warn(`${provider} webhook route returned HTTP ${response.status}; verify the deployed route and signature policy`);
+    } catch (error) {
+      warn(`${provider} webhook route probe did not complete (${safeError(error)}); run after deploy if not yet online`);
+    }
   }
 }
 
@@ -125,6 +127,24 @@ if (hooshKey) {
     else warn(`HooshPay API returned HTTP ${response.status}; verify the provider status`);
   } catch (error) {
     warn(`HooshPay API probe did not complete (${safeError(error)})`);
+  }
+}
+
+const nowPaymentsKey = process.env.NOWPAYMENTS_API_KEY?.trim();
+if (nowPaymentsKey) {
+  const baseURL = process.env.NOWPAYMENTS_API_BASE_URL?.trim() || "https://api.nowpayments.io/v1";
+  try {
+    const response = await axios.get(`${baseURL.replace(/\/+$/, "")}/currencies`, {
+      headers: { "x-api-key": nowPaymentsKey, Accept: "application/json" },
+      timeout: 8_000,
+      validateStatus: () => true,
+    });
+    if (response.status === 401 || response.status === 403) fail(`NOWPayments API rejected the configured key (HTTP ${response.status})`);
+    else if (response.status >= 200 && response.status < 300) pass("NOWPayments API key and currencies endpoint responded successfully");
+    else if (response.status < 500) warn(`NOWPayments API returned HTTP ${response.status}; verify the API account and endpoint`);
+    else warn(`NOWPayments API returned HTTP ${response.status}; verify the provider status`);
+  } catch (error) {
+    warn(`NOWPayments API probe did not complete (${safeError(error)})`);
   }
 }
 

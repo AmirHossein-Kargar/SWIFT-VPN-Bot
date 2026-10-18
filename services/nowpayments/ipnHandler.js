@@ -1,4 +1,5 @@
 import { applyNowPaymentsUpdate } from "./applyStatus.js";
+import { notifyNowPaymentsCredit } from "./notify.js";
 import { verifyNowPaymentsSignature } from "./signature.js";
 
 function send(res, status, body) {
@@ -12,31 +13,19 @@ function log(level, message, meta = {}) {
   );
 }
 
-async function notifyCredited(result, bot) {
-  if (!result?.credited || !bot?.sendMessage) return;
-  const amount = Number(result.amountToman).toLocaleString("en-US");
-  const balance = result.balance == null ? "" : `\n💳 <b>موجودی جدید:</b> <code>${Number(result.balance).toLocaleString("en-US")}</code> تومان`;
-  try {
-    await bot.sendMessage(result.userId, `✅ <b>پرداخت ترون تأیید شد.</b>\n\n💰 <b>مبلغ شارژ:</b> <code>${amount}</code> تومان${balance}`, {
-      parse_mode: "HTML",
-    });
-  } catch (error) {
-    log("warn", "Telegram credit notification failed", { orderId: result.orderId, errorType: error?.name || "TelegramError" });
-  }
-}
-
 export async function handleNowPaymentsIpn(req, res, {
   requestId = "nowpayments",
   secret = process.env.NOWPAYMENTS_IPN_SECRET,
   apply = applyNowPaymentsUpdate,
   bot = null,
+  notify = notifyNowPaymentsCredit,
 } = {}) {
   if (!secret) {
     log("error", "IPN secret is not configured", { requestId });
     return send(res, 503, { ok: false, error: "webhook_not_configured", request_id: requestId });
   }
   const raw = req.rawBody;
-  if (!raw || !Buffer.isBuffer(raw) && typeof raw !== "string") {
+  if (!raw || (!Buffer.isBuffer(raw) && typeof raw !== "string")) {
     return send(res, 400, { ok: false, error: "invalid_json", request_id: requestId });
   }
   let payload;
@@ -58,7 +47,11 @@ export async function handleNowPaymentsIpn(req, res, {
   try {
     result = await apply({ payload });
   } catch (error) {
-    log("error", "IPN processing failed", { requestId, errorType: error?.name || "Error" });
+    log("error", "IPN processing failed", {
+      requestId,
+      errorType: error?.name || "Error",
+      code: typeof error?.code === "string" || typeof error?.code === "number" ? error.code : undefined,
+    });
     return send(res, 503, { ok: false, error: "temporarily_unavailable", request_id: requestId });
   }
 
@@ -66,14 +59,18 @@ export async function handleNowPaymentsIpn(req, res, {
     log("warn", "Signed IPN did not match an order", { requestId });
     return send(res, 404, { ok: false, error: "invoice_not_found", request_id: requestId });
   }
-  if (result.outcome === "invoice_mismatch" || result.outcome === "order_mismatch") {
+  if (["invoice_mismatch", "payment_id_mismatch", "order_mismatch", "missing_provider_id", "provider_id_conflict"].includes(result.outcome)) {
     return send(res, 409, { ok: false, error: "invoice_reference_mismatch", request_id: requestId });
   }
-  if (result.outcome === "invalid_status" || result.outcome === "amount_mismatch") {
+  if (["invalid_payload", "invalid_status", "amount_mismatch"].includes(result.outcome)) {
     return send(res, 422, { ok: false, error: "payment_details_mismatch", request_id: requestId });
   }
-  if (result.outcome === "not_eligible") {
-    return send(res, 409, { ok: false, error: "invoice_not_eligible", request_id: requestId });
+  if (result.outcome === "not_eligible" || result.outcome === "user_missing") {
+    return send(res, result.outcome === "user_missing" ? 503 : 409, {
+      ok: false,
+      error: result.outcome === "user_missing" ? "temporarily_unavailable" : "invoice_not_eligible",
+      request_id: requestId,
+    });
   }
 
   send(res, 200, {
@@ -82,8 +79,19 @@ export async function handleNowPaymentsIpn(req, res, {
     duplicate: Boolean(result.alreadyCredited),
     request_id: requestId,
   });
-  const notifier = bot || await defaultBot();
-  await notifyCredited(result, notifier);
+
+  if (result.orderId && (result.notificationPending || result.credited || result.alreadyCredited)) {
+    const notifier = bot || await defaultBot();
+    try {
+      await notify(result.orderId, notifier);
+    } catch (error) {
+      log("warn", "Credit notification recovery failed", {
+        requestId,
+        orderId: result.orderId,
+        errorType: error?.name || "Error",
+      });
+    }
+  }
   return undefined;
 }
 

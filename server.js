@@ -7,6 +7,12 @@ import { isRedisReady } from "./config/redisClient.js";
 import { fulfillHooshOrder } from "./services/hooshpay/fulfillHooshOrder.js";
 import { acquireVerifyLock, releaseVerifyLock } from "./services/hooshpay/verifyLock.js";
 import { verifyHooshPaySignature } from "./services/hooshpay/verifySignature.js";
+import {
+  HOOSH_REVERSAL_STATUSES,
+  HOOSH_TERMINAL_NONPAYABLE,
+  normalizeHooshStatus,
+  validateHooshPaidDetails,
+} from "./services/hooshpay/paymentValidation.js";
 import { recordWebhookOutcome } from "./services/admin/monitoring.js";
 import adminRouter from "./web/adminRouter.js";
 import { serveAdminSpa, notFoundHandler } from "./web/spa.js";
@@ -68,9 +74,8 @@ function isRateLimited(ip) {
   return existing.count > RATE_LIMIT_PER_MIN;
 }
 
-const VALID_STATUSES = new Set(["pending", "paid", "expired", "cancelled", "failed", "reversed", "refunded", "chargedback"]);
-const REVERSAL_STATUSES = new Set(["reversed", "refunded", "chargedback"]);
-const ALLOWED_CURRENCIES = new Set(["TOMAN", "TOMANS", "IRT"]);
+const VALID_STATUSES = new Set(["pending", "paid", "expired", "cancelled", "failed", "reversed"]);
+const REVERSAL_STATUSES = new Set(HOOSH_REVERSAL_STATUSES.map(normalizeHooshStatus));
 
 function webhookAuditPayload(payload) {
   const allowed = [
@@ -83,41 +88,6 @@ function webhookAuditPayload(payload) {
     if (Object.hasOwn(payload, field)) audit[field] = payload[field];
   }
   return audit;
-}
-
-function validatePaidPayload(invoice, payload) {
-  const integerFields = ["amount", "payable_amount", "merchant_credit", "fee_amount"];
-  for (const field of integerFields) {
-    if (payload[field] != null && (!Number.isSafeInteger(Number(payload[field])) || Number(payload[field]) < 0)) {
-      return `${field} must be a non-negative integer`;
-    }
-  }
-  if (payload.amount == null || Number(payload.amount) !== Number(invoice.amount)) {
-    return "amount does not match the locally created invoice";
-  }
-  if (payload.payable_amount != null && invoice.payableAmount != null && Number(payload.payable_amount) !== Number(invoice.payableAmount)) {
-    return "payable_amount does not match the locally created invoice";
-  }
-  const expectedMerchantCredit = invoice.merchantCredit == null ? Number(invoice.amount) : Number(invoice.merchantCredit);
-  if (payload.merchant_credit != null && Number(payload.merchant_credit) !== expectedMerchantCredit) {
-    return "merchant_credit does not match the locally created invoice";
-  }
-  if (payload.fee_amount != null && invoice.feeAmount != null && Number(payload.fee_amount) !== Number(invoice.feeAmount)) {
-    return "fee_amount does not match the locally created invoice";
-  }
-  if (payload.fee_mode != null && String(payload.fee_mode) !== String(invoice.feeMode)) {
-    return "fee_mode does not match the locally created invoice";
-  }
-  if (payload.currency != null && !ALLOWED_CURRENCIES.has(String(payload.currency).trim().toUpperCase())) {
-    return "currency is not Toman";
-  }
-  if (payload.tracking_code != null && (typeof payload.tracking_code !== "string" || payload.tracking_code.length > 128)) {
-    return "tracking_code is invalid";
-  }
-  if (payload.paid_at != null && (typeof payload.paid_at !== "string" || Number.isNaN(new Date(payload.paid_at).getTime()))) {
-    return "paid_at is invalid";
-  }
-  return null;
 }
 
 async function alertAdmin(message) {
@@ -162,7 +132,7 @@ export async function handleHooshWebhook(req, res) {
   }
   if (!uid && !orderId) return res.status(400).json({ ok: false, error: "missing_invoice_reference", request_id: reqId });
 
-  const status = typeof payload.status === "string" ? payload.status.trim().toLowerCase() : "";
+  const status = normalizeHooshStatus(payload.status);
   const event = typeof payload.event === "string" ? payload.event.trim().toLowerCase() : "";
   if (!VALID_STATUSES.has(status)) return res.status(422).json({ ok: false, error: "invalid_payment_status", request_id: reqId });
   if (status === "paid" && event !== "payment.success") {
@@ -188,6 +158,27 @@ export async function handleHooshWebhook(req, res) {
     log("warn", "Signed webhook references an unknown invoice", { reqId, uid, orderId });
     return res.status(404).json({ ok: false, error: "invoice_not_found", request_id: reqId });
   }
+
+  // A provider timeout can leave a durable local order without the returned
+  // UID. A correctly signed callback carrying the exact order_id safely binds
+  // that remote invoice instead of losing a legitimate payment.
+  if (!invoice.uid && uid && orderId === invoice.orderId && ["creating", "creation_unknown"].includes(invoice.creationStatus)) {
+    try {
+      const bound = await HooshPayInvoice.findOneAndUpdate(
+        { _id: invoice._id, uid: null, orderId, creationStatus: { $in: ["creating", "creation_unknown"] } },
+        {
+          $set: { uid, creationStatus: "created", recoveryStatus: "none", recoveryReason: null },
+          $unset: { openCreateKey: 1, creationUnknownAt: 1 },
+        },
+        { new: true },
+      );
+      if (bound) invoice = bound;
+    } catch (error) {
+      log("error", "Timed-out invoice could not be bound to signed callback", { reqId, orderId, ...safeErrorFields(error) });
+      return res.status(503).json({ ok: false, error: "temporarily_unavailable", request_id: reqId });
+    }
+  }
+
   if ((uid && invoice.uid !== uid) || (orderId && invoice.orderId !== orderId)) {
     return res.status(409).json({ ok: false, error: "invoice_reference_mismatch", request_id: reqId });
   }
@@ -198,7 +189,17 @@ export async function handleHooshWebhook(req, res) {
       await alertAdmin(`⚠️ پرداخت برای فاکتور برگشت‌خورده دریافت شد. UID: <code>${invoice.uid}</code>. بررسی دستی لازم است.`);
       return res.status(409).json({ ok: false, error: "invoice_reversed", request_id: reqId });
     }
-    const amountError = validatePaidPayload(invoice, payload);
+    if (HOOSH_TERMINAL_NONPAYABLE.includes(normalizeHooshStatus(invoice.status))) {
+      log("warn", "Out-of-order paid webhook rejected for terminal invoice", {
+        reqId, uid: invoice.uid, invoiceStatus: invoice.status,
+      });
+      return res.status(409).json({ ok: false, error: "invoice_not_eligible", request_id: reqId });
+    }
+    const amountError = validateHooshPaidDetails(invoice, payload, {
+      requireUid: true,
+      requireOrderId: true,
+      requireCurrency: true,
+    });
     if (amountError) {
       log("warn", "Signed payment fields failed local invoice validation", { reqId, uid: invoice.uid, reason: amountError });
       return res.status(422).json({ ok: false, error: "payment_details_mismatch", request_id: reqId });
@@ -213,24 +214,50 @@ export async function handleHooshWebhook(req, res) {
     await HooshPayInvoice.findByIdAndUpdate(invoice._id, update);
 
     if (REVERSAL_STATUSES.has(status)) {
-      await HooshPayInvoice.findOneAndUpdate(
-        { _id: invoice._id, status: { $in: ["pending", "paid"] } },
-        { $set: { status: "reversed", reversedAt: new Date() } },
+      // A pending reversal can close without reconciliation. If fulfillment has
+      // already claimed `paid`, however, wallet credit may be in flight; record
+      // a durable manual-reconciliation flag and never race an automatic debit.
+      let reversed = await HooshPayInvoice.findOneAndUpdate(
+        { _id: invoice._id, status: "pending", fulfilled: false, balanceCredited: false },
+        { $set: { status: "reversed", reversedAt: new Date(), recoveryStatus: "none", recoveryReason: null } },
         { new: true }
       );
+      if (!reversed) {
+        reversed = await HooshPayInvoice.findOneAndUpdate(
+          { _id: invoice._id, status: "paid" },
+          {
+            $set: {
+              status: "reversed",
+              reversedAt: new Date(),
+              recoveryStatus: "required",
+              recoveryReason: "provider_reversal_after_payment_claim",
+            },
+          },
+          { new: true }
+        );
+      }
       log("warn", "Payment reversal recorded; wallet debit is a manual reconciliation", {
-        reqId, uid: invoice.uid, status,
+        reqId, uid: invoice.uid, status, manualReview: reversed?.recoveryStatus === "required",
       });
-      await alertAdmin(`⚠️ برگشت پرداخت HooshPay ثبت شد. UID: <code>${invoice.uid}</code>، کاربر: <code>${invoice.userId}</code>. موجودی به‌صورت خودکار کسر نمی‌شود؛ بررسی دستی لازم است.`);
+      if (reversed?.recoveryStatus === "required") {
+        await alertAdmin(`⚠️ برگشت پرداخت HooshPay ثبت شد. UID: <code>${invoice.uid}</code>، کاربر: <code>${invoice.userId}</code>. موجودی به‌صورت خودکار کسر نمی‌شود؛ بررسی دستی لازم است.`);
+      }
       return res.status(200).json({ ok: true, received: true, request_id: reqId });
     }
 
     if (status !== "paid") {
       if (["expired", "cancelled", "failed"].includes(status)) {
-        await HooshPayInvoice.findOneAndUpdate(
-          { _id: invoice._id, status: "pending", fulfilled: false },
-          { $set: { status } }
+        const closed = await HooshPayInvoice.findOneAndUpdate(
+          { _id: invoice._id, status: "pending", fulfilled: false, balanceCredited: false },
+          { $set: { status } },
+          { new: true },
         );
+        if (!closed) {
+          await HooshPayInvoice.findOneAndUpdate(
+            { _id: invoice._id, status: "paid" },
+            { $set: { recoveryStatus: "required", recoveryReason: `provider_${status}_after_payment_claim` } },
+          );
+        }
       }
       return res.status(200).json({ ok: true, received: true, request_id: reqId });
     }

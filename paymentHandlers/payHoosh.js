@@ -128,11 +128,13 @@ export async function handleHooshAmount(bot, msg, session) {
       description: `VPN wallet top-up — ${amount.toLocaleString()} Toman`,
     });
   } catch (err) {
-    console.error("[handleHooshAmount] createHooshInvoice error:", err.message);
+    console.error("[handleHooshAmount] createHooshInvoice error:", err?.name || "Error");
+    const unresolved = err?.ambiguous || err?.code === "in_flight";
     try {
       await bot.editMessageText(
-        `❌ <b>خطا در ایجاد فاکتور پرداخت</b>\n\n` +
-        `لطفاً دوباره تلاش کنید یا از روش دیگری استفاده کنید.`,
+        unresolved
+          ? `⏳ <b>نتیجه ایجاد فاکتور هنوز مشخص نیست.</b>\n\nبرای جلوگیری از ایجاد فاکتور تکراری، لطفاً تا بررسی خودکار یا پشتیبانی دوباره تلاش نکنید.`
+          : `❌ <b>خطا در ایجاد فاکتور پرداخت</b>\n\nلطفاً دوباره تلاش کنید یا از روش دیگری استفاده کنید.`,
         {
           chat_id: chatId,
           message_id: messageId,
@@ -141,8 +143,11 @@ export async function handleHooshAmount(bot, msg, session) {
         }
       );
     } catch (_) {}
-    // Unlock session so user can try again
-    await setSession(chatId, { ...session, step: "waiting_for_hoosh_amount", messageId });
+    await setSession(chatId, {
+      ...session,
+      step: unresolved ? "hoosh_creation_review" : "waiting_for_hoosh_amount",
+      messageId,
+    });
     return;
   }
 

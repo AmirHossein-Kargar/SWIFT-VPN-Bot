@@ -12,6 +12,7 @@ import { createNowPaymentsTopUp, resetNowPaymentsCreateLocksForTests } from "../
 import { applyNowPaymentsUpdate } from "../../services/nowpayments/applyStatus.js";
 import { handleNowPaymentsIpn } from "../../services/nowpayments/ipnHandler.js";
 import { recoverNowPaymentsInvoices } from "../../services/nowpayments/recovery.js";
+import { notifyNowPaymentsCredit } from "../../services/nowpayments/notify.js";
 
 const testRate = async () => ({ tomanPerFiat: 50_000, source: "test" });
 const SECRET = "n".repeat(48);
@@ -32,7 +33,7 @@ function matches(document, filter = {}) {
     const value = key.split(".").reduce((current, part) => current?.[part], document);
     if (condition == null) return value == null;
     if (condition && typeof condition === "object" && !Array.isArray(condition) && !(condition instanceof Date)) {
-      if (Object.hasOwn(condition, "$in")) return condition.$in.some((item) => String(value) === String(item));
+      if (Object.hasOwn(condition, "$in")) return condition.$in.some((item) => (item == null ? value == null : String(value) === String(item)));
       if (Object.hasOwn(condition, "$nin")) {
         return !condition.$nin.some((item) => (item == null ? value == null || value === "" : String(value) === String(item)));
       }
@@ -47,10 +48,15 @@ function matches(document, filter = {}) {
 function applyUpdate(document, update) {
   for (const [path, value] of Object.entries(update.$set || {})) document[path] = value;
   for (const path of Object.keys(update.$unset || {})) delete document[path];
+  for (const [path, value] of Object.entries(update.$push || {})) {
+    const values = value && typeof value === "object" && Array.isArray(value.$each) ? value.$each : [value];
+    document[path] = [...(document[path] || []), ...values];
+    if (value?.$slice != null) document[path] = value.$slice < 0 ? document[path].slice(value.$slice) : document[path].slice(0, value.$slice);
+  }
 }
 
 function makeInvoiceModel(seed = []) {
-  const docs = new Map(seed.map((doc) => [doc.orderId, { ipnLog: [], balanceCredited: false, ...doc }]));
+  const docs = new Map(seed.map((doc, index) => [doc.orderId, { _id: `invoice-${index}`, ipnLog: [], balanceCredited: false, ...doc }]));
   return {
     docs,
     async create(fields) {
@@ -59,7 +65,7 @@ function makeInvoiceModel(seed = []) {
         error.code = 11000;
         throw error;
       }
-      docs.set(fields.orderId, { ipnLog: [], balanceCredited: false, ...fields });
+      docs.set(fields.orderId, { _id: `invoice-${docs.size}`, ipnLog: [], balanceCredited: false, ...fields });
       return docs.get(fields.orderId);
     },
     findOne(filter) {
@@ -70,6 +76,12 @@ function makeInvoiceModel(seed = []) {
       if (!doc) return { modifiedCount: 0 };
       applyUpdate(doc, update);
       return { modifiedCount: 1 };
+    },
+    async findOneAndUpdate(filter, update) {
+      const doc = [...docs.values()].find((item) => matches(item, filter));
+      if (!doc) return null;
+      applyUpdate(doc, update);
+      return doc;
     },
     find(filter) {
       const found = [...docs.values()].filter((doc) => matches(doc, filter));
@@ -158,8 +170,8 @@ describe("NOWPayments configuration and signature", () => {
     assert.equal(verifyNowPaymentsSignature({ ...payload, price_amount: 1 }, signature, SECRET), false);
     const nodeSignature = signNowPaymentsIpn({ ...payload, payment_extra_ids: ["a", "b"] }, SECRET, { arrayMode: "node" });
     assert.equal(verifyNowPaymentsSignature({ ...payload, payment_extra_ids: ["a", "b"] }, nodeSignature, SECRET), true);
-    const topLevel = crypto.createHmac("sha512", SECRET).update(JSON.stringify(payload, Object.keys(payload).sort()), "utf8").digest("hex");
-    assert.equal(verifyNowPaymentsSignature(payload, topLevel, SECRET), true);
+    const topLevelOnly = crypto.createHmac("sha512", SECRET).update(JSON.stringify(payload, Object.keys(payload).sort()), "utf8").digest("hex");
+    assert.equal(verifyNowPaymentsSignature(payload, topLevelOnly, SECRET), false);
   });
 
   test("refuses a missing or invalid conversion rate instead of inventing one", async () => {
@@ -273,6 +285,9 @@ describe("NOWPayments invoice creation", () => {
     await assert.rejects(() => createNowPaymentsTopUp({ userId: 7105, amountToman: 50_000, env: ENV, invoiceModel: model, request, resolveRate: testRate }), (error) => error.code === "in_flight");
     assert.equal(posts, 1);
     assert.equal([...model.docs.values()][0].status, "creation_unknown");
+    assert.equal([...model.docs.values()][0].recoveryStatus, "required");
+    assert.equal([...model.docs.values()][0].recoveryReason, "provider_creation_outcome_unknown");
+    assert.equal([...model.docs.values()][0].openCreateKey, "user:7105");
     assert.equal([...model.docs.values()][0].balanceCredited, false);
   });
 
@@ -295,11 +310,9 @@ describe("NOWPayments IPN crediting", () => {
   test("credits a finished TRON payment once and ignores unsafe statuses", async () => {
     const users = makeFakeWalletModels([{ telegramId: "7001", balance: 1_000 }]);
     const model = makeInvoiceModel([invoiceFixture()]);
-    const waiting = await applyNowPaymentsUpdate({ payload: finishedPayload({ payment_status: "waiting", actually_paid: 0 }), invoiceModel: model, userModel: users.userModel });
-    assert.equal(waiting.credited, false);
-    assert.equal(users.users.get("7001").balance, 1_000);
-    for (const status of ["confirming", "confirmed", "sending", "partially_paid", "failed", "expired"]) {
-      const result = await applyNowPaymentsUpdate({ payload: finishedPayload({ payment_status: status, actually_paid: status === "partially_paid" ? 1 : 15 }), invoiceModel: model, userModel: users.userModel });
+    for (const status of ["waiting", "confirming", "confirmed", "sending", "partially_paid", "failed", "expired"]) {
+      const isolated = makeInvoiceModel([invoiceFixture()]);
+      const result = await applyNowPaymentsUpdate({ payload: finishedPayload({ payment_status: status, actually_paid: status === "partially_paid" ? 1 : status === "waiting" ? 0 : 15 }), invoiceModel: isolated, userModel: users.userModel });
       assert.equal(result.credited, false, status);
     }
     assert.equal(users.users.get("7001").balance, 1_000);
@@ -321,6 +334,48 @@ describe("NOWPayments IPN crediting", () => {
     ]);
     assert.equal(results.filter((result) => result.credited).length, 1);
     assert.equal(users.users.get("7002").balance, 50_000);
+  });
+
+  test("accepts a correctly signed raw IPN and maps trusted processing outcomes", async () => {
+    const payload = finishedPayload();
+    const rawBody = Buffer.from(JSON.stringify(payload));
+    const response = () => ({
+      statusCode: 0,
+      body: null,
+      headersSent: false,
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.body = body; this.headersSent = true; return this; },
+    });
+    let applied = 0;
+    let notified = 0;
+    const ok = response();
+    await handleNowPaymentsIpn({
+      rawBody,
+      get: () => signNowPaymentsIpn(payload, SECRET),
+    }, ok, {
+      secret: SECRET,
+      bot: { sendMessage: async () => {} },
+      apply: async ({ payload: received }) => {
+        applied += 1;
+        assert.deepEqual(received, payload);
+        return { outcome: "finished", credited: true, orderId: ORDER, notificationPending: true };
+      },
+      notify: async (orderId) => { notified += 1; assert.equal(orderId, ORDER); return true; },
+    });
+    assert.equal(ok.statusCode, 200);
+    assert.equal(applied, 1);
+    assert.equal(notified, 1);
+
+    const mismatch = response();
+    await handleNowPaymentsIpn({ rawBody, get: () => signNowPaymentsIpn(payload, SECRET) }, mismatch, {
+      secret: SECRET,
+      apply: async () => ({ outcome: "amount_mismatch", credited: false }),
+    });
+    assert.equal(mismatch.statusCode, 422);
+
+    const malformed = response();
+    await handleNowPaymentsIpn({ rawBody: Buffer.from("{not-json"), get: () => "a".repeat(128) }, malformed, { secret: SECRET });
+    assert.equal(malformed.statusCode, 400);
   });
 
   test("rejects bad signatures, unknown orders, mismatched invoices, amounts, and currencies", async () => {
@@ -372,6 +427,39 @@ describe("NOWPayments IPN crediting", () => {
     assert.equal(users.users.get("7003").balance, 10);
   });
 
+  test("a refund racing an already-claimed settlement is recorded without double credit", async () => {
+    const users = makeFakeWalletModels([{ telegramId: "7006", balance: 0 }]);
+    const model = makeInvoiceModel([invoiceFixture({ userId: 7006 })]);
+    let credits = 0;
+    const creditWallet = async () => {
+      credits += 1;
+      const user = users.users.get("7006");
+      user.balance += 50_000;
+      user.successfulPayments += 1;
+      user.appliedPaymentKeys.push(`nowpayments:${ORDER}`);
+      const reversal = await applyNowPaymentsUpdate({
+        payload: finishedPayload({ payment_status: "refunded" }),
+        invoiceModel: model,
+        userModel: users.userModel,
+      });
+      assert.equal(reversal.outcome, "refunded");
+      return { user, credited: true, alreadyCredited: false };
+    };
+    const settled = await applyNowPaymentsUpdate({
+      payload: finishedPayload(),
+      invoiceModel: model,
+      userModel: users.userModel,
+      creditWallet,
+    });
+    assert.equal(settled.credited, true);
+    assert.equal(settled.notificationPending, false);
+    assert.equal(credits, 1);
+    assert.equal(users.users.get("7006").balance, 50_000);
+    assert.equal(model.docs.get(ORDER).status, "refunded");
+    assert.equal(model.docs.get(ORDER).balanceCredited, true);
+    assert.equal(model.docs.get(ORDER).recoveryStatus, "required");
+  });
+
   test("an IPN after process restart credits a creation_unknown invoice exactly once", async () => {
     const users = makeFakeWalletModels([{ telegramId: "7004", balance: 0 }]);
     const model = makeInvoiceModel([invoiceFixture({ userId: 7004, status: "creation_unknown", invoiceId: null, openCreateKey: "user:7004" })]);
@@ -419,11 +507,59 @@ describe("NOWPayments recovery", () => {
     assert.equal(blocked, 0);
   });
 
+  test("authenticated recovery never fills missing provider identity from local state", async () => {
+    const users = makeFakeWalletModels([{ telegramId: "7007", balance: 0 }]);
+    const model = makeInvoiceModel([invoiceFixture({ userId: 7007, status: "confirming", paymentId: "887766" })]);
+    const result = await recoverNowPaymentsInvoices({
+      invoiceModel: model,
+      env: ENV,
+      request: async () => ({ status: 200, data: finishedPayload({ order_id: undefined }) }),
+      apply: (input) => applyNowPaymentsUpdate({ ...input, userModel: users.userModel }),
+    });
+    assert.equal(result.recovered, 0);
+    assert.equal(result.errors, 1);
+    assert.equal(users.users.get("7007").balance, 0);
+    assert.equal(model.docs.get(ORDER).recoveryStatus, "required");
+  });
+
+  test("a stale create attempted at the provider remains unknown and blocks duplicates", async () => {
+    const model = makeInvoiceModel([invoiceFixture({
+      status: "creating",
+      apiAttemptedAt: new Date(Date.now() - 10 * 60_000),
+      invoiceId: null,
+      createdAt: new Date(Date.now() - 10 * 60_000),
+      openCreateKey: "user:7001",
+    })]);
+    await recoverNowPaymentsInvoices({ invoiceModel: model, env: {} });
+    assert.equal(model.docs.get(ORDER).status, "creation_unknown");
+    assert.equal(model.docs.get(ORDER).recoveryStatus, "required");
+    assert.equal(model.docs.get(ORDER).openCreateKey, "user:7001");
+    assert.equal(model.docs.get(ORDER).balanceCredited, false);
+  });
+
   test("a stale create that never reached the provider can be failed without crediting", async () => {
     const model = makeInvoiceModel([invoiceFixture({ status: "creating", apiAttemptedAt: null, invoiceId: null, createdAt: new Date(Date.now() - 10 * 60_000), openCreateKey: "user:7001" })]);
     await recoverNowPaymentsInvoices({ invoiceModel: model, env: {}, request: async () => { throw new Error("no network"); } });
     assert.equal(model.docs.get(ORDER).status, "creation_failed");
     assert.equal(model.docs.get(ORDER).balanceCredited, false);
+  });
+});
+
+describe("NOWPayments notification outbox", () => {
+  test("sends a credited-payment message once and durably clears the pending flag", async () => {
+    const model = makeInvoiceModel([invoiceFixture({
+      status: "finished",
+      balanceCredited: true,
+      notificationPending: true,
+    })]);
+    const sent = [];
+    const bot = { async sendMessage(...args) { sent.push(args); } };
+    assert.equal(await notifyNowPaymentsCredit(ORDER, bot, { invoiceModel: model }), true);
+    assert.equal(await notifyNowPaymentsCredit(ORDER, bot, { invoiceModel: model }), false);
+    assert.equal(sent.length, 1);
+    assert.match(sent[0][1], /پرداخت ترون تأیید شد/);
+    assert.equal(model.docs.get(ORDER).notificationPending, false);
+    assert.ok(model.docs.get(ORDER).notifiedAt instanceof Date);
   });
 });
 

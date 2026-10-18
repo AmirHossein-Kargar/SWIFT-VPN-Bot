@@ -26,6 +26,19 @@ export const KNOWN_PAYMENT_STATUSES = Object.freeze([
   "expired",
   "refunded",
 ]);
+export const TERMINAL_NON_CREDIT_STATUSES = Object.freeze([
+  "failed",
+  "expired",
+  "refunded",
+]);
+export const IN_PROGRESS_PAYMENT_STATUSES = Object.freeze([
+  "waiting",
+  "pending",
+  "confirming",
+  "confirmed",
+  "sending",
+  "partially_paid",
+]);
 export const NON_CREDIT_STATUSES = Object.freeze(
   KNOWN_PAYMENT_STATUSES.filter((status) => status !== SUCCESS_PAYMENT_STATUS),
 );

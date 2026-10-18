@@ -1,6 +1,5 @@
 import { setSession } from "../config/sessionStore.js";
 import invoice from "../models/invoice.js";
-import User from "../models/User.js";
 import escapeHtml from "../utils/escapeHtml.js";
 
 const handleBankRecipt = async (bot, msg, session) => {
@@ -46,9 +45,6 @@ const handleBankRecipt = async (bot, msg, session) => {
   }
 
   try {
-    const dbUser = await User.findOne({ telegramId: String(user.id) }).select("phoneNumber").lean();
-    const phoneNumber = dbUser?.phoneNumber ? String(dbUser.phoneNumber) : "نامشخص";
-    const displayPhoneNumber = phoneNumber.startsWith("+98") ? `0${phoneNumber.slice(3)}` : phoneNumber;
     const amount = Number(claimed.amount).toLocaleString("en-US");
     const ltr = "\u202A";
     const pdf = "\u202C";
@@ -59,7 +55,6 @@ const handleBankRecipt = async (bot, msg, session) => {
         `👤 <b>نام کاربر:</b> <code>${escapeHtml(user.first_name || "نامشخص")}</code>\n` +
         `<b>آیدی عددی:</b> <code>${ltr}${escapeHtml(user.id)}${pdf}</code>\n` +
         `📎 <b>یوزرنیم:</b> @${escapeHtml(user.username || "ندارد")}\n` +
-        `📞 <b>شماره تلفن:</b> <code>${escapeHtml(displayPhoneNumber)}</code>\n` +
         `💰 <b>مبلغ:</b> <code>${amount} تومان</code>\n` +
         `📌 <b>شماره فاکتور:</b> <code>${escapeHtml(paymentId)}</code>`,
       parse_mode: "HTML",

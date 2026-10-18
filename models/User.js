@@ -4,7 +4,10 @@ const userSchema = new mongoose.Schema({
   lastName: { type: String, default: null },
   username: { type: String, default: null },
   telegramId: { type: String, required: true, unique: true },
-  phoneNumber: { type: String, default: null },
+  // Legacy compatibility only. New code never requests, writes, or returns it.
+  // `select: false` prevents accidental disclosure by broad user queries while
+  // allowing existing deployments to retain historical documents safely.
+  phoneNumber: { type: String, default: null, select: false },
   balance: { type: Number, default: 0 },
   successfulPayments: { type: Number, default: 0 },
   // Durable idempotency ledger for wallet credits. A payment ID is added in the

@@ -3,6 +3,12 @@ import { verifyInvoice as apiVerify } from "./hooshpayClient.js";
 import HooshPayInvoice from "../../models/HooshPayInvoice.js";
 import { fulfillHooshOrder } from "./fulfillHooshOrder.js";
 import { acquireVerifyLock, releaseVerifyLock } from "./verifyLock.js";
+import {
+  HOOSH_TERMINAL_NONPAYABLE,
+  hooshProviderData,
+  normalizeHooshStatus,
+  validateHooshPaidDetails,
+} from "./paymentValidation.js";
 
 function log(level, message, meta = {}) {
   console[level === "error" ? "error" : level === "warn" ? "warn" : "log"](
@@ -10,33 +16,43 @@ function log(level, message, meta = {}) {
   );
 }
 
-function verifiedAmountMatches(invoice, result) {
-  const data = result?.data && typeof result.data === "object" ? result.data : result;
-  const amount = data?.amount;
-  if (amount == null) return true;
-  return Number.isSafeInteger(Number(amount)) && Number(amount) === Number(invoice.amount);
+function terminalResult(status, cid) {
+  if (status === "cancelled") return { success: false, cancelled: true, status, correlationId: cid };
+  if (status === "expired") return { success: false, expired: true, status, correlationId: cid };
+  if (status === "failed") return { success: false, failed: true, status, correlationId: cid };
+  if (status === "reversed") return { success: false, reversed: true, status, correlationId: cid };
+  return null;
 }
 
-export async function verifyHooshPayment(uid, bot, chatId) {
+export async function verifyHooshPayment(uid, bot, chatId, {
+  invoiceModel = HooshPayInvoice,
+  verifyInvoice = apiVerify,
+  fulfill = fulfillHooshOrder,
+  acquireLock = acquireVerifyLock,
+  releaseLock = releaseVerifyLock,
+} = {}) {
   const cid = randomUUID();
   let invoice;
   try {
-    invoice = await HooshPayInvoice.findOne({ uid });
+    invoice = await invoiceModel.findOne({ uid });
   } catch (error) {
     log("error", "Invoice lookup failed", { cid, errorType: error?.name || "DatabaseError" });
     return { success: false, error: "Unable to check this payment right now", correlationId: cid };
   }
   if (!invoice) return { success: false, error: "Invoice not found", correlationId: cid };
-  if (invoice.status === "reversed") return { success: false, error: "Payment was reversed", correlationId: cid };
+
+  const localStatus = normalizeHooshStatus(invoice.status);
+  const localTerminal = terminalResult(localStatus, cid);
+  if (localTerminal) return localTerminal;
   if (invoice.fulfilled && invoice.balanceCredited) return { success: false, alreadyFulfilled: true, correlationId: cid };
 
-  const lock = await acquireVerifyLock(uid);
+  const lock = await acquireLock(uid);
   if (!lock.acquired) return { success: false, locked: true, correlationId: cid };
 
   try {
     let verifyResult;
     try {
-      verifyResult = await apiVerify(uid);
+      verifyResult = await verifyInvoice(uid);
     } catch (error) {
       log("warn", "HooshPay verification API unavailable", {
         cid, uid, errorType: error?.name || "HooshPayApiError", code: error?.code,
@@ -44,41 +60,85 @@ export async function verifyHooshPayment(uid, bot, chatId) {
       return { success: false, error: "Payment verification is temporarily unavailable", correlationId: cid };
     }
 
-    const status = String(verifyResult?.status ?? verifyResult?.data?.status ?? "").toLowerCase();
-    const isPaid = verifyResult?.paid === true || status === "paid";
-    if (verifyResult?.paid === false && status === "paid") {
+    const data = hooshProviderData(verifyResult);
+    const status = normalizeHooshStatus(data.status);
+    const paidFlag = verifyResult?.paid ?? data.paid;
+    if ((paidFlag === true && status !== "paid") || (paidFlag === false && status === "paid")) {
+      log("error", "HooshPay verification returned conflicting status fields", { cid, uid, status });
       return { success: false, error: "Conflicting payment verification result", correlationId: cid };
     }
-    if (!isPaid) {
+
+    if (status !== "paid") {
+      if (HOOSH_TERMINAL_NONPAYABLE.includes(status)) {
+        const closed = await invoiceModel.findOneAndUpdate(
+          { _id: invoice._id, status: "pending", fulfilled: false, balanceCredited: false },
+          { $set: { status } },
+          { new: true },
+        );
+        if (!closed) {
+          await invoiceModel.findOneAndUpdate(
+            { _id: invoice._id, status: "paid" },
+            {
+              $set: {
+                recoveryStatus: "required",
+                recoveryReason: `provider_${status}_after_payment_claim`,
+              },
+            },
+          );
+        }
+        return terminalResult(status, cid);
+      }
+      if (status === "reversed") {
+        let reversed = await invoiceModel.findOneAndUpdate(
+          { _id: invoice._id, status: "pending", fulfilled: false, balanceCredited: false },
+          { $set: { status: "reversed", reversedAt: new Date() } },
+          { new: true },
+        );
+        if (!reversed) {
+          reversed = await invoiceModel.findOneAndUpdate(
+            { _id: invoice._id, status: "paid" },
+            {
+              $set: {
+                status: "reversed",
+                reversedAt: new Date(),
+                recoveryStatus: "required",
+                recoveryReason: "provider_reversal_after_payment_claim",
+              },
+            },
+            { new: true },
+          );
+        }
+        return terminalResult(status, cid);
+      }
       return { success: false, notPaid: true, status: status || "pending", correlationId: cid };
     }
 
-    const verifiedUid = verifyResult?.data?.uid ?? verifyResult?.uid;
-    if (verifiedUid != null && String(verifiedUid) !== String(uid)) {
-      log("error", "HooshPay verification UID mismatch", { cid, uid });
-      return { success: false, error: "Payment verification could not be matched to this invoice", correlationId: cid };
-    }
-    if (!verifiedAmountMatches(invoice, verifyResult)) {
-      log("error", "HooshPay verification amount mismatch", { cid, uid });
-      return { success: false, error: "The verified payment amount does not match the invoice", correlationId: cid };
+    const mismatch = validateHooshPaidDetails(invoice, data, {
+      requireUid: true,
+      requireOrderId: true,
+      requireCurrency: true,
+    });
+    if (mismatch) {
+      log("error", "HooshPay verification did not match the local invoice", { cid, uid, reason: mismatch });
+      return { success: false, error: "The verified payment details do not match the invoice", correlationId: cid };
     }
 
-    const trackingCode = verifyResult?.data?.tracking_code ?? verifyResult?.tracking_code;
+    const trackingCode = data.tracking_code;
     if (typeof trackingCode === "string" && trackingCode.length <= 128) {
-      await HooshPayInvoice.findOneAndUpdate(
-        { _id: invoice._id, status: { $ne: "reversed" } },
+      await invoiceModel.findOneAndUpdate(
+        { _id: invoice._id, status: { $in: ["pending", "paid"] } },
         { $set: { trackingCode } }
       );
       invoice.trackingCode = trackingCode;
     }
 
-    const paidAt = verifyResult?.data?.paid_at ?? verifyResult?.paid_at;
-    const result = await fulfillHooshOrder({
+    const result = await fulfill({
       invoice,
       bot,
       chatId: chatId ?? invoice.userId,
       correlationId: cid,
-      paidAt,
+      paidAt: data.paid_at,
+      invoiceModel,
     });
     return { success: Boolean(result.credited || result.alreadyCredited || result.notified), ...result, correlationId: cid };
   } catch (error) {
@@ -88,6 +148,6 @@ export async function verifyHooshPayment(uid, bot, chatId) {
     });
     return { success: false, error: "Payment confirmation is temporarily unavailable", correlationId: cid };
   } finally {
-    await releaseVerifyLock(lock);
+    await releaseLock(lock);
   }
 }

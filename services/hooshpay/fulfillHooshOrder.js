@@ -3,6 +3,7 @@ import HooshPayInvoice from "../../models/HooshPayInvoice.js";
 import User from "../../models/User.js";
 import keyboard from "../../keyboards/mainKeyboard.js";
 import { creditWalletOnce } from "../walletCredit.js";
+import { HOOSH_TERMINAL_NONPAYABLE, normalizeHooshStatus } from "./paymentValidation.js";
 
 function log(level, message, meta = {}) {
   console[level === "error" ? "error" : level === "warn" ? "warn" : "log"](
@@ -26,11 +27,11 @@ async function alertAdmin(bot, message) {
   }
 }
 
-async function notifyUserOnce({ invoice, bot, user }) {
+async function notifyUserOnce({ invoice, bot, user, invoiceModel = HooshPayInvoice }) {
   if (!invoice.notificationPending || !bot?.sendMessage) return false;
   const now = new Date();
   const staleClaim = new Date(now.getTime() - 5 * 60_000);
-  const claim = await HooshPayInvoice.findOneAndUpdate(
+  const claim = await invoiceModel.findOneAndUpdate(
     {
       _id: invoice._id,
       status: "paid",
@@ -67,7 +68,7 @@ async function notifyUserOnce({ invoice, bot, user }) {
       parse_mode: "HTML",
       reply_markup: keyboard.reply_markup,
     });
-    await HooshPayInvoice.findOneAndUpdate(
+    await invoiceModel.findOneAndUpdate(
       { _id: invoice._id, notificationClaimedAt: now, notificationPending: true },
       { $set: { notificationPending: false, notifiedAt: new Date() }, $unset: { notificationClaimedAt: 1 } }
     );
@@ -90,7 +91,16 @@ async function notifyUserOnce({ invoice, bot, user }) {
  * credit; the invoice completion flag is written afterwards. This closes the
  * old crash window where the invoice was marked credited before User.balance.
  */
-export async function fulfillHooshOrder({ invoice, bot, chatId, correlationId, paidAt }) {
+export async function fulfillHooshOrder({
+  invoice,
+  bot,
+  chatId,
+  correlationId,
+  paidAt,
+  invoiceModel = HooshPayInvoice,
+  userModel = User,
+  creditWallet = creditWalletOnce,
+}) {
   const cid = correlationId || randomUUID();
   if (!invoice?._id || !invoice?.uid) throw new TypeError("A persisted HooshPay invoice is required");
   if (!Number.isSafeInteger(Number(invoice.userId)) || Number(invoice.userId) <= 0) {
@@ -103,13 +113,24 @@ export async function fulfillHooshOrder({ invoice, bot, chatId, correlationId, p
   let current = invoice;
   let newlyClaimed = false;
 
+  const initialStatus = normalizeHooshStatus(invoice.status);
+  if (initialStatus === "reversed") {
+    return { credited: false, reversed: true };
+  }
+  if (HOOSH_TERMINAL_NONPAYABLE.includes(initialStatus)) {
+    log("warn", "Terminal HooshPay invoice cannot be credited", {
+      cid, uid: invoice.uid, status: initialStatus,
+    });
+    return { credited: false, notPaid: true, terminalStatus: initialStatus };
+  }
+
   if (!invoice.fulfilled) {
     const safePaidAt = paidAt ? new Date(paidAt) : new Date();
-    const phaseOne = await HooshPayInvoice.findOneAndUpdate(
+    const phaseOne = await invoiceModel.findOneAndUpdate(
       {
         _id: invoice._id,
         fulfilled: false,
-        status: { $in: ["pending", "expired", "cancelled", "failed", "paid"] },
+        status: { $in: ["pending", "paid"] },
       },
       {
         $set: {
@@ -118,7 +139,11 @@ export async function fulfillHooshOrder({ invoice, bot, chatId, correlationId, p
           status: "paid",
           paidAt: Number.isNaN(safePaidAt.getTime()) ? new Date() : safePaidAt,
           creditLedgerVersion: 2,
+          creationStatus: "created",
+          recoveryStatus: "none",
+          recoveryReason: null,
         },
+        $unset: { openCreateKey: 1, creationUnknownAt: 1 },
       },
       { new: true }
     );
@@ -129,10 +154,10 @@ export async function fulfillHooshOrder({ invoice, bot, chatId, correlationId, p
         cid, uid: current.uid, userId: current.userId, amount: current.amount,
       });
     } else {
-      current = await HooshPayInvoice.findById(invoice._id).lean();
+      current = await invoiceModel.findById(invoice._id).lean();
     }
   } else {
-    current = await HooshPayInvoice.findById(invoice._id).lean();
+    current = await invoiceModel.findById(invoice._id).lean();
   }
 
   if (!current) throw new Error("HooshPay invoice disappeared during fulfillment");
@@ -149,7 +174,7 @@ export async function fulfillHooshOrder({ invoice, bot, chatId, correlationId, p
   // balance but before reporting success. Do not risk a second credit: send the
   // invoice to manual reconciliation instead of guessing.
   if (!current.balanceCredited && current.creditLedgerVersion !== 2) {
-    const alertClaim = await HooshPayInvoice.findOneAndUpdate(
+    const alertClaim = await invoiceModel.findOneAndUpdate(
       {
         _id: current._id,
         balanceCredited: false,
@@ -178,10 +203,11 @@ export async function fulfillHooshOrder({ invoice, bot, chatId, correlationId, p
   let walletResult = null;
   if (!current.balanceCredited) {
     try {
-      walletResult = await creditWalletOnce({
+      walletResult = await creditWallet({
         telegramId: current.userId,
         amount: Number(current.amount),
         creditKey: `hooshpay:${current.uid}`,
+        userModel,
       });
     } catch (error) {
       log("error", "Atomic wallet credit failed", {
@@ -212,7 +238,7 @@ export async function fulfillHooshOrder({ invoice, bot, chatId, correlationId, p
       throw new Error("HooshPay invoice owner is missing; credit remains pending");
     }
 
-    const finalized = await HooshPayInvoice.findOneAndUpdate(
+    const finalized = await invoiceModel.findOneAndUpdate(
       { _id: current._id, status: "paid", balanceCredited: false, creditLedgerVersion: 2 },
       {
         $set: {
@@ -226,10 +252,37 @@ export async function fulfillHooshOrder({ invoice, bot, chatId, correlationId, p
     if (finalized) {
       current = finalized.toObject ? finalized.toObject() : finalized;
     } else {
-      current = await HooshPayInvoice.findById(current._id).lean();
+      current = await invoiceModel.findById(current._id).lean();
+      if (current?.status === "reversed" && !current.balanceCredited) {
+        // A reversal raced the already-claimed settlement. The wallet ledger is
+        // durable and must be reflected on the invoice; no success notification
+        // is sent, and an administrator reconciles the credited balance.
+        const reversedFinal = await invoiceModel.findOneAndUpdate(
+          { _id: current._id, status: "reversed", balanceCredited: false, creditLedgerVersion: 2 },
+          {
+            $set: {
+              balanceCredited: true,
+              balanceCreditedAt: new Date(),
+              notificationPending: false,
+              recoveryStatus: "required",
+              recoveryReason: "provider_reversal_after_wallet_credit",
+            },
+          },
+          { new: true },
+        );
+        if (reversedFinal) current = reversedFinal.toObject ? reversedFinal.toObject() : reversedFinal;
+      }
       if (!current?.balanceCredited) {
         throw new Error("Wallet credit is durable but invoice completion could not be recorded");
       }
+    }
+
+    if (current.recoveryStatus === "required" && current.notificationPending) {
+      await invoiceModel.findOneAndUpdate(
+        { _id: current._id, notificationPending: true, recoveryStatus: "required" },
+        { $set: { notificationPending: false } },
+      );
+      current.notificationPending = false;
     }
 
     log("info", "PAYMENT_CREDITED — atomic wallet ledger committed", {
@@ -242,7 +295,7 @@ export async function fulfillHooshOrder({ invoice, bot, chatId, correlationId, p
     });
   } else {
     walletResult = {
-      user: await User.findOne({ telegramId: String(current.userId) }).select("balance").lean(),
+      user: await userModel.findOne({ telegramId: String(current.userId) }).select("balance").lean(),
       credited: false,
       alreadyCredited: true,
     };
@@ -250,7 +303,7 @@ export async function fulfillHooshOrder({ invoice, bot, chatId, correlationId, p
 
   let notified = Boolean(current.notifiedAt);
   if (current.notificationPending) {
-    notified = await notifyUserOnce({ invoice: current, bot, user: walletResult?.user }) || notified;
+    notified = await notifyUserOnce({ invoice: current, bot, user: walletResult?.user, invoiceModel }) || notified;
   }
 
   return {

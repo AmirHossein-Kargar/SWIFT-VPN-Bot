@@ -1,10 +1,12 @@
 import HooshPayInvoice from "../../models/HooshPayInvoice.js";
+import NowPaymentsInvoice from "../../models/NowPaymentsInvoice.js";
 import CryptoInvoice from "../../models/CryptoInvoice.js";
 import bankInvoice from "../../models/invoice.js";
 import WalletPurchase from "../../models/WalletPurchase.js";
 import { default as botInstance } from "../../config/botInstance.js";
 import { verifyHooshPayment } from "../hooshpay/verifyHooshPayment.js";
 import { fulfillHooshOrder } from "../hooshpay/fulfillHooshOrder.js";
+import { reconcileNowPaymentsPayment } from "../nowpayments/recovery.js";
 import { confirmBankPayment } from "../payments/confirmBankPayment.js";
 import { commitProvisionedPurchase, deliverPurchaseNotification } from "../buyService/purchaseLedger.js";
 import trxScanner from "../trxWalletScanner.js";
@@ -23,6 +25,14 @@ function normalizeStatus(provider, record) {
     if (["expired", "cancelled"].includes(record.status)) return "cancelled";
     if (record.status === "reversed") return "refunded";
     return record.status === "failed" ? "failed" : "pending";
+  }
+  if (provider === "nowpayments") {
+    if (record.status === "finished") return record.balanceCredited ? "fulfilled" : "recovery-required";
+    if (["expired", "creation_failed"].includes(record.status)) return "cancelled";
+    if (record.status === "failed") return "failed";
+    if (record.status === "refunded") return "refunded";
+    if (record.status === "creation_unknown") return "recovery-required";
+    return "pending";
   }
   if (provider === "bank") {
     if (["confirmed", "paid"].includes(record.status)) return record.balanceCredited ? "fulfilled" : "recovery-required";
@@ -45,6 +55,7 @@ function normalizeStatus(provider, record) {
 
 function normalizePayment(provider, record) {
   const id = provider === "hooshpay" ? record.uid
+    : provider === "nowpayments" ? record.orderId
     : provider === "bank" ? record.paymentId
     : provider === "trx" ? record.invoiceId
     : record.purchaseId;
@@ -53,13 +64,13 @@ function normalizePayment(provider, record) {
     key: `${provider}:${id}`,
     id: String(id),
     provider,
-    providerLabel: provider === "hooshpay" ? "HooshPay" : provider === "bank" ? "Bank transfer" : provider === "trx" ? "TRX" : "Wallet",
+    providerLabel: provider === "hooshpay" ? "HooshPay" : provider === "nowpayments" ? "NOWPayments" : provider === "bank" ? "Bank transfer" : provider === "trx" ? "TRX" : "Wallet",
     type: provider === "wallet" ? "order" : "top-up",
     userId: String(record.userId ?? record.telegramId),
-    amount: Number(record.amount || 0),
+    amount: Number(provider === "nowpayments" ? record.amountToman : record.amount || 0),
     currency: provider === "trx" ? "Toman" : "Toman",
     product: provider === "wallet" ? (record.planName || record.planId || "VPN service") : "Wallet top-up",
-    trackingCode: record.trackingCode || record.transactionHash || null,
+    trackingCode: record.trackingCode || record.transactionHash || (provider === "nowpayments" ? record.paymentId : null) || null,
     status,
     rawStatus: String(record.status || "unknown"),
     createdAt: record.createdAt || null,
@@ -89,6 +100,15 @@ function statusFilter(provider, status) {
     if (status === "failed") return { status: "failed" };
     if (status === "cancelled") return { status: { $in: ["expired", "cancelled"] } };
     if (status === "refunded") return { status: "reversed" };
+  }
+  if (provider === "nowpayments") {
+    if (status === "pending") return { status: { $in: ["creating", "pending", "waiting", "confirming", "confirmed", "sending", "partially_paid"] } };
+    if (status === "paid") return { status: "finished" };
+    if (status === "fulfilled") return { status: "finished", balanceCredited: true };
+    if (status === "recovery-required") return { $or: [{ recoveryStatus: "required" }, { status: { $in: ["creation_unknown", "finished"] }, balanceCredited: false }] };
+    if (status === "failed") return { status: "failed" };
+    if (status === "cancelled") return { status: { $in: ["expired", "creation_failed"] } };
+    if (status === "refunded") return { status: "refunded" };
   }
   if (provider === "bank") {
     if (status === "pending") return { status: { $in: ["unpaid", "pending", "waiting_for_approval"] } };
@@ -123,6 +143,7 @@ function searchFilter(provider, term) {
   }
   const regex = new RegExp(escapeRegex(term), "i");
   if (provider === "hooshpay") return { $or: [{ uid: regex }, { orderId: regex }, { trackingCode: regex }] };
+  if (provider === "nowpayments") return { $or: [{ orderId: regex }, { invoiceId: regex }, { paymentId: regex }] };
   if (provider === "bank") return { $or: [{ paymentId: regex }, { trackingCode: regex }] };
   if (provider === "trx") return { $or: [{ invoiceId: regex }, { transactionHash: regex }] };
   return { $or: [{ purchaseId: regex }, { planName: regex }, { serviceUsername: regex }] };
@@ -130,6 +151,7 @@ function searchFilter(provider, term) {
 
 const sources = [
   { provider: "hooshpay", model: HooshPayInvoice },
+  { provider: "nowpayments", model: NowPaymentsInvoice },
   { provider: "bank", model: bankInvoice },
   { provider: "trx", model: CryptoInvoice },
   { provider: "wallet", model: WalletPurchase },
@@ -163,7 +185,7 @@ function parsePaymentKey(key) {
   const separator = key.indexOf(":");
   const provider = key.slice(0, separator);
   const id = key.slice(separator + 1);
-  if (separator < 1 || !["hooshpay", "bank", "trx", "wallet"].includes(provider) || !/^[A-Za-z0-9_.-]{1,128}$/.test(id)) {
+  if (separator < 1 || !["hooshpay", "nowpayments", "bank", "trx", "wallet"].includes(provider) || !/^[A-Za-z0-9_.-]{1,128}$/.test(id)) {
     throw new AdminServiceError("شناسه پرداخت نامعتبر است.", { status: 400, code: "invalid_payment_id" });
   }
   return { provider, id };
@@ -171,8 +193,8 @@ function parsePaymentKey(key) {
 
 async function findPayment(key) {
   const { provider, id } = parsePaymentKey(key);
-  const model = { hooshpay: HooshPayInvoice, bank: bankInvoice, trx: CryptoInvoice, wallet: WalletPurchase }[provider];
-  const field = { hooshpay: "uid", bank: "paymentId", trx: "invoiceId", wallet: "purchaseId" }[provider];
+  const model = { hooshpay: HooshPayInvoice, nowpayments: NowPaymentsInvoice, bank: bankInvoice, trx: CryptoInvoice, wallet: WalletPurchase }[provider];
+  const field = { hooshpay: "uid", nowpayments: "orderId", bank: "paymentId", trx: "invoiceId", wallet: "purchaseId" }[provider];
   const record = await model.findOne({ [field]: id }).lean();
   if (!record) throw new AdminServiceError("پرداخت یا سفارش یافت نشد.", { status: 404, code: "payment_not_found" });
   return { provider, record, normalized: normalizePayment(provider, record) };
@@ -196,9 +218,13 @@ function timelineFor(provider, record) {
       for (const item of (record.webhookLog || []).slice(-20)) {
         add("Webhook received", item.receivedAt, item.payload?.status === "paid" ? "success" : "done", item.payload?.status ? `Status: ${String(item.payload.status).slice(0, 40)}` : null);
       }
+    } else if (provider === "nowpayments") {
+      for (const item of (record.ipnLog || []).slice(-20)) {
+        add("IPN received", item.receivedAt, item.paymentStatus === "finished" ? "success" : "done", item.paymentStatus ? `Status: ${String(item.paymentStatus).slice(0, 40)}` : null);
+      }
     }
     add("Payment verified", record.paidAt || record.confirmedAt);
-    add("Wallet credited", record.balanceCreditedAt, record.balanceCredited ? "success" : (record.status === "paid" || record.status === "confirmed" ? "warning" : "pending"));
+    add("Wallet credited", record.balanceCreditedAt, record.balanceCredited ? "success" : (["paid", "confirmed", "finished"].includes(record.status) ? "warning" : "pending"));
   }
   return events.sort((a, b) => new Date(a.at || 0) - new Date(b.at || 0));
 }
@@ -217,6 +243,12 @@ export async function getPaymentDetail({ actorId, key } = {}) {
       status: typeof entry.payload?.status === "string" ? entry.payload.status.slice(0, 40) : null,
       amount: Number.isFinite(Number(entry.payload?.amount)) ? Number(entry.payload.amount) : null,
       trackingCode: typeof entry.payload?.tracking_code === "string" ? entry.payload.tracking_code.slice(0, 128) : null,
+    })) : provider === "nowpayments" ? (record.ipnLog || []).slice(-20).map((entry) => ({
+      receivedAt: entry.receivedAt,
+      event: "payment.status",
+      status: typeof entry.paymentStatus === "string" ? entry.paymentStatus.slice(0, 40) : null,
+      amount: Number.isFinite(Number(entry.priceAmount)) ? Number(entry.priceAmount) : null,
+      trackingCode: entry.paymentId || null,
     })) : [],
     purchase: provider === "wallet" ? {
       serviceUsername: record.serviceUsername || null,
@@ -235,8 +267,9 @@ export async function getPaymentDetail({ actorId, key } = {}) {
       refundedAt: record.refundedAt || null,
     } : null,
     actions: {
-      retryVerification: provider === "hooshpay" && ["pending", "expired", "cancelled", "failed"].includes(record.status),
+      retryVerification: provider === "hooshpay" && record.status === "pending",
       retryFulfillment: (provider === "hooshpay" && record.status === "paid" && !record.balanceCredited)
+        || (provider === "nowpayments" && Boolean(record.paymentId) && !record.balanceCredited && !["failed", "expired", "refunded"].includes(record.status))
         || (provider === "bank" && record.status === "confirmed" && !record.balanceCredited && record.creditLedgerVersion === 2)
         || (provider === "trx" && record.status === "paid" && !record.balanceCredited && record.creditLedgerVersion === 2)
         || (provider === "wallet" && ["provisioned", "completed"].includes(record.status)),
@@ -247,7 +280,7 @@ export async function getPaymentDetail({ actorId, key } = {}) {
 }
 
 async function stampRetry(provider, id, operationId) {
-  const fields = { hooshpay: [HooshPayInvoice, "uid"], bank: [bankInvoice, "paymentId"], trx: [CryptoInvoice, "invoiceId"], wallet: [WalletPurchase, "purchaseId"] };
+  const fields = { hooshpay: [HooshPayInvoice, "uid"], nowpayments: [NowPaymentsInvoice, "orderId"], bank: [bankInvoice, "paymentId"], trx: [CryptoInvoice, "invoiceId"], wallet: [WalletPurchase, "purchaseId"] };
   const [model, field] = fields[provider];
   const now = new Date();
   const result = await model.updateOne(
@@ -258,7 +291,7 @@ async function stampRetry(provider, id, operationId) {
 }
 
 async function updateRetryResult(provider, id, { ok, errorCode = null, recoveryRequired = false } = {}) {
-  const fields = { hooshpay: [HooshPayInvoice, "uid"], bank: [bankInvoice, "paymentId"], trx: [CryptoInvoice, "invoiceId"], wallet: [WalletPurchase, "purchaseId"] };
+  const fields = { hooshpay: [HooshPayInvoice, "uid"], nowpayments: [NowPaymentsInvoice, "orderId"], bank: [bankInvoice, "paymentId"], trx: [CryptoInvoice, "invoiceId"], wallet: [WalletPurchase, "purchaseId"] };
   const [model, field] = fields[provider];
   await model.updateOne({ [field]: id }, {
     $set: {
@@ -290,6 +323,20 @@ async function safeRetry({ provider, id, record, actorId, operationId }) {
       return { ok: true, status: "fulfilled", auditSummary: { status: "fulfilled" } };
     }
     throw new AdminServiceError("فقط فاکتور HooshPay در انتظار بررسی یا پرداخت‌شده بدون شارژ قابل تلاش مجدد است.", { status: 409, code: "payment_not_retryable" });
+  }
+  if (provider === "nowpayments") {
+    if (record.paymentId && !record.balanceCredited && !["failed", "expired", "refunded"].includes(record.status)) {
+      const result = await reconcileNowPaymentsPayment({ invoice: record });
+      if (["finished", "already_credited"].includes(result.outcome)) {
+        await NowPaymentsInvoice.updateOne({ _id: record._id }, { $set: { recoveryStatus: "none", recoveryReason: null } });
+        return { ok: true, status: result.outcome, auditSummary: { status: result.outcome } };
+      }
+      if (["waiting", "pending", "confirming", "confirmed", "sending", "partially_paid"].includes(result.outcome)) {
+        return { ok: true, status: result.outcome, auditSummary: { status: result.outcome } };
+      }
+      throw new AdminServiceError("بازیابی NOWPayments کامل نشد.", { status: 503, code: `nowpayments_${result.outcome}` });
+    }
+    throw new AdminServiceError("این پرداخت NOWPayments شناسه قابل بررسی ندارد یا در وضعیت پایانی ناموفق است.", { status: 409, code: "payment_not_retryable" });
   }
   if (provider === "bank") {
     if (record.status === "confirmed" && !record.balanceCredited && record.creditLedgerVersion === 2) {
@@ -355,7 +402,7 @@ export async function markPaymentRecoveryRequired({ actorId, operationId, key, r
   assertAdminUser(actorId);
   const { provider, id } = parsePaymentKey(key);
   const safeReason = requireReason(reason);
-  const modelMap = { hooshpay: [HooshPayInvoice, "uid"], bank: [bankInvoice, "paymentId"], trx: [CryptoInvoice, "invoiceId"], wallet: [WalletPurchase, "purchaseId"] };
+  const modelMap = { hooshpay: [HooshPayInvoice, "uid"], nowpayments: [NowPaymentsInvoice, "orderId"], bank: [bankInvoice, "paymentId"], trx: [CryptoInvoice, "invoiceId"], wallet: [WalletPurchase, "purchaseId"] };
   const [model, field] = modelMap[provider];
   const { result } = await runAuditedAction({
     actorTelegramId: actorId, operationId, action: "PAYMENT_MARKED_RECOVERY_REQUIRED",
@@ -374,7 +421,7 @@ export async function resolvePaymentRecovery({ actorId, operationId, key, reason
   assertAdminUser(actorId);
   const { provider, id } = parsePaymentKey(key);
   const safeReason = requireReason(reason, { min: 10, max: 500 });
-  const modelMap = { hooshpay: [HooshPayInvoice, "uid"], bank: [bankInvoice, "paymentId"], trx: [CryptoInvoice, "invoiceId"], wallet: [WalletPurchase, "purchaseId"] };
+  const modelMap = { hooshpay: [HooshPayInvoice, "uid"], nowpayments: [NowPaymentsInvoice, "orderId"], bank: [bankInvoice, "paymentId"], trx: [CryptoInvoice, "invoiceId"], wallet: [WalletPurchase, "purchaseId"] };
   const [model, field] = modelMap[provider];
   const { result } = await runAuditedAction({
     actorTelegramId: actorId, operationId, action: "PAYMENT_MANUALLY_RESOLVED",
@@ -383,7 +430,7 @@ export async function resolvePaymentRecovery({ actorId, operationId, key, reason
     execute: async () => {
       const current = await model.findOne({ [field]: id }).select("recoveryStatus status balanceCredited").lean();
       if (!current) throw new AdminServiceError("پرداخت یا سفارش یافت نشد.", { status: 404, code: "payment_not_found" });
-      if (current.recoveryStatus !== "required" && !["manual_review", "uncertain"].includes(current.status) && !(current.status === "paid" && current.balanceCredited === false)) {
+      if (current.recoveryStatus !== "required" && !["manual_review", "uncertain"].includes(current.status) && !(["paid", "finished"].includes(current.status) && current.balanceCredited === false)) {
         throw new AdminServiceError("این پرداخت در انتظار بازیابی دستی نیست.", { status: 409, code: "not_recovery_required" });
       }
       await model.updateOne({ [field]: id }, { $set: { recoveryStatus: "resolved", recoveryReason: safeReason, recoveryResolvedAt: new Date(), recoveryResolvedBy: String(actorId) } });

@@ -43,7 +43,6 @@ import handleProfile from "./message/handleProfile.js";
 import { sendTrxWallet } from "../paymentHandlers/handleTrxAmount.js";
 import { payHoosh } from "../paymentHandlers/payHoosh.js";
 import { confirmNowPaymentsTopUp, payNowPayments } from "../paymentHandlers/payNowPayments.js";
-import NowPaymentsInvoice from "../models/NowPaymentsInvoice.js";
 import { verifyHooshPayment } from "../services/hooshpay/verifyHooshPayment.js";
 import { confirmBankPayment } from "../services/payments/confirmBankPayment.js";
 import { sumAmount, sumUserBalances } from "../services/admin/collectionStats.js";
@@ -235,6 +234,22 @@ const handleCallbackQuery = async (bot, query) => {
       return;
     }
 
+    if (result.failed || result.reversed) {
+      await bot.editMessageText(
+        result.reversed
+          ? "↩️ <b>این پرداخت برگشت داده شده است.</b>\n\nبرای بررسی بیشتر با پشتیبانی تماس بگیرید."
+          : "❌ <b>این پرداخت ناموفق بوده است.</b>\n\nلطفاً یک فاکتور جدید ایجاد کنید.",
+        {
+          chat_id: chatId,
+          message_id: messageId,
+          parse_mode: "HTML",
+          reply_markup: { inline_keyboard: [[{ text: "🏠 بازگشت", callback_data: "back_to_home" }]] },
+        }
+      );
+      await clearSession(chatId);
+      return;
+    }
+
     if (result.notPaid) {
       const inv = await HooshPayInvoice.findOne({ uid });
       const paymentUrl = inv?.paymentUrl;
@@ -260,7 +275,7 @@ const handleCallbackQuery = async (bot, query) => {
 
     // Unexpected error
     await bot.editMessageText(
-      `❌ <b>خطا در بررسی پرداخت</b>\n\n<code>${result.error || "خطای نامشخص"}</code>\n\nلطفاً دوباره تلاش کنید.`,
+      "❌ <b>بررسی پرداخت انجام نشد.</b>\n\nلطفاً چند دقیقه دیگر دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.",
       {
         chat_id: chatId,
         message_id: messageId,
@@ -373,17 +388,10 @@ const handleCallbackQuery = async (bot, query) => {
             await invoice.findOneAndDelete({ paymentId });
           } else if (paymentType === "trx" || paymentType === "crypto") {
             await CryptoInvoice.findOneAndDelete({ invoiceId: paymentId });
-          } else if (paymentType === "nowpayments") {
-            await NowPaymentsInvoice.findOneAndUpdate(
-              { orderId: paymentId, balanceCredited: false, status: { $in: ["pending", "waiting", "confirming", "confirmed", "sending"] } },
-              { $set: { status: "expired" }, $unset: { openCreateKey: 1 } },
-            );
-          } else if (paymentType === "hoosh") {
-            // Mark as expired rather than deleting (preserves audit trail)
-            await HooshPayInvoice.findOneAndUpdate(
-              { uid: paymentId, fulfilled: false, status: "pending" },
-              { $set: { status: "expired" } }
-            );
+          } else if (paymentType === "nowpayments" || paymentType === "hoosh") {
+            // Leaving Telegram UI is not a provider cancellation. Keep the
+            // invoice pending so a delayed, authenticated callback can still
+            // be reconciled; only the provider may set cancelled/expired.
           }
         } catch (err) {
           console.error("[back_to_topup] cleanup error:", err.message);

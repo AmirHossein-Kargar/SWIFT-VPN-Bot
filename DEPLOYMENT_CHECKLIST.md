@@ -70,7 +70,7 @@ Copy `.env.example` to `.env` and fill **every field marked REQUIRED**.
 | `HOOSHPAY_WEBHOOK_SECRET` | ✅ REQUIRED | **Must match** the secret configured in HooshPay → Settings → Webhooks. Used for HMAC-SHA256 signature verification. **Never share this.** |
 | `WEBHOOK_BASE_URL` | ✅ REQUIRED | Public HTTPS URL of this server. **No trailing slash.** E.g. `https://bot.yourdomain.com` |
 
-> ⚠️ **Without `HOOSHPAY_WEBHOOK_SECRET`**, all incoming webhooks bypass signature validation. Any attacker who knows your webhook URL can fake payment confirmations.
+> ⚠️ **Without `HOOSHPAY_WEBHOOK_SECRET`**, the webhook fails closed and rejects every callback. Payment confirmations cannot be processed until the same secret is configured in both places.
 
 #### Generating a strong webhook secret:
 ```bash
@@ -101,7 +101,7 @@ Paste the output into both your `.env` and the HooshPay dashboard.
 | `CMC_API_KEY` | Optional | CoinMarketCap API key for the legacy direct TRX quote. If not set, that older flow cannot price invoices. |
 | `NOWPAYMENTS_API_KEY` | Required for TRON top-up | NOWPayments API key. Header `x-api-key` only. Not the public key. |
 | `NOWPAYMENTS_IPN_SECRET` | Required for TRON top-up | IPN secret from the NOWPayments dashboard. Never commit or print it. |
-| `NOWPAYMENTS_IPN_CALLBACK_URL` | Required for TRON top-up | Public `https://<host>/api/nowpayments/ipn`. Register the same URL in the dashboard. |
+| `NOWPAYMENTS_IPN_CALLBACK_URL` | Optional override | Defaults to `<WEBHOOK_BASE_URL>/api/nowpayments/ipn`. If overridden, register the identical public HTTPS URL in the dashboard. |
 | `GHEYMAT_API_TOKEN` | Optional | Paid-plan token for the live USDT/IRT quote. Free tier works without it. Never commit the value. |
 
 ### 2.7 Profit Calculation

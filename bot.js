@@ -4,7 +4,6 @@ import "dotenv/config";
 // * 🔌 Core
 import startBot from "./startBot.js";
 import handleCallbackQuery from "./handlers/handleCallbackQuery.js";
-import handleContact from "./handlers/contactHandler.js";
 
 // * 📦 Services & Handlers
 import createTestService from "./services/createTestService.js";
@@ -47,14 +46,12 @@ async function showUnsupportedMediaNotice(bot, chatId, session) {
   }
 }
 
-// * 📦 Models
-import User from "./models/User.js";
-
 // * 📦 API
 import showStatusApi from "./handlers/admin/showStatusApi.js";
 import { handleAdminPanelCommand } from "./handlers/admin/panel.js";
 import { isAdminUser } from "./utils/auth.js";
 import { touchUserActivity } from "./services/admin/users.js";
+import { ensureTelegramUser } from "./services/users/ensureTelegramUser.js";
 
 // * ⚙️ Configuration report
 // Resolves platform-provided variable names (Railway's MONGO_URL / REDIS_URL /
@@ -92,8 +89,10 @@ bot.on("message", async (msg) => {
     const userText = msg.text;
     const session = await getSession(chatId);
 
-    // Best-effort activity tracking for admin dashboards (throttled).
+    // Register the minimum Telegram account data needed for wallet ownership.
+    // Contact/phone sharing is neither requested nor processed.
     if (msg.chat?.type === "private" && userId) {
+      await ensureTelegramUser(msg.from);
       void touchUserActivity(userId, { now: new Date() });
     }
 
@@ -148,14 +147,7 @@ bot.on("message", async (msg) => {
         break;
       case "💰 افزایش موجودی": {
         await hideKeyboard(bot, chatId);
-        const user = await User.findOne({ telegramId: userId });
-        if (!user || !user.phoneNumber) {
-          await handleContact(bot, msg, async () => {
-            await showPaymentMethods(bot, chatId);
-          });
-        } else {
-          await showPaymentMethods(bot, chatId);
-        }
+        await showPaymentMethods(bot, chatId);
         break;
       }
       case "👤 پروفایل من":
@@ -189,17 +181,6 @@ bot.on("message", async (msg) => {
         "❌ خطایی رخ داد. لطفاً دوباره تلاش کنید."
       );
     } catch { /* chat unreachable — nothing more we can do */ }
-  }
-});
-
-// * ☎️ Contact Handler
-bot.on("contact", async (msg) => {
-  try {
-    await handleContact(bot, msg);
-  } catch (err) {
-    console.error("❌ Error in bot.on('contact'):", err);
-    const chatId = msg.chat.id;
-    await bot.sendMessage(chatId, "❌ مشکلی در ذخیره شماره تلفن رخ داد.");
   }
 });
 

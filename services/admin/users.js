@@ -1,6 +1,7 @@
 import User from "../../models/User.js";
 import WalletPurchase from "../../models/WalletPurchase.js";
 import HooshPayInvoice from "../../models/HooshPayInvoice.js";
+import NowPaymentsInvoice from "../../models/NowPaymentsInvoice.js";
 import CryptoInvoice from "../../models/CryptoInvoice.js";
 import bankInvoice from "../../models/invoice.js";
 import { assertAdminUser, AdminServiceError } from "./authorization.js";
@@ -145,12 +146,14 @@ function mapPaymentHistory(provider, record) {
   else if (provider === "trx" && status === "paid" && record.balanceCredited) status = "fulfilled";
   else if (provider === "hooshpay" && status === "paid" && record.balanceCredited) status = "fulfilled";
   else if (provider === "hooshpay" && status === "reversed") status = "refunded";
+  else if (provider === "nowpayments" && status === "finished" && record.balanceCredited) status = "fulfilled";
+  else if (provider === "nowpayments" && status === "creation_unknown") status = "recovery-required";
   return {
     id: String(id || ""), provider, status,
-    amount: Number(record.amount || 0),
+    amount: Number(provider === "nowpayments" ? record.amountToman : record.amount || 0),
     createdAt: record.createdAt || null,
     paidAt: record.paidAt || record.confirmedAt || record.balanceCreditedAt || null,
-    trackingCode: record.trackingCode || null,
+    trackingCode: record.trackingCode || record.paymentId || null,
   };
 }
 
@@ -159,7 +162,7 @@ export async function getUserDetail({ actorId, telegramId, now = new Date() } = 
   const id = requireTelegramId(telegramId);
   const user = await User.findOne({ telegramId: id }).select("telegramId username firstName lastName balance successfulPayments totalServices services createdAt lastActivityAt isBanned blockedAt blockedBy blockReason referralCode referredByTelegramId").lean();
   if (!user) throw new AdminServiceError("کاربر یافت نشد.", { status: 404, code: "user_not_found" });
-  const [spendRows, tracked, referralCount, purchases, hoosh, bank, crypto] = await Promise.all([
+  const [spendRows, tracked, referralCount, purchases, hoosh, nowPayments, bank, crypto] = await Promise.all([
     WalletPurchase.aggregate([
       { $match: { telegramId: id, status: "completed" } },
       { $group: { _id: null, totalSpent: { $sum: "$amount" }, orderCount: { $sum: 1 } } },
@@ -168,6 +171,7 @@ export async function getUserDetail({ actorId, telegramId, now = new Date() } = 
     User.countDocuments({ referredByTelegramId: id }),
     WalletPurchase.find({ telegramId: id }).sort({ createdAt: -1 }).limit(20).select("purchaseId planId planName amount status createdAt reservedAt provisioningStartedAt provisionedAt completedAt expiresAt revokedAt errorCode retryCount recoveryStatus serviceUsername").lean(),
     HooshPayInvoice.find({ userId: Number(id) }).sort({ createdAt: -1 }).limit(10).select("uid orderId amount status createdAt paidAt balanceCredited trackingCode recoveryStatus").lean(),
+    NowPaymentsInvoice.find({ userId: Number(id) }).sort({ createdAt: -1 }).limit(10).select("orderId invoiceId paymentId amountToman status createdAt paidAt balanceCredited recoveryStatus").lean(),
     bankInvoice.find({ userId: Number(id) }).sort({ createdAt: -1 }).limit(10).select("paymentId amount paymentType status createdAt confirmedAt balanceCredited trackingCode recoveryStatus").lean(),
     CryptoInvoice.find({ userId: Number(id) }).sort({ createdAt: -1 }).limit(10).select("invoiceId amount paymentType status createdAt confirmedAt balanceCredited transactionHash recoveryStatus").lean(),
   ]);
@@ -184,6 +188,7 @@ export async function getUserDetail({ actorId, telegramId, now = new Date() } = 
   }));
   const payments = [
     ...hoosh.map((item) => mapPaymentHistory("hooshpay", item)),
+    ...nowPayments.map((item) => mapPaymentHistory("nowpayments", item)),
     ...bank.map((item) => mapPaymentHistory("bank", item)),
     ...crypto.map((item) => mapPaymentHistory("trx", item)),
   ].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)).slice(0, 20);

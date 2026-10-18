@@ -2,66 +2,96 @@
 import moment from "moment-jalaali";
 import User from "../../models/User.js";
 import HooshPayInvoice from "../../models/HooshPayInvoice.js";
+import NowPaymentsInvoice from "../../models/NowPaymentsInvoice.js";
 import CryptoInvoice from "../../models/CryptoInvoice.js";
 import bankInvoice from "../../models/invoice.js";
 import formatDate from "../../utils/formatDate.js";
 import escapeHtml from "../../utils/escapeHtml.js";
+import {
+  eligibleRecentOrderStatusQuery,
+  isHiddenRecentOrderStatus,
+  normalizePaymentStatus,
+} from "../../services/payments/status.js";
 
 moment.loadPersian({ usePersianDigits: false, dialect: "persian-modern" });
 
+const EMPTY_RECENT_ORDERS = "▫️ سفارش واجد شرایطی برای نمایش وجود ندارد.";
+
 /** Persian payment-status summary for the profile's recent-orders list. */
-function paymentStatusFa(provider, record) {
+export function paymentStatusFa(provider, record) {
   if (record.recoveryStatus === "required") return "🔔 نیاز به بررسی";
-  switch (provider) {
-    case "hoosh":
-      if (record.status === "paid") return record.balanceCredited ? "✅ موفق" : "⏳ در حال تسویه";
-      if (["expired", "cancelled"].includes(record.status)) return "🚫 لغو/منقضی";
-      if (record.status === "reversed") return "↩️ بازگشت داده شد";
-      return "⏳ در انتظار پرداخت";
-    case "trx":
-      if (record.status === "paid") return record.balanceCredited ? "✅ موفق" : "⏳ در حال تسویه";
-      if (record.status === "rejected") return "❌ ناموفق";
-      return "⏳ در انتظار پرداخت";
-    case "bank":
-      if (["confirmed", "paid"].includes(record.status)) return record.balanceCredited ? "✅ موفق" : "⏳ در حال تسویه";
-      if (record.status === "rejected") return "❌ رد شده";
-      return "⏳ در انتظار تأیید";
-    default:
-      return "⏳ در انتظار";
-  }
+  const status = normalizePaymentStatus(provider, record.status);
+  if (status === "paid") return record.balanceCredited ? "✅ موفق" : "⏳ در حال تسویه";
+  if (status === "partially_paid") return "⚠️ پرداخت ناقص";
+  if (status === "failed") return "❌ ناموفق";
+  if (status === "reversed") return "↩️ بازگشت داده شد";
+  if (provider === "bank") return "⏳ در انتظار تأیید";
+  return "⏳ در انتظار پرداخت";
 }
 
-const handleProfile = async (bot, chatId, userId) => {
+function queryWithVisibleStatus(extraExcluded = []) {
+  const status = eligibleRecentOrderStatusQuery();
+  return extraExcluded.length
+    ? { ...status, $nin: [...status.$nin, ...extraExcluded] }
+    : status;
+}
+
+async function recent(model, query, limit = 4) {
+  return model.find(query).sort({ createdAt: -1 }).limit(limit).lean();
+}
+
+/**
+ * Load eligible orders before sorting/limiting the cross-provider result. This
+ * intentionally filters at MongoDB rather than fetching private/irrelevant rows
+ * and hiding their labels in the rendered message.
+ */
+export async function loadRecentProfileOrders(userId, {
+  hooshModel = HooshPayInvoice,
+  nowPaymentsModel = NowPaymentsInvoice,
+  cryptoModel = CryptoInvoice,
+  bankModel = bankInvoice,
+} = {}) {
+  const numericUserId = Number(userId);
+  const visible = queryWithVisibleStatus();
+  const [hooshPayments, nowPayments, trxPayments, bankPayments] = await Promise.all([
+    recent(hooshModel, {
+      userId: numericUserId,
+      status: visible,
+      creationStatus: { $in: [null, "created"] },
+    }),
+    recent(nowPaymentsModel, {
+      userId: numericUserId,
+      status: queryWithVisibleStatus(["creation_failed"]),
+    }),
+    recent(cryptoModel, { userId: numericUserId, status: visible }),
+    recent(bankModel, { userId: numericUserId, status: visible }),
+  ]);
+
+  return [
+    ...hooshPayments.map((record) => ({ provider: "hoosh", label: "پرداخت آنلاین", record })),
+    ...nowPayments.map((record) => ({ provider: "nowpayments", label: "پرداخت ترون", record })),
+    ...trxPayments.map((record) => ({ provider: "trx", label: "پرداخت TRX", record })),
+    ...bankPayments.map((record) => ({ provider: "bank", label: "کارت به کارت", record })),
+  ]
+    // Defensive legacy guard: the database predicate is authoritative, while
+    // this protects output if a test adapter or old non-Mongo store ignores it.
+    .filter(({ provider, record }) => !isHiddenRecentOrderStatus(provider, record.status))
+    .sort((a, b) => new Date(b.record.createdAt || 0) - new Date(a.record.createdAt || 0))
+    .slice(0, 4);
+}
+
+function paymentAmount(provider, record) {
+  return provider === "nowpayments" ? Number(record.amountToman || 0) : Number(record.amount || 0);
+}
+
+const handleProfile = async (bot, chatId, userId, dependencies = {}) => {
+  const userModel = dependencies.userModel || User;
   try {
-    const user = await User.findOne({ telegramId: userId });
-
-    if (!user || !user.phoneNumber) {
-      const requestContactKeyboard = {
-        reply_markup: {
-          keyboard: [
-            [
-              {
-                text: "📞 ارسال شماره من",
-                request_contact: true,
-              },
-            ],
-          ],
-          resize_keyboard: true,
-          one_time_keyboard: true,
-        },
-      };
-
-      bot.sendMessage(
-        chatId,
-        "📞 لطفاً شماره تلفن خود را ارسال کنید:",
-        requestContactKeyboard
-      );
+    const user = await userModel.findOne({ telegramId: String(userId) });
+    if (!user) {
+      await bot.sendMessage(chatId, "❌ اطلاعات حساب شما هنوز ثبت نشده است. لطفاً دستور /start را ارسال کنید.");
       return;
     }
-
-    const phone = user.phoneNumber.startsWith("+98")
-      ? user.phoneNumber.replace("+98", "0")
-      : user.phoneNumber;
 
     const formattedDate = formatDate(user.createdAt);
 
@@ -74,42 +104,29 @@ const handleProfile = async (bot, chatId, userId) => {
       return new Date(service.expiresAt).getTime() > now;
     }).length;
 
-    // ── Recent orders (latest 4 across all payment providers) ────────────────
-    const [hooshPayments, trxPayments, bankPayments] = await Promise.all([
-      HooshPayInvoice.find({ userId: Number(userId) }).sort({ createdAt: -1 }).limit(3).lean().catch(() => []),
-      CryptoInvoice.find({ userId: Number(userId) }).sort({ createdAt: -1 }).limit(3).lean().catch(() => []),
-      bankInvoice.find({ userId: Number(userId) }).sort({ createdAt: -1 }).limit(3).lean().catch(() => []),
-    ]);
-    const recent = [
-      ...hooshPayments.map((r) => ({ provider: "hoosh", label: "پرداخت آنلاین", record: r })),
-      ...trxPayments.map((r) => ({ provider: "trx", label: "پرداخت TRX", record: r })),
-      ...bankPayments.map((r) => ({ provider: "bank", label: "کارت به کارت", record: r })),
-    ]
-      .sort((a, b) => new Date(b.record.createdAt || 0) - new Date(a.record.createdAt || 0))
-      .slice(0, 4);
-
-    const recentLines = recent.map(({ provider, label, record }) => {
-      const amount = Number(record.amount || 0).toLocaleString("en-US");
+    const recentOrders = await loadRecentProfileOrders(userId, dependencies);
+    const recentLines = recentOrders.map(({ provider, label, record }) => {
+      const amount = paymentAmount(provider, record).toLocaleString("en-US");
       const date = record.createdAt ? moment(new Date(record.createdAt)).format("jYY/jMM/jDD") : "—";
       return `▫️ ${label} — <code>${amount}</code> تومان | ${paymentStatusFa(provider, record)} | ${date}`;
     });
 
     const displayName = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
+    const balance = Number(user.balance || 0).toLocaleString("en-US");
 
     const message = `
 👤 <b>پروفایل من</b>
 
-🆔 شناسه کاربری: <code>${user.telegramId}</code>
+🆔 شناسه کاربری: <code>${escapeHtml(user.telegramId)}</code>
 ${displayName ? `📌 نام: <b>${escapeHtml(displayName)}</b>\n` : ""}${user.username ? `🔗 یوزرنیم: @${escapeHtml(user.username)}\n` : ""}
-💰 موجودی کیف پول: <b>${user.balance.toLocaleString("en-US")} تومان</b>
+💰 موجودی کیف پول: <b>${balance} تومان</b>
 
 📦 خدمات فعال: <b>${activeServices}</b> از ${services.length} سرویس
 ✅ پرداخت‌های موفق: <b>${user.successfulPayments || 0}</b>
 ${user.referralCode ? `🎟️ کد معرف شما: <code>${escapeHtml(user.referralCode)}</code>\n` : ""}
 🧾 <b>آخرین سفارش‌ها:</b>
-${recentLines.length ? recentLines.join("\n") : "▫️ سفارشی ثبت نشده است."}
+${recentLines.length ? recentLines.join("\n") : EMPTY_RECENT_ORDERS}
 
-📞 شماره تلفن: <code>${phone}</code>
 🕒 تاریخ عضویت: <code>${formattedDate}</code>`;
 
     const reply_markup = {
@@ -126,11 +143,12 @@ ${recentLines.length ? recentLines.join("\n") : "▫️ سفارشی ثبت نش
       },
     };
 
-    bot.sendMessage(chatId, message, { parse_mode: "HTML", ...reply_markup });
+    await bot.sendMessage(chatId, message, { parse_mode: "HTML", ...reply_markup });
   } catch (err) {
     console.error("profile error:", err?.name || "Error");
-    bot.sendMessage(chatId, "❌ خطایی رخ داده است. لطفاً دوباره تلاش کنید.");
+    await bot.sendMessage(chatId, "❌ خطایی رخ داده است. لطفاً دوباره تلاش کنید.");
   }
 };
 
+export { EMPTY_RECENT_ORDERS };
 export default handleProfile;

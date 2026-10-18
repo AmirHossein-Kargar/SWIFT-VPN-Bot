@@ -99,7 +99,7 @@ describe("fulfillHooshOrder — real two-phase credit", () => {
 
     // Simulate a crash after Phase 1 committed but before Phase 2 ran.
     await HooshPayInvoice.findByIdAndUpdate(invoice._id, {
-      $set: { fulfilled: true, fulfilledAt: new Date(), status: "paid", paidAt: new Date() },
+      $set: { fulfilled: true, fulfilledAt: new Date(), status: "paid", paidAt: new Date(), creditLedgerVersion: 2 },
     });
 
     const stuck = await HooshPayInvoice.findOne({ _id: invoice._id });
@@ -121,7 +121,7 @@ describe("fulfillHooshOrder — real two-phase credit", () => {
   test("concurrent crash-recovery workers credit exactly once", opts(), async () => {
     const invoice = await seed({ telegramId: "2005", amount: 45000 });
     await HooshPayInvoice.findByIdAndUpdate(invoice._id, {
-      $set: { fulfilled: true, status: "paid", paidAt: new Date() },
+      $set: { fulfilled: true, status: "paid", paidAt: new Date(), creditLedgerVersion: 2 },
     });
 
     const stuck = await HooshPayInvoice.findById(invoice._id);
@@ -146,7 +146,10 @@ describe("fulfillHooshOrder — real two-phase credit", () => {
     });
     const stranger = await User.create({ telegramId: "777", balance: 5 });
 
-    await fulfillHooshOrder({ invoice, bot: null, chatId: 999999 });
+    await assert.rejects(
+      () => fulfillHooshOrder({ invoice, bot: null, chatId: 999999 }),
+      /owner is missing/,
+    );
 
     const after = await User.findOne({ telegramId: "777" });
     assert.equal(after.balance, 5, "no other user was credited");

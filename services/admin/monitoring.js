@@ -4,6 +4,7 @@ import redisClient, { isRedisReady, getRedisError } from "../../config/redisClie
 import { default as botInstance } from "../../config/botInstance.js";
 import { StatusApi } from "../../api/wizardApi.js";
 import { createHooshPayClient } from "../hooshpay/hooshpayClient.js";
+import { readNowPaymentsConfig } from "../nowpayments/money.js";
 import { assertAdminUser } from "./authorization.js";
 
 const CHECK_TIMEOUT_MS = 8_000;
@@ -98,6 +99,17 @@ async function checkHooshPay() {
   }
 }
 
+async function checkNowPayments() {
+  const started = nowMs();
+  try {
+    if (!readNowPaymentsConfig()) throw new Error("not configured");
+    return { status: classify(nowMs() - started, 500, null), latencyMs: nowMs() - started, error: null };
+  } catch (error) {
+    const notConfigured = /not configured/i.test(String(error?.message || "")) || error?.code === "not_configured";
+    return { status: "down", latencyMs: null, error: notConfigured ? "NOWPayments configuration is incomplete" : safeError(error) };
+  }
+}
+
 async function checkTelegram() {
   const started = nowMs();
   try {
@@ -116,6 +128,7 @@ const CHECKERS = {
   redis: checkRedis,
   wizardxray: checkWizardXray,
   hooshpay: checkHooshPay,
+  nowpayments: checkNowPayments,
   telegram: checkTelegram,
 };
 
