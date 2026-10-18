@@ -10,6 +10,7 @@ import { verifyHooshPaySignature } from "./services/hooshpay/verifySignature.js"
 import { recordWebhookOutcome } from "./services/admin/monitoring.js";
 import adminRouter from "./web/adminRouter.js";
 import { serveAdminSpa, notFoundHandler } from "./web/spa.js";
+import { handleNowPaymentsIpn } from "./services/nowpayments/ipnHandler.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -278,6 +279,17 @@ export async function handleHooshWebhook(req, res) {
 }
 
 app.post("/api/hooshpay/webhook", handleHooshWebhook);
+
+export async function handleNowPaymentsWebhook(req, res) {
+  const reqId = randomUUID();
+  if (!req.is("application/json")) {
+    return res.status(415).json({ ok: false, error: "unsupported_media_type", request_id: reqId });
+  }
+  if (isRateLimited(req.ip)) return res.status(429).json({ ok: false, error: "rate_limited", request_id: reqId });
+  return handleNowPaymentsIpn(req, res, { requestId: reqId });
+}
+
+app.post("/api/nowpayments/ipn", handleNowPaymentsWebhook);
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString(), uptime: Math.floor(process.uptime()) });

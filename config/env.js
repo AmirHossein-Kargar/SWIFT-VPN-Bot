@@ -288,6 +288,36 @@ export function inspectEnv(env = process.env) {
     invalid.push({ key: "WEBHOOK_RATE_LIMIT_PER_MIN", fatal: true, hint: "Use an integer from 0 to 100000" });
   }
 
+  const nowpaymentsCallback = firstSet(["NOWPAYMENTS_IPN_CALLBACK_URL"], env)?.value;
+  if (nowpaymentsCallback) {
+    const issue = validatePublicHttps(nowpaymentsCallback, "NOWPAYMENTS_IPN_CALLBACK_URL");
+    if (issue) invalid.push({ key: "NOWPAYMENTS_IPN_CALLBACK_URL", fatal: true, hint: issue });
+  }
+  const nowpaymentsSecret = firstSet(["NOWPAYMENTS_IPN_SECRET"], env)?.value;
+  if (nowpaymentsSecret && nowpaymentsSecret.length < 32) {
+    invalid.push({ key: "NOWPAYMENTS_IPN_SECRET", fatal: true, hint: "Use at least 32 characters of random secret material" });
+  }
+  const nowpaymentsBase = firstSet(["NOWPAYMENTS_API_BASE_URL"], env)?.value;
+  if (nowpaymentsBase) {
+    const issue = validatePublicHttps(nowpaymentsBase, "NOWPAYMENTS_API_BASE_URL");
+    if (issue) invalid.push({ key: "NOWPAYMENTS_API_BASE_URL", fatal: true, hint: issue });
+  }
+  const gheymatBase = firstSet(["GHEYMAT_API_BASE_URL"], env)?.value;
+  if (gheymatBase) {
+    const issue = validatePublicHttps(gheymatBase, "GHEYMAT_API_BASE_URL");
+    if (issue) invalid.push({ key: "GHEYMAT_API_BASE_URL", fatal: true, hint: issue });
+  }
+  for (const key of ["GHEYMAT_CACHE_TTL_SECONDS", "GHEYMAT_MAX_QUOTE_AGE_SECONDS"]) {
+    const value = firstSet([key], env)?.value;
+    if (value && (!/^\d+$/.test(value) || Number(value) < 30 || Number(value) > 3600)) {
+      invalid.push({ key, fatal: true, hint: "Use an integer from 30 to 3600 seconds" });
+    }
+  }
+  const nowpaymentsCurrency = firstSet(["NOWPAYMENTS_PRICE_CURRENCY"], env)?.value;
+  if (nowpaymentsCurrency && !["usd", "eur"].includes(nowpaymentsCurrency.toLowerCase())) {
+    invalid.push({ key: "NOWPAYMENTS_PRICE_CURRENCY", fatal: true, hint: "Use usd or eur. Do not label a Toman amount as another currency." });
+  }
+
   return {
     missing,
     invalid,
