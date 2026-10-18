@@ -1,15 +1,10 @@
 import User from "../../models/User.js";
 import WalletPurchase from "../../models/WalletPurchase.js";
 import { getSuccessServiceMessage, guideButtons } from "../../messages/staticMessages.js";
+import escapeHtml from "../../utils/escapeHtml.js";
 
 const NOTIFICATION_CLAIM_MS = 5 * 60_000;
 const RECOVERY_STALE_MS = 5 * 60_000;
-
-function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  })[character]);
-}
 
 function log(level, message, meta = {}) {
   console[level === "error" ? "error" : level === "warn" ? "warn" : "log"](

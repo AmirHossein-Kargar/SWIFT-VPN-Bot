@@ -196,6 +196,7 @@ export async function getDashboardMetrics({ now = new Date() } = {}) {
     vpnCounts,
     panelStatus,
     charts,
+    completedOrders,
   ] = await Promise.all([
     User.countDocuments({}),
     User.countDocuments({ isBanned: { $ne: true }, lastActivityAt: { $gte: thirtyDaysAgo } }),
@@ -218,13 +219,13 @@ export async function getDashboardMetrics({ now = new Date() } = {}) {
     knownVpnCounts(now),
     StatusApi().catch(() => null),
     dashboardCharts(now),
+    sumModel(WalletPurchase, { status: "completed", completedAt: { $gte: startMonth } }),
   ]);
 
   const activeVpnCount = Number(panelStatus?.result?.count_active_services);
   const totalPanelVpns = Number(panelStatus?.result?.count_services);
   const failedPayments = failedHoosh + failedBank + failedCrypto;
   const pendingPayments = pendingHoosh + pendingBank + pendingCrypto;
-  const completedOrders = await sumModel(WalletPurchase, { status: "completed", completedAt: { $gte: startMonth } });
   const failedPaymentDenominator = failedPayments + pendingPayments + revenueMonth.count;
 
   return {
@@ -255,10 +256,6 @@ export async function getDashboardMetrics({ now = new Date() } = {}) {
     revenueByProviderMonth: revenueMonth.byProvider,
     charts,
   };
-}
-
-export async function getDashboardChartData({ now = new Date() } = {}) {
-  return (await getDashboardMetrics({ now })).charts;
 }
 
 export { knownVpnCounts, revenueForPeriod, DAY_MS, PENDING_ORDER_STATES, FAILED_PROVISION_STATES };

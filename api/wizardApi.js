@@ -2,6 +2,8 @@ import axios from "axios";
 
 const TIMEOUT_MS = 15_000;
 const MAX_BODY_BYTES = 1_048_576;
+let cachedClient = null;
+let cachedClientKey = "";
 
 export class WizardApiError extends Error {
   constructor(operation, { status, code, ambiguous = false } = {}) {
@@ -26,8 +28,12 @@ function getClient() {
     throw new Error("WIZARD_API_URL must be HTTPS and must not contain credentials, a query, or a fragment");
   }
 
-  return axios.create({
-    baseURL: baseURL.replace(/\/+$/, ""),
+  const normalizedBase = baseURL.replace(/\/+$/, "");
+  const cacheKey = `${apiKey}\n${normalizedBase}`;
+  if (cachedClient && cachedClientKey === cacheKey) return cachedClient;
+  cachedClientKey = cacheKey;
+  cachedClient = axios.create({
+    baseURL: normalizedBase,
     timeout: TIMEOUT_MS,
     maxContentLength: MAX_BODY_BYTES,
     maxBodyLength: MAX_BODY_BYTES,
@@ -37,6 +43,7 @@ function getClient() {
       Accept: "application/json",
     },
   });
+  return cachedClient;
 }
 
 function safeError(operation, error, { mutation = false } = {}) {

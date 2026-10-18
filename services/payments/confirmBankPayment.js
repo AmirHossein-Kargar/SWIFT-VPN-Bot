@@ -1,12 +1,6 @@
 import invoice from "../../models/invoice.js";
-import User from "../../models/User.js";
 import { creditWalletOnce } from "../walletCredit.js";
-
-function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  })[character]);
-}
+import escapeHtml from "../../utils/escapeHtml.js";
 
 async function notifyUserOnce(payment, user, bot) {
   if (!payment.notificationPending || !bot?.sendMessage) return false;

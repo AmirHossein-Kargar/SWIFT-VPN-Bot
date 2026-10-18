@@ -1,6 +1,7 @@
 import User from "../../models/User.js";
 import { getServiceView } from "../../services/wizardServiceStatus.js";
 import formatDate from "../../utils/formatDate.js";
+import escapeHtml from "../../utils/escapeHtml.js";
 
 const HOME_BUTTON = [{ text: "🔙 بازگشت به منوی اصلی", callback_data: "buy_service_back_to_main" }];
 
@@ -8,12 +9,6 @@ function progressBar(percent) {
   if (percent == null || !Number.isFinite(percent)) return "";
   const filled = Math.round(Math.min(10, Math.max(0, percent / 10)));
   return "▰".repeat(filled) + "▱".repeat(10 - filled);
-}
-
-function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  })[character]);
 }
 
 /**

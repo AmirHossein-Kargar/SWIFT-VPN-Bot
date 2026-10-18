@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import express from "express";
-import { ADMIN_SESSION_COOKIE, issueAdminLoginCode, consumeAdminLoginCode, createAdminSession, deleteAdminSession, getAdminSession } from "../services/admin/auth.js";
+import { ADMIN_SESSION_COOKIE, issueAdminLoginCode, consumeAdminLoginCode, createAdminSession, deleteAdminSession } from "../services/admin/auth.js";
 import { AdminServiceError } from "../services/admin/authorization.js";
 import { runAuditedAction } from "../services/admin/audit.js";
 import { getDashboardMetrics } from "../services/admin/dashboard.js";

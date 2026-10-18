@@ -101,7 +101,7 @@
     ok.onclick = async () => {
       const values = {};
       $$("#modal-body input, #modal-body textarea, #modal-body select").forEach((input) => {
-        values[input.dataset.field] = input.type === "number" ? input.value : input.value;
+        values[input.dataset.field] = input.type === "checkbox" ? input.checked : input.value;
       });
       ok.disabled = true;
       try { await onConfirm(values); } finally { ok.disabled = false; }
@@ -115,7 +115,7 @@
   const fieldHtml = (label, name, { placeholder = "", type = "text", value = "", hint = "" } = {}) => `
     <label class="field">
       <span class="field-label">${esc(label)}</span>
-      <input class="input${type === "text" ? "" : ""}" data-field="${name}" type="${type}" placeholder="${esc(placeholder)}" value="${esc(value)}" />
+      <input class="input" data-field="${name}" type="${type}" placeholder="${esc(placeholder)}" value="${esc(value)}" />
       ${hint ? `<span style="color:var(--text-faint);font-size:11.5px;margin-top:4px;display:block">${esc(hint)}</span>` : ""}
     </label>`;
 
@@ -139,7 +139,7 @@
   // ── Status pills ───────────────────────────────────────────────────────────
   const PILL_TONES = {
     pending: "yellow", paid: "blue", fulfilled: "green", failed: "red",
-    cancelled: "gray", refunded: "yellow", "recovery-required": "red",
+    cancelled: "gray", refunded: "yellow", "recovery-required": "red", interrupted: "yellow",
     active: "green", expired: "yellow", revoked: "gray", unknown: "gray",
     expiring: "yellow", healthy: "green", degraded: "yellow", down: "red",
     blocked: "red", unblocked: "green", enabled: "green", disabled: "gray",
@@ -1283,7 +1283,7 @@
         $("#b-progress-bar").style.width = percent + "%";
         $("#b-progress-label").textContent = status.status === "cancel_requested" ? "Cancelling…" : `Sending… (${status.status})`;
         $("#b-progress-nums").textContent = `${num(status.processed)}/${num(status.total)} · ✅ ${num(status.succeeded)} · ❌ ${num(status.failed)}`;
-        if (["completed", "cancelled", "failed"].includes(status.status)) {
+        if (["completed", "cancelled", "failed", "interrupted"].includes(status.status)) {
           clearInterval(broadcastTimer);
           $("#b-progress-label").textContent = `Finished — ${status.status}`;
           loadBroadcastHistory();
@@ -1313,7 +1313,7 @@
           <tr>
             <td>${dateFmt(item.createdAt)}</td>
             <td>${esc(item.audience)}</td>
-            <td>${pill(item.status === "completed" ? "fulfilled" : item.status === "failed" ? "failed" : item.status === "cancelled" ? "cancelled" : "pending")}</td>
+            <td>${pill(item.status === "completed" ? "fulfilled" : item.status === "failed" ? "failed" : item.status === "cancelled" ? "cancelled" : item.status === "interrupted" ? "interrupted" : "pending")}</td>
             <td class="num">${num(item.succeeded)}</td>
             <td class="num">${num(item.failed)}</td>
             <td class="num">${num(item.total)}</td>

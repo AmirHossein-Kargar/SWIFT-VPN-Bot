@@ -47,7 +47,9 @@ const userSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   // New records start with a real activity timestamp. Legacy records without
   // this field remain unknown until the bot observes their next interaction.
-  lastActivityAt: { type: Date, default: Date.now, index: true },
+  // Range queries use idx_user_activity_recent. A second ascending index on the
+  // same field only doubled write cost.
+  lastActivityAt: { type: Date, default: Date.now },
   referralCode: { type: String, default: null, maxlength: 64 },
   referredByTelegramId: { type: String, default: null, maxlength: 32, index: true },
   blockedAt: { type: Date, default: null },

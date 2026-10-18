@@ -125,10 +125,6 @@ export function isRegisteredAdmin(userId) {
   return cache.has(id);
 }
 
-export function isAdditionalAdmin(userId) {
-  return isRegisteredAdmin(userId);
-}
-
 // Inject into the fail-closed authorization path (utils/auth stays import-free).
 setAdditionalAdminProvider(isRegisteredAdmin);
 

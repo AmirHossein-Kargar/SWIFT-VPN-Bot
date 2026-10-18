@@ -43,16 +43,21 @@ function safeErrorFields(error) {
   };
 }
 
+function sweepExpiredBuckets(now) {
+  for (const [bucketIp, bucket] of rateBuckets) {
+    if (now >= bucket.resetAt) rateBuckets.delete(bucketIp);
+  }
+}
+
 function isRateLimited(ip) {
   if (RATE_LIMIT_PER_MIN === 0) return false;
   const now = Date.now();
+  if (rateBuckets.size > 1024) sweepExpiredBuckets(now);
   const key = typeof ip === "string" && ip ? ip : "unknown";
   const existing = rateBuckets.get(key);
   if (!existing || now >= existing.resetAt) {
     if (rateBuckets.size >= MAX_RATE_BUCKETS) {
-      for (const [bucketIp, bucket] of rateBuckets) {
-        if (now >= bucket.resetAt) rateBuckets.delete(bucketIp);
-      }
+      sweepExpiredBuckets(now);
       if (rateBuckets.size >= MAX_RATE_BUCKETS) return true;
     }
     rateBuckets.set(key, { count: 1, resetAt: now + RATE_WINDOW_MS });

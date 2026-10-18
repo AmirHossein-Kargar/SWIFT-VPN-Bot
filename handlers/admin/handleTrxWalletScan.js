@@ -1,7 +1,8 @@
 import trxScanner from "../../services/trxWalletScanner.js";
 import { TRXPrice } from "../../api/TRXPrice.js";
 import { USDPrice } from "../../api/USDPrice.js";
-import CryptoInvoice from "../../models/CryptoInvoice.js";
+import { escapeErrorMessage } from "../../utils/escapeHtml.js";
+import { trxPaymentSummary } from "../../services/admin/collectionStats.js";
 
 const handleTrxWalletScan = async (bot, query, session) => {
   const chatId = query.message.chat.id;
@@ -192,7 +193,7 @@ const handleTrxWalletScan = async (bot, query, session) => {
 
     // ارسال پیام خطا
     await bot.editMessageText(
-      `❌ خطا در اسکن ولت TRX:\n\n<code>${error.message}</code>`,
+      `❌ خطا در اسکن ولت TRX:\n\n<code>${escapeErrorMessage(error)}</code>`,
       {
         chat_id: chatId,
         message_id: messageId,
@@ -222,38 +223,13 @@ const handleTrxWalletScan = async (bot, query, session) => {
 // تابع دریافت آمار از دیتابیس
 async function getDatabaseStats() {
   try {
-    const totalInvoices = await CryptoInvoice.countDocuments({
-      paymentType: "trx",
-    });
-    const paidInvoices = await CryptoInvoice.countDocuments({
-      paymentType: "trx",
-      status: "paid",
-    });
-    const pendingInvoices = await CryptoInvoice.countDocuments({
-      paymentType: "trx",
-      status: "unpaid",
-    });
-    const rejectedInvoices = await CryptoInvoice.countDocuments({
-      paymentType: "trx",
-      status: "rejected",
-    });
-
-    // محاسبه کل مبلغ پرداخت شده
-    const paidInvoicesData = await CryptoInvoice.find({
-      paymentType: "trx",
-      status: "paid",
-    });
-    const totalPaidAmount = paidInvoicesData.reduce(
-      (sum, inv) => sum + (inv.amount || 0),
-      0
-    );
-
+    const summary = await trxPaymentSummary();
     return {
-      totalInvoices,
-      paidInvoices,
-      pendingInvoices,
-      rejectedInvoices,
-      totalPaidAmount,
+      totalInvoices: summary.totalInvoices,
+      paidInvoices: summary.paidInvoices,
+      pendingInvoices: summary.pendingInvoices,
+      rejectedInvoices: summary.rejectedInvoices,
+      totalPaidAmount: summary.totalPaidAmount,
     };
   } catch (error) {
     console.error("❌ Error getting database stats:", error.message);

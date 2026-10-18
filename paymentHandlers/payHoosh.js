@@ -15,7 +15,7 @@
  *     second message from the same user cannot trigger a second invoice.
  *   - Step cleared on any exit path so the user is never stuck.
  */
-import { getSession, setSession } from "../config/sessionStore.js";
+import { setSession } from "../config/sessionStore.js";
 import validateWithCommas from "../utils/validationAmount.js";
 import { createHooshInvoice } from "../services/hooshpay/createHooshInvoice.js";
 

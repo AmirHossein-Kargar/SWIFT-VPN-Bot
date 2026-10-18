@@ -5,14 +5,9 @@ import HooshPayInvoice from "../../models/HooshPayInvoice.js";
 import CryptoInvoice from "../../models/CryptoInvoice.js";
 import bankInvoice from "../../models/invoice.js";
 import formatDate from "../../utils/formatDate.js";
+import escapeHtml from "../../utils/escapeHtml.js";
 
 moment.loadPersian({ usePersianDigits: false, dialect: "persian-modern" });
-
-function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  })[character]);
-}
 
 /** Persian payment-status summary for the profile's recent-orders list. */
 function paymentStatusFa(provider, record) {

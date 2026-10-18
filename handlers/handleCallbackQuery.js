@@ -45,6 +45,9 @@ import { sendTrxWallet } from "../paymentHandlers/handleTrxAmount.js";
 import { payHoosh } from "../paymentHandlers/payHoosh.js";
 import { verifyHooshPayment } from "../services/hooshpay/verifyHooshPayment.js";
 import { confirmBankPayment } from "../services/payments/confirmBankPayment.js";
+import { sumAmount, sumUserBalances } from "../services/admin/collectionStats.js";
+import { estimateCatalogConsumption } from "../services/admin/reportMath.js";
+import { escapeErrorMessage } from "../utils/escapeHtml.js";
 import { isAdmin } from "../utils/auth.js";
 import { handleAdminPanelCallbacks } from "./admin/panel.js";
 
@@ -449,7 +452,7 @@ const handleCallbackQuery = async (bot, query) => {
           throw new Error(statusData.error || "API error");
         }
       } catch (err) {
-        await bot.editMessageText(`❌ خطا در وضعیت سیستم:\n<code>${err.message}</code>`, {
+        await bot.editMessageText(`❌ خطا در وضعیت سیستم:\n<code>${escapeErrorMessage(err)}</code>`, {
           chat_id: chatId,
           message_id: messageId,
           parse_mode: "HTML",
@@ -463,34 +466,19 @@ const handleCallbackQuery = async (bot, query) => {
     case "admin_financial_report": {
       if (!isAdmin(chatId, userId)) { await denyAdmin(bot, query.id); break; }
       try {
-        const paidCrypto = await CryptoInvoice.find({ status: "paid" });
-        const confirmedBank = await invoice.find({ status: { $in: ["paid", "confirmed"] } });
-        const paidHoosh = await HooshPayInvoice.find({ status: "paid", fulfilled: true });
-
-        const cryptoSum = paidCrypto.reduce((s, i) => s + (i.amount || 0), 0);
-        const bankSum = confirmedBank.reduce((s, i) => s + (i.amount || 0), 0);
-        const hooshSum = paidHoosh.reduce((s, i) => s + (i.amount || 0), 0);
+        const [crypto, bank, hoosh, totalBalances, catalog] = await Promise.all([
+          sumAmount(CryptoInvoice, { status: "paid" }),
+          sumAmount(invoice, { status: { $in: ["paid", "confirmed"] } }),
+          sumAmount(HooshPayInvoice, { status: "paid", fulfilled: true }),
+          sumUserBalances(),
+          getActiveProducts(),
+        ]);
+        const cryptoSum = crypto.total;
+        const bankSum = bank.total;
+        const hooshSum = hoosh.total;
         const totalTopups = cryptoSum + bankSum + hooshSum;
-
-        const users = await User.find({});
-        const totalBalances = users.reduce((s, u) => s + (u.balance || 0), 0);
         const recognizedRevenue = Math.max(0, totalTopups - totalBalances);
-
-        // Estimate against the live catalog (DB prices), with static fallback.
-        const allPlans = (await getActiveProducts())
-          .map((p) => ({ price: p.price, gig: p.gig, days: p.days }))
-          .sort((a, b) => b.price - a.price);
-        let remaining = recognizedRevenue;
-        let estGigSold = 0;
-        let estDaysSold = 0;
-        for (const plan of allPlans) {
-          if (plan.price > 0 && remaining >= plan.price) {
-            const cnt = Math.floor(remaining / plan.price);
-            estGigSold += cnt * (plan.gig || 0);
-            estDaysSold += cnt * (plan.days || 0);
-            remaining -= cnt * plan.price;
-          }
-        }
+        const { estGigSold, estDaysSold } = estimateCatalogConsumption(recognizedRevenue, catalog);
         const costPerDay = Number(process.env.COST_PER_DAY || 200);
         const costPerGb = Number(process.env.COST_PER_GB || 300);
         const totalCost = estDaysSold * costPerDay + estGigSold * costPerGb;

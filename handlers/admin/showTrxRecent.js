@@ -1,3 +1,4 @@
+import { escapeErrorMessage } from "../../utils/escapeHtml.js";
 import trxScanner from "../../services/trxWalletScanner.js";
 import { TRXPrice } from "../../api/TRXPrice.js";
 import { USDPrice } from "../../api/USDPrice.js";
@@ -194,7 +195,7 @@ const showTrxRecent = async (bot, query, session) => {
 
     // ارسال پیام خطا
     await bot.editMessageText(
-      `❌ خطا در دریافت تراکنش‌های اخیر TRX:\n\n<code>${error.message}</code>`,
+      `❌ خطا در دریافت تراکنش‌های اخیر TRX:\n\n<code>${escapeErrorMessage(error)}</code>`,
       {
         chat_id: chatId,
         message_id: messageId,

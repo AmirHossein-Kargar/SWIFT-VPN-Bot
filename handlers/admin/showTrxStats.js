@@ -1,6 +1,13 @@
-import CryptoInvoice from "../../models/CryptoInvoice.js";
+import { escapeErrorMessage } from "../../utils/escapeHtml.js";
 import { TRXPrice } from "../../api/TRXPrice.js";
 import { USDPrice } from "../../api/USDPrice.js";
+import {
+  countPayingUsers,
+  recentPaidTrx,
+  sumPaidTrxInRanges,
+  trxPaymentSummary,
+} from "../../services/admin/collectionStats.js";
+import { invoiceAverage, recentLocalMonths } from "../../services/admin/reportMath.js";
 
 const showTrxStats = async (bot, query, session) => {
   const chatId = query.message.chat.id;
@@ -87,9 +94,9 @@ const showTrxStats = async (bot, query, session) => {
         lines.push(
           `${idx + 1}. <code>${
             invoice.invoiceId
-          }</code> - <code>${invoice.cryptoAmount.toFixed(
+          }</code> - <code>${Number(invoice.cryptoAmount || 0).toFixed(
             6
-          )}</code> TRX - <code>${invoice.amount.toLocaleString()}</code> تومان - ${date}`
+          )}</code> TRX - <code>${Number(invoice.amount || 0).toLocaleString()}</code> تومان - ${date}`
         );
       });
       lines.push("");
@@ -135,7 +142,7 @@ const showTrxStats = async (bot, query, session) => {
 
     // ارسال پیام خطا
     await bot.editMessageText(
-      `❌ خطا در دریافت آمار کامل TRX:\n\n<code>${error.message}</code>`,
+      `❌ خطا در دریافت آمار کامل TRX:\n\n<code>${escapeErrorMessage(error)}</code>`,
       {
         chat_id: chatId,
         message_id: messageId,
@@ -165,106 +172,23 @@ const showTrxStats = async (bot, query, session) => {
 // تابع دریافت آمار تفصیلی
 async function getDetailedStats() {
   try {
-    // آمار کلی
-    const totalInvoices = await CryptoInvoice.countDocuments({
-      paymentType: "trx",
-    });
-    const paidInvoices = await CryptoInvoice.countDocuments({
-      paymentType: "trx",
-      status: "paid",
-    });
-    const pendingInvoices = await CryptoInvoice.countDocuments({
-      paymentType: "trx",
-      status: "unpaid",
-    });
-    const rejectedInvoices = await CryptoInvoice.countDocuments({
-      paymentType: "trx",
-      status: "rejected",
-    });
-
-    // محاسبه مبالغ
-    const paidInvoicesData = await CryptoInvoice.find({
-      paymentType: "trx",
-      status: "paid",
-    });
-    const totalPaidAmount = paidInvoicesData.reduce(
-      (sum, inv) => sum + (inv.amount || 0),
-      0
-    );
-    const totalPaidTrx = paidInvoicesData.reduce(
-      (sum, inv) => sum + (inv.cryptoAmount || 0),
-      0
-    );
-
-    // آمار ماهانه (3 ماه اخیر)
-    const threeMonthsAgo = new Date();
-    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-
-    const monthlyStats = [];
-    for (let i = 0; i < 3; i++) {
-      const monthStart = new Date();
-      monthStart.setMonth(monthStart.getMonth() - i);
-      monthStart.setDate(1);
-      monthStart.setHours(0, 0, 0, 0);
-
-      const monthEnd = new Date(monthStart);
-      monthEnd.setMonth(monthEnd.getMonth() + 1);
-      monthEnd.setDate(0);
-      monthEnd.setHours(23, 59, 59, 999);
-
-      const monthInvoices = await CryptoInvoice.find({
-        paymentType: "trx",
-        status: "paid",
-        confirmedAt: { $gte: monthStart, $lte: monthEnd },
-      });
-
-      const monthAmount = monthInvoices.reduce(
-        (sum, inv) => sum + (inv.amount || 0),
-        0
-      );
-      const monthName = monthStart.toLocaleDateString("fa-IR", {
-        month: "long",
-        year: "numeric",
-      });
-
-      monthlyStats.push({
-        month: monthName,
-        count: monthInvoices.length,
-        amount: monthAmount,
-      });
-    }
-
-    // فاکتورهای اخیر
-    const recentInvoices = await CryptoInvoice.find({
-      paymentType: "trx",
-      status: "paid",
-    })
-      .sort({ confirmedAt: -1 })
-      .limit(5);
-
-    // آمار کاربران
-    const User = (await import("../../models/User.js")).default;
-    const activeUsers = await User.countDocuments({
-      successfulPayments: { $gt: 0 },
-    });
-
-    // محاسبات آماری
-    const averageInvoiceAmount =
-      totalPaidInvoices > 0 ? totalPaidAmount / totalPaidInvoices : 0;
-    const successRate =
-      totalInvoices > 0 ? (paidInvoices / totalInvoices) * 100 : 0;
+    const summary = await trxPaymentSummary();
+    const months = recentLocalMonths(3);
+    const [monthlyStats, recentInvoices, activeUsers] = await Promise.all([
+      sumPaidTrxInRanges(months),
+      recentPaidTrx(5),
+      countPayingUsers(),
+    ]);
+    const successRate = summary.totalInvoices > 0
+      ? (summary.paidInvoices / summary.totalInvoices) * 100
+      : 0;
 
     return {
-      totalInvoices,
-      paidInvoices,
-      pendingInvoices,
-      rejectedInvoices,
-      totalPaidAmount,
-      totalPaidTrx,
+      ...summary,
       monthlyStats,
       recentInvoices,
       activeUsers,
-      averageInvoiceAmount,
+      averageInvoiceAmount: invoiceAverage(summary.totalPaidAmount, summary.paidInvoices),
       successRate,
     };
   } catch (error) {
