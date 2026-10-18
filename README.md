@@ -97,6 +97,13 @@ panel, and an admin panel that runs entirely inside a Telegram group.
 **Process layout** — `npm start` boots one process that starts, in order:
 MongoDB → Express → Telegram polling → TRX scanner → HooshPay cron → signal handlers.
 
+**MongoDB is mandatory.** The connection, the ping, the legacy HooshPay `uid`
+index migration and the index creation must all succeed *before* Telegram
+polling starts. A failed startup names the stage that failed — `mongo_config`,
+`mongo_connect`, `mongo_ping`, `index_migration`, `index_init` or
+`redis_connect` — and never prints the connection string, credentials or
+payment data.
+
 ---
 
 ## 3. Local development
@@ -450,6 +457,7 @@ Service → **Settings → Deploy → Healthcheck Path** → `/health`.
 | `❌ Redis Client Error: getaddrinfo ENOTFOUND` | Redis variables not referenced into the app service | Add `REDIS_URL = ${{Redis.REDIS_URL}}` (or the discrete names) and redeploy |
 | `❌ FATAL — these variables are missing or empty` | Required variables absent | The block lists each missing name; add them and redeploy |
 | `❌ ADMINS is missing or contains no valid IDs` | `ADMINS` empty or non-numeric | Use plain numeric Telegram IDs, comma-separated |
+| `Critical startup dependency failed (index_migration)` | A custom `uid` index on `hooshpayinvoices` blocks the automatic replacement of the legacy (unique, non-sparse) `uid_1` index | The log names the conflicting index — it is never dropped automatically. Inspect `db.hooshpayinvoices.getIndexes()` and reconcile it by hand |
 | `409 Conflict` on polling | More than one replica | Set **Replicas = 1** |
 | `⚠️ npm warn config production Use --omit=dev instead` | Railway sets `NPM_CONFIG_PRODUCTION` | Harmless — informational only |
 

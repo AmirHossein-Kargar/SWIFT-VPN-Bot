@@ -8,6 +8,7 @@ import { startNowPaymentsRecoveryCron, stopNowPaymentsRecoveryCron } from "./ser
 import mongoose from "mongoose";
 import { connectRedis, closeRedis } from "./config/redisClient.js";
 import { seedDefaultProducts } from "./services/plans.js";
+import { REDIS_STARTUP_STAGES, withStartupStage } from "./config/startupDiagnostics.js";
 
 // ── Process-level safety net ─────────────────────────────────────────────────
 // Registered inside startBot() so that simply importing this module (in tests,
@@ -50,6 +51,45 @@ function installGlobalErrorHandlers() {
   });
 }
 
+/**
+ * Connect the critical dependencies, in order.
+ *
+ * MongoDB comes first and is mandatory: the database must be reachable, the
+ * legacy index migration must have run, and the unique indexes must exist
+ * before anything else — Telegram polling included — is allowed to start.
+ * Redis is connected afterwards; the product catalog seeding is best effort.
+ *
+ * The dependencies are injectable so the ordering guarantee is covered by a
+ * regression test instead of only by the order of the statements below.
+ */
+export async function bootstrapCriticalDependencies({
+  connect = connectDB,
+  connectRedisClient = connectRedis,
+  seed = seedDefaultProducts,
+  logger = console,
+} = {}) {
+  // Mandatory — a failure here aborts the whole startup.
+  await connect();
+  logger.log("\x1b[32m%s\x1b[0m", "✔ DB Ready");
+
+  // Seed the shared product catalog (never overwrites admin edits).
+  try {
+    const seeded = await seed();
+    if (seeded > 0) {
+      logger.log("\x1b[32m%s\x1b[0m", `✔ Product catalog seeded (${seeded} defaults added)`);
+    }
+  } catch (error) {
+    logger.warn("⚠️  Product catalog seeding skipped:", error?.name || "DatabaseError");
+  }
+
+  try {
+    await connectRedisClient();
+  } catch (error) {
+    throw withStartupStage(error, REDIS_STARTUP_STAGES.CONNECT, "redis");
+  }
+  logger.log("\x1b[32m%s\x1b[0m", "✔ Redis Ready");
+}
+
 export default async function startBot() {
   installGlobalErrorHandlers();
 
@@ -76,28 +116,29 @@ export default async function startBot() {
 
   // The HTTP listener is already available while these bounded dependency
   // checks run; fatal errors are surfaced without printing connection secrets.
+  // MongoDB is mandatory: Telegram polling is only started after it succeeds.
   try {
-    await connectDB();
-    console.log("\x1b[32m%s\x1b[0m", "✔ DB Ready");
-    // Seed the shared product catalog (never overwrites admin edits).
-    try {
-      const seeded = await seedDefaultProducts();
-      if (seeded > 0) console.log("\x1b[32m%s\x1b[0m", `✔ Product catalog seeded (${seeded} defaults added)`);
-    } catch (error) {
-      console.warn("⚠️  Product catalog seeding skipped:", error?.name || "DatabaseError");
-    }
-    await connectRedis();
-    console.log("\x1b[32m%s\x1b[0m", "✔ Redis Ready");
+    await bootstrapCriticalDependencies();
   } catch (error) {
+    const stage = error?.stage || "dependency_connect";
     console.error(JSON.stringify({
       ts: new Date().toISOString(),
       service: "startup",
       level: "fatal",
-      message: "Critical database dependency failed",
-      errorType: error?.name || "StartupError",
+      message: "Critical startup dependency failed",
+      dependency: error?.dependency || "mongodb_or_redis",
+      stage,
+      errorType: error?.errorType || error?.name || "StartupError",
       code: typeof error?.code === "string" || typeof error?.code === "number" ? error.code : undefined,
     }));
-    throw new Error("Critical MongoDB/Redis startup dependency failed; check /ready and Railway networking.");
+    const failure = new Error(`Critical startup dependency failed (${stage}); check /ready and Railway networking.`);
+    failure.stage = stage;
+    failure.dependency = error?.dependency || "mongodb_or_redis";
+    failure.errorType = error?.errorType || error?.name;
+    if (typeof error?.code === "string" || typeof error?.code === "number") {
+      failure.code = error.code;
+    }
+    throw failure;
   }
 
   // Create Telegram bot (polling mode)
