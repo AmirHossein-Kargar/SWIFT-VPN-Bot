@@ -40,7 +40,9 @@ const ALLOWED_TRANSITIONS = {
 };
 
 const hooshPayInvoiceSchema = new mongoose.Schema({
-  uid:        { type: String, required: true, unique: true },
+  // orderId is persisted before the provider call. uid/paymentUrl are filled
+  // after a definite response, allowing timeout outcomes to remain recoverable.
+  uid:        { type: String, unique: true, sparse: true },
   orderId:    { type: String, required: true, unique: true },
   userId:     { type: Number, required: true },
   amount:     { type: Number, required: true },
@@ -58,7 +60,16 @@ const hooshPayInvoiceSchema = new mongoose.Schema({
   cardHolder: { type: String, default: null },
   cardBank:   { type: String, default: null },
 
-  paymentUrl: { type: String, required: true },
+  paymentUrl: { type: String, default: null },
+
+  creationStatus: {
+    type: String,
+    enum: ["creating", "created", "creation_unknown", "creation_failed"],
+    default: "created",
+  },
+  openCreateKey: { type: String },
+  apiAttemptedAt: { type: Date, default: null },
+  creationUnknownAt: { type: Date, default: null },
 
   // Expiry from HooshPay API
   expiresAt: { type: Date, default: null },
@@ -148,6 +159,11 @@ hooshPayInvoiceSchema.pre("save", function (next) {
 // ── Indexes ───────────────────────────────────────────────────────────────────
 // Single-field unique indexes (declared inline above via `unique: true`)
 
+hooshPayInvoiceSchema.index(
+  { openCreateKey: 1 },
+  { unique: true, sparse: true, name: "idx_hooshpay_open_create" }
+);
+
 // Compound index for recovery cron query:
 //   HooshPayInvoice.find({ fulfilled: true, balanceCredited: false, status: "paid" })
 hooshPayInvoiceSchema.index(
@@ -155,7 +171,7 @@ hooshPayInvoiceSchema.index(
   { name: "idx_recovery_cron" }
 );
 
-// Compound index for expiry cron query:
+// Compound index for provider reconciliation of older pending invoices:
 //   HooshPayInvoice.find({ status: "pending", createdAt: { $lt: cutoff } })
 hooshPayInvoiceSchema.index(
   { status: 1, createdAt: 1 },

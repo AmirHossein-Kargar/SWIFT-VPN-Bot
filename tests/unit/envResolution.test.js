@@ -16,6 +16,8 @@ const KEYS = [
   "REDISHOST", "REDISPORT", "REDISUSER", "REDISPASSWORD",
   "BOT_TOKEN", "ADMINS", "GROUP_ID", "WIZARD_API_URL", "VPN_API_KEY",
   "HOOSHPAY_API_KEY", "HOOSHPAY_WEBHOOK_SECRET", "WEBHOOK_BASE_URL",
+  "NOWPAYMENTS_API_KEY", "NOWPAYMENTS_IPN_SECRET", "NOWPAYMENTS_IPN_CALLBACK_URL",
+  "NOWPAYMENTS_API_BASE_URL", "NOWPAYMENTS_PRICE_CURRENCY", "NOWPAYMENTS_PUBLIC_KEY",
   "CARD_NUMBER", "TRX_WALLET", "MONGO_DB_NAME", "REDIS_TLS", "PORT",
   "WEBHOOK_RATE_LIMIT_PER_MIN", "NODE_ENV", "HOOSHPAY_API_BASE_URL",
 ];
@@ -172,7 +174,9 @@ describe("inspectEnv", () => {
     assert.ok(fatalKeys.includes("__REDIS__"));
     assert.ok(fatalKeys.includes("WIZARD_API_URL"));
     assert.ok(fatalKeys.includes("HOOSHPAY_WEBHOOK_SECRET"));
-    assert.ok(fatalCount >= 10);
+    assert.ok(fatalKeys.includes("NOWPAYMENTS_API_KEY"));
+    assert.ok(fatalKeys.includes("NOWPAYMENTS_IPN_SECRET"));
+    assert.ok(fatalCount >= 12);
   });
 
   test("missing admin and payment settings are not treated as optional", () => {
@@ -185,6 +189,8 @@ describe("inspectEnv", () => {
     assert.ok(keys.includes("ADMINS"));
     assert.ok(keys.includes("GROUP_ID"));
     assert.ok(keys.includes("HOOSHPAY_WEBHOOK_SECRET"));
+    assert.ok(keys.includes("NOWPAYMENTS_API_KEY"));
+    assert.ok(keys.includes("NOWPAYMENTS_IPN_SECRET"));
   });
 
   test("a fully configured environment reports nothing missing", () => {
@@ -197,6 +203,8 @@ describe("inspectEnv", () => {
     process.env.VPN_API_KEY = "vpn-test-key";
     process.env.HOOSHPAY_API_KEY = "hoosh-test-key";
     process.env.HOOSHPAY_WEBHOOK_SECRET = "s".repeat(48);
+    process.env.NOWPAYMENTS_API_KEY = "nowpayments-test-api-key";
+    process.env.NOWPAYMENTS_IPN_SECRET = "n".repeat(48);
     process.env.WEBHOOK_BASE_URL = "https://webhook.example.test";
     process.env.CARD_NUMBER = "6219861000000000";
     process.env.TRX_WALLET = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";

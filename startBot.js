@@ -153,7 +153,7 @@ export default async function startBot() {
     );
   }
 
-  // 6. Start HooshPay recovery + expiry cron
+  // 6. Start provider reconciliation/recovery crons
   try {
     startHooshpayRecoveryCron(bot);
     console.log("\x1b[32m%s\x1b[0m", "✔ HooshPay Recovery Cron Started");

@@ -1,4 +1,5 @@
 import HooshPayInvoice from "../../models/HooshPayInvoice.js";
+import NowPaymentsInvoice from "../../models/NowPaymentsInvoice.js";
 import CryptoInvoice from "../../models/CryptoInvoice.js";
 import bankInvoice from "../../models/invoice.js";
 import WalletPurchase from "../../models/WalletPurchase.js";
@@ -10,13 +11,13 @@ import { parsePagination } from "./validation.js";
 const STALE_PROVISIONING_MS = 10 * 60_000;
 
 function recoveryItem(provider, record, kind) {
-  const id = provider === "hooshpay" ? record.uid : provider === "bank" ? record.paymentId : provider === "trx" ? record.invoiceId : record.purchaseId;
+  const id = provider === "hooshpay" ? record.uid : provider === "nowpayments" ? record.orderId : provider === "bank" ? record.paymentId : provider === "trx" ? record.invoiceId : record.purchaseId;
   return {
     key: `${provider}:${id}`,
     provider,
     kind,
     userId: String(record.userId ?? record.telegramId),
-    amount: Number(record.amount || 0),
+    amount: Number(provider === "nowpayments" ? record.amountToman : record.amount || 0),
     createdAt: record.createdAt || null,
     lastEventAt: record.paidAt || record.confirmedAt || record.provisioningStartedAt || record.updatedAt || record.createdAt || null,
     status: String(record.status || "unknown"),
@@ -26,18 +27,27 @@ function recoveryItem(provider, record, kind) {
     lastError: record.lastErrorCode || record.errorCode || record.recoveryReason || null,
     retrySafe: provider === "wallet"
       ? ["provisioning-commit-pending", "delivery-notification-pending"].includes(kind)
-      : kind !== "provisioning-uncertain",
+      : provider === "nowpayments"
+        ? Boolean(record.paymentId) && kind === "paid-not-fulfilled"
+        : kind !== "provisioning-uncertain",
   };
 }
 
 async function collectRecoveryCandidates(now) {
-  const [hoosh, bank, trx, wallet] = await Promise.all([
+  const [hoosh, nowPayments, bank, trx, wallet] = await Promise.all([
     HooshPayInvoice.find({
       $or: [
         { status: "paid", balanceCredited: false },
         { recoveryStatus: "required" },
       ],
     }).select("uid userId amount status balanceCredited paidAt createdAt retryCount lastRetryAt nextRetryAt lastErrorCode recoveryStatus recoveryReason webhookLog").lean().limit(500),
+    NowPaymentsInvoice.find({
+      $or: [
+        { status: "finished", balanceCredited: false },
+        { status: "creation_unknown" },
+        { recoveryStatus: "required" },
+      ],
+    }).select("orderId invoiceId paymentId userId amountToman status balanceCredited paidAt createdAt updatedAt retryCount lastRetryAt nextRetryAt lastErrorCode recoveryStatus recoveryReason").lean().limit(500),
     bankInvoice.find({
       $or: [
         { status: { $in: ["confirmed", "paid"] }, balanceCredited: false },
@@ -68,6 +78,14 @@ async function collectRecoveryCandidates(now) {
       ? (lastWebhook ? "webhook-processing-failed" : "paid-not-fulfilled")
       : "manual-review";
     items.push(recoveryItem("hooshpay", record, kind));
+  }
+  for (const record of nowPayments) {
+    const kind = record.status === "creation_unknown"
+      ? "creation-unknown"
+      : record.status === "finished" && !record.balanceCredited
+        ? "paid-not-fulfilled"
+        : "manual-review";
+    items.push(recoveryItem("nowpayments", record, kind));
   }
   for (const record of bank) items.push(recoveryItem("bank", record, record.balanceCredited === false ? "paid-not-fulfilled" : "manual-review"));
   for (const record of trx) items.push(recoveryItem("trx", record, record.balanceCredited === false ? "paid-not-fulfilled" : "manual-review"));

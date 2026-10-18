@@ -188,16 +188,24 @@ export async function createNowPaymentsTopUp({
       throw new NowPaymentsFlowError("malformed_response");
     }
 
+    const responsePayAmount = Number(body.pay_amount);
+    const payAmount = Number.isFinite(responsePayAmount)
+      && responsePayAmount > 0
+      && String(body.pay_currency || "").toLowerCase() === TRON_PAY_CURRENCY
+      ? responsePayAmount
+      : null;
     await invoiceModel.updateOne({ orderId, status: "creating" }, {
       $set: {
         status: "pending",
         invoiceId,
         invoiceUrl: String(body.invoice_url),
+        payAmount,
+        recoveryStatus: "none",
+        recoveryReason: null,
         updatedAt: now(),
       },
-      $unset: { openCreateKey: 1 },
+      $unset: { openCreateKey: 1, nextRetryAt: 1 },
     });
-    const payAmount = Number(body.pay_amount);
     return {
       orderId,
       invoiceId,
@@ -206,9 +214,7 @@ export async function createNowPaymentsTopUp({
       priceAmountCents,
       priceCurrency: config.priceCurrency,
       payCurrency: TRON_PAY_CURRENCY,
-      payAmount: Number.isFinite(payAmount) && payAmount > 0 && String(body.pay_currency || "").toLowerCase() === TRON_PAY_CURRENCY
-        ? payAmount
-        : null,
+      payAmount,
     };
   } finally {
     localLocks.delete(lockKey);
@@ -217,13 +223,20 @@ export async function createNowPaymentsTopUp({
 
 async function markFailed(model, orderId) {
   await model.updateOne({ orderId, status: "creating" }, {
-    $set: { status: "creation_failed", updatedAt: new Date() },
-    $unset: { openCreateKey: 1 },
+    $set: { status: "creation_failed", recoveryStatus: "none", recoveryReason: null, updatedAt: new Date() },
+    $unset: { openCreateKey: 1, nextRetryAt: 1 },
   });
 }
 
 async function markUnknown(model, orderId, invoiceId) {
-  const update = { status: "creation_unknown", updatedAt: new Date() };
+  const now = new Date();
+  const update = {
+    status: "creation_unknown",
+    recoveryStatus: "required",
+    recoveryReason: "provider_creation_outcome_unknown",
+    nextRetryAt: new Date(now.getTime() + 2 * 60_000),
+    updatedAt: now,
+  };
   if (invoiceId) update.invoiceId = invoiceId;
   await model.updateOne({ orderId, status: "creating" }, { $set: update });
 }

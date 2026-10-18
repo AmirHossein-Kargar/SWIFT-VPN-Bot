@@ -1,6 +1,7 @@
 import User from "../../models/User.js";
 import WalletPurchase from "../../models/WalletPurchase.js";
 import HooshPayInvoice from "../../models/HooshPayInvoice.js";
+import NowPaymentsInvoice from "../../models/NowPaymentsInvoice.js";
 import CryptoInvoice from "../../models/CryptoInvoice.js";
 import bankInvoice from "../../models/invoice.js";
 import AdminProduct from "../../models/AdminProduct.js";
@@ -22,10 +23,14 @@ function utcDayStart(date) {
 async function providerRevenueSeries(from, to, bucketMs, buckets) {
   const boundaries = Array.from({ length: buckets + 1 }, (_, index) => new Date(from.getTime() + index * bucketMs));
   const match = { status: "paid", balanceCredited: true, balanceCreditedAt: { $gte: from, $lt: to } };
-  const [hoosh, crypto, bank] = await Promise.all([
+  const [hoosh, nowPayments, crypto, bank] = await Promise.all([
     HooshPayInvoice.aggregate([
       { $match: match },
       { $group: { _id: { $floor: { $divide: [{ $subtract: ["$balanceCreditedAt", from] }, bucketMs] } }, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+    ]),
+    NowPaymentsInvoice.aggregate([
+      { $match: { status: "finished", balanceCredited: true, balanceCreditedAt: { $gte: from, $lt: to } } },
+      { $group: { _id: { $floor: { $divide: [{ $subtract: ["$balanceCreditedAt", from] }, bucketMs] } }, amount: { $sum: "$amountToman" }, count: { $sum: 1 } } },
     ]),
     CryptoInvoice.aggregate([
       { $match: match },
@@ -38,11 +43,12 @@ async function providerRevenueSeries(from, to, bucketMs, buckets) {
   ]);
   const rows = [
     { provider: "hooshpay", data: hoosh },
+    { provider: "nowpayments", data: nowPayments },
     { provider: "trx", data: crypto },
     { provider: "bank", data: bank },
   ];
   return boundaries.slice(0, -1).map((start, index) => {
-    const bucket = { date: start.toISOString().slice(0, 10), revenue: 0, orders: 0, byProvider: { hooshpay: 0, trx: 0, bank: 0 } };
+    const bucket = { date: start.toISOString().slice(0, 10), revenue: 0, orders: 0, byProvider: { hooshpay: 0, nowpayments: 0, trx: 0, bank: 0 } };
     for (const { provider, data } of rows) {
       for (const row of data) {
         if (Number(row._id) !== index) continue;
@@ -74,6 +80,7 @@ export async function getAnalytics({ actorId, granularity = "monthly", now = new
     WalletPurchase.countDocuments({ status: "completed" }),
     Promise.all([
       HooshPayInvoice.countDocuments({ status: { $in: ["failed", "reversed"] } }),
+      NowPaymentsInvoice.countDocuments({ status: { $in: ["failed", "refunded", "creation_failed"] } }),
       bankInvoice.countDocuments({ status: "rejected" }),
       CryptoInvoice.countDocuments({ status: "rejected" }),
     ]).then((counts) => counts.reduce((sum, count) => sum + count, 0)),

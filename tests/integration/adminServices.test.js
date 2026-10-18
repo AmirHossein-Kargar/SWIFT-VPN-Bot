@@ -16,13 +16,14 @@ const dbAvailable = await connectTestDB();
 const skip = (name, fn) => test(name, { skip: dbAvailable ? false : "MongoDB unavailable" }, fn);
 const ADMIN = "424242";
 
-let User, WalletPurchase, HooshPayInvoice, CryptoInvoice, bankInvoice, AdminProduct;
+let User, WalletPurchase, HooshPayInvoice, NowPaymentsInvoice, CryptoInvoice, bankInvoice, AdminProduct;
 let users, vpns, payments, products, recovery, dashboard, analytics, broadcast, plans, audit;
 
 if (dbAvailable) {
   ({ default: User } = await import("../../models/User.js"));
   ({ default: WalletPurchase } = await import("../../models/WalletPurchase.js"));
   ({ default: HooshPayInvoice } = await import("../../models/HooshPayInvoice.js"));
+  ({ default: NowPaymentsInvoice } = await import("../../models/NowPaymentsInvoice.js"));
   ({ default: CryptoInvoice } = await import("../../models/CryptoInvoice.js"));
   ({ default: bankInvoice } = await import("../../models/invoice.js"));
   ({ default: AdminProduct } = await import("../../models/AdminProduct.js"));
@@ -214,17 +215,18 @@ describe("product catalog", () => {
 });
 
 describe("payments & idempotency", () => {
-  skip("normalized listing across all four providers", async () => {
+  skip("normalized listing across all five providers", async () => {
     const id = Number(tid());
     await User.create({ telegramId: String(id) });
     await HooshPayInvoice.create({ uid: `hp_${id}`, orderId: `HP-${id}`, userId: id, amount: 10_000, paymentUrl: "https://hooshpay.xyz/pay/a", status: "pending" });
+    await NowPaymentsInvoice.create({ orderId: `NP-11111111-1111-4111-8111-${String(id).padStart(12, "0")}`, userId: id, amountToman: 15_000, priceAmountCents: 30, priceCurrency: "usd", payCurrency: "trx", tomanPerFiat: 50_000, rateSource: "test", status: "pending" });
     await bankInvoice.create({ paymentId: `bank_${id}`, userId: id, amount: 20_000, paymentType: "bank", status: "waiting_for_approval" });
     await CryptoInvoice.create({ invoiceId: `trx_${id}`, userId: id, amount: 30_000, usdAmount: 1, cryptoAmount: 100, currency: "TRX", status: "unpaid" });
     await WalletPurchase.create({ purchaseId: `wp_${id}`, telegramId: String(id), planId: "p", gig: 10, days: 30, amount: 40_000, status: "reserving" });
 
     const all = await payments.listPayments({ actorId: ADMIN, query: { status: "all", search: String(id) } });
-    assert.equal(all.total, 4);
-    assert.equal(new Set(all.items.map((item) => item.provider)).size, 4);
+    assert.equal(all.total, 5);
+    assert.equal(new Set(all.items.map((item) => item.provider)).size, 5);
     assert.ok(all.items.every((item) => item.status === "pending"));
 
     const recoveryList = await payments.listPayments({ actorId: ADMIN, query: { status: "recovery-required" } });

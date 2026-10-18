@@ -7,9 +7,14 @@ import { verifyInvoice as apiVerify } from "./hooshpayClient.js";
 import { recoverWalletPurchases } from "../buyService/purchaseLedger.js";
 import { recoverTestServiceAttempts } from "../createTestService.js";
 import { recordJobRun } from "../admin/monitoring.js";
+import {
+  HOOSH_TERMINAL_NONPAYABLE,
+  hooshProviderData,
+  normalizeHooshStatus,
+  validateHooshPaidDetails,
+} from "./paymentValidation.js";
 
 const INTERVAL_MS = 5 * 60_000;
-const EXPIRY_GRACE_MINUTES = 35;
 const RECONCILE_MINUTES = 10;
 const BATCH_SIZE = 50;
 const CRON_JOB_NAME = "hooshpay-recovery";
@@ -29,13 +34,13 @@ export function startHooshpayRecoveryCron(bot) {
   void runCycle(bot);
   cronTimer = setInterval(() => { void runCycle(bot); }, INTERVAL_MS);
   cronTimer.unref?.();
-  log("info", "Recovery and expiry cron started", { pid: process.pid });
+  log("info", "Recovery and provider-reconciliation cron started", { pid: process.pid });
 }
 
 export function stopHooshpayRecoveryCron() {
   if (cronTimer) clearInterval(cronTimer);
   cronTimer = null;
-  log("info", "Recovery and expiry cron stopped", { pid: process.pid });
+  log("info", "Recovery and provider-reconciliation cron stopped", { pid: process.pid });
 }
 
 async function runCycle(bot) {
@@ -63,7 +68,6 @@ async function runCycle(bot) {
     if (leaseState.healthy) await recoverWalletPurchases(bot);
     if (leaseState.healthy) await recoverTestServiceAttempts(bot);
     if (leaseState.healthy) await reconcilePendingInvoices(bot, cycleId, leaseState);
-    if (leaseState.healthy) await expireStaleInvoices(cycleId);
     log("info", "Recovery cycle complete", { cycleId, leaseHealthy: leaseState.healthy });
     recordJobRun("hooshpay-recovery-cron", { ok: true, meta: { cycleId } });
   } catch (error) {
@@ -111,14 +115,6 @@ async function recoverStuckInvoices(bot, cycleId, leaseState) {
   }
 }
 
-function verifyAmountMatches(invoice, result) {
-  const data = result?.data && typeof result.data === "object" ? result.data : result;
-  if (data?.uid != null && String(data.uid) !== String(invoice.uid)) return false;
-  if (data?.amount != null && (!Number.isSafeInteger(Number(data.amount)) || Number(data.amount) !== Number(invoice.amount))) return false;
-  if (data?.merchant_credit != null && invoice.merchantCredit != null && Number(data.merchant_credit) !== Number(invoice.merchantCredit)) return false;
-  return true;
-}
-
 async function reconcilePendingInvoices(bot, cycleId, leaseState) {
   const cutoff = new Date(Date.now() - RECONCILE_MINUTES * 60_000);
   const pending = await HooshPayInvoice.find({
@@ -133,14 +129,21 @@ async function reconcilePendingInvoices(bot, cycleId, leaseState) {
     if (!leaseState.healthy) break;
     try {
       const result = await apiVerify(invoice.uid);
-      const status = String(result.status ?? result.data?.status ?? "").toLowerCase();
-      const paid = result.paid === true || status === "paid";
+      const data = hooshProviderData(result);
+      const status = normalizeHooshStatus(data.status);
+      const paidFlag = result?.paid ?? data.paid;
+      const paid = status === "paid" && paidFlag !== false;
       if (paid) {
-        if (!verifyAmountMatches(invoice, result)) {
-          log("error", "HooshPay verification did not match local invoice", { cycleId, uid: invoice.uid });
+        const mismatch = validateHooshPaidDetails(invoice, data, {
+          requireUid: true,
+          requireOrderId: true,
+          requireCurrency: true,
+        });
+        if (mismatch) {
+          log("error", "HooshPay verification did not match local invoice", { cycleId, uid: invoice.uid, reason: mismatch });
           continue;
         }
-        const trackingCode = result.data?.tracking_code ?? result.tracking_code;
+        const trackingCode = data.tracking_code;
         if (typeof trackingCode === "string" && trackingCode.length <= 128) {
           await HooshPayInvoice.findOneAndUpdate(
             { _id: invoice._id, status: "pending", fulfilled: false },
@@ -152,13 +155,34 @@ async function reconcilePendingInvoices(bot, cycleId, leaseState) {
           bot,
           chatId: invoice.userId,
           correlationId: randomUUID(),
-          paidAt: result.data?.paid_at ?? result.paid_at,
+          paidAt: data.paid_at,
         });
-      } else if (["expired", "cancelled", "failed"].includes(status)) {
-        await HooshPayInvoice.findOneAndUpdate(
-          { _id: invoice._id, status: "pending", fulfilled: false },
-          { $set: { status } }
+      } else if (HOOSH_TERMINAL_NONPAYABLE.includes(status)) {
+        const closed = await HooshPayInvoice.findOneAndUpdate(
+          { _id: invoice._id, status: "pending", fulfilled: false, balanceCredited: false },
+          { $set: { status } },
+          { new: true },
         );
+        if (!closed) {
+          await HooshPayInvoice.findOneAndUpdate(
+            { _id: invoice._id, status: "paid" },
+            { $set: { recoveryStatus: "required", recoveryReason: `provider_${status}_after_payment_claim` } },
+          );
+        }
+      } else if (status === "reversed") {
+        const reversed = await HooshPayInvoice.findOneAndUpdate(
+          { _id: invoice._id, status: "pending", fulfilled: false, balanceCredited: false },
+          { $set: { status: "reversed", reversedAt: new Date() } },
+          { new: true },
+        );
+        if (!reversed) {
+          await HooshPayInvoice.findOneAndUpdate(
+            { _id: invoice._id, status: "paid" },
+            { $set: { status: "reversed", reversedAt: new Date(), recoveryStatus: "required", recoveryReason: "provider_reversal_after_payment_claim" } },
+          );
+        }
+      } else if (paidFlag === true) {
+        log("error", "HooshPay verification returned conflicting status fields", { cycleId, uid: invoice.uid, status });
       }
     } catch (error) {
       log("warn", "Pending invoice verification failed", {
@@ -167,21 +191,4 @@ async function reconcilePendingInvoices(bot, cycleId, leaseState) {
       });
     }
   }
-}
-
-async function expireStaleInvoices(cycleId) {
-  const now = new Date();
-  const createdCutoff = new Date(now.getTime() - EXPIRY_GRACE_MINUTES * 60_000);
-  const result = await HooshPayInvoice.updateMany(
-    {
-      status: "pending",
-      fulfilled: false,
-      $or: [
-        { expiresAt: { $lte: now } },
-        { expiresAt: null, createdAt: { $lt: createdCutoff } },
-      ],
-    },
-    { $set: { status: "expired" } }
-  );
-  if (result.modifiedCount) log("info", "Expired stale HooshPay invoices", { cycleId, count: result.modifiedCount });
 }

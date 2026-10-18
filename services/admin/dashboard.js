@@ -1,6 +1,7 @@
 import User from "../../models/User.js";
 import WalletPurchase from "../../models/WalletPurchase.js";
 import HooshPayInvoice from "../../models/HooshPayInvoice.js";
+import NowPaymentsInvoice from "../../models/NowPaymentsInvoice.js";
 import CryptoInvoice from "../../models/CryptoInvoice.js";
 import bankInvoice from "../../models/invoice.js";
 import { StatusApi } from "../../api/wizardApi.js";
@@ -24,10 +25,10 @@ function utcMonthStart(date) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
 }
 
-async function sumModel(Model, match) {
+async function sumModel(Model, match, amountField = "amount") {
   const [result] = await Model.aggregate([
     { $match: match },
-    { $group: { _id: null, amount: { $sum: { $ifNull: ["$amount", 0] } }, count: { $sum: 1 } } },
+    { $group: { _id: null, amount: { $sum: { $ifNull: [`$${amountField}`, 0] } }, count: { $sum: 1 } } },
   ]).allowDiskUse(true);
   return { amount: Number(result?.amount || 0), count: Number(result?.count || 0) };
 }
@@ -41,8 +42,13 @@ function paidMatch(from, to, timeField = "createdAt") {
 }
 
 async function revenueForPeriod(from, to) {
-  const [hoosh, crypto, bank] = await Promise.all([
+  const [hoosh, nowPayments, crypto, bank] = await Promise.all([
     sumModel(HooshPayInvoice, paidMatch(from, to, "balanceCreditedAt")),
+    sumModel(NowPaymentsInvoice, {
+      status: "finished",
+      balanceCredited: true,
+      balanceCreditedAt: { $gte: from, $lt: to },
+    }, "amountToman"),
     sumModel(CryptoInvoice, paidMatch(from, to, "balanceCreditedAt")),
     sumModel(bankInvoice, {
       status: { $in: ["confirmed", "paid"] },
@@ -51,9 +57,9 @@ async function revenueForPeriod(from, to) {
     }),
   ]);
   return {
-    amount: hoosh.amount + crypto.amount + bank.amount,
-    count: hoosh.count + crypto.count + bank.count,
-    byProvider: { hooshpay: hoosh.amount, trx: crypto.amount, bank: bank.amount },
+    amount: hoosh.amount + nowPayments.amount + crypto.amount + bank.amount,
+    count: hoosh.count + nowPayments.count + crypto.count + bank.count,
+    byProvider: { hooshpay: hoosh.amount, nowpayments: nowPayments.amount, trx: crypto.amount, bank: bank.amount },
   };
 }
 
@@ -145,8 +151,9 @@ async function dashboardCharts(now) {
   const dayCount = 30;
   const from = new Date(utcDayStart(now).getTime() - (dayCount - 1) * DAY_MS);
   const dayMatch = { $gte: from, $lt: new Date(utcDayStart(now).getTime() + DAY_MS) };
-  const [hooshRevenue, cryptoRevenue, bankRevenue, orders, newUsers, vpnOrders, popularPackages] = await Promise.all([
+  const [hooshRevenue, nowPaymentsRevenue, cryptoRevenue, bankRevenue, orders, newUsers, vpnOrders, popularPackages] = await Promise.all([
     timeSeries(HooshPayInvoice, { status: "paid", balanceCredited: true, balanceCreditedAt: dayMatch }, "balanceCreditedAt", "amount", "revenue"),
+    timeSeries(NowPaymentsInvoice, { status: "finished", balanceCredited: true, balanceCreditedAt: dayMatch }, "balanceCreditedAt", "amountToman", "revenue"),
     timeSeries(CryptoInvoice, { status: "paid", balanceCredited: true, balanceCreditedAt: dayMatch }, "balanceCreditedAt", "amount", "revenue"),
     timeSeries(bankInvoice, { status: { $in: ["confirmed", "paid"] }, balanceCredited: true, balanceCreditedAt: dayMatch }, "balanceCreditedAt", "amount", "revenue"),
     timeSeries(WalletPurchase, { createdAt: dayMatch }, "createdAt", null, "orders"),
@@ -156,7 +163,7 @@ async function dashboardCharts(now) {
   ]);
   const days = fillDays(from, dayCount);
   const revenueGroups = new Map();
-  for (const group of [...hooshRevenue, ...cryptoRevenue, ...bankRevenue]) {
+  for (const group of [...hooshRevenue, ...nowPaymentsRevenue, ...cryptoRevenue, ...bankRevenue]) {
     revenueGroups.set(group._id, (revenueGroups.get(group._id) || 0) + Number(group.revenue || 0));
   }
   return {
@@ -186,10 +193,12 @@ export async function getDashboardMetrics({ now = new Date() } = {}) {
     ordersWeek,
     ordersMonth,
     pendingHoosh,
+    pendingNowPayments,
     pendingBank,
     pendingCrypto,
     pendingOrders,
     failedHoosh,
+    failedNowPayments,
     failedBank,
     failedCrypto,
     failedProvisioning,
@@ -209,10 +218,12 @@ export async function getDashboardMetrics({ now = new Date() } = {}) {
     WalletPurchase.countDocuments({ createdAt: { $gte: startWeek } }),
     WalletPurchase.countDocuments({ createdAt: { $gte: startMonth } }),
     HooshPayInvoice.countDocuments({ status: "pending" }),
+    NowPaymentsInvoice.countDocuments({ status: { $in: ["creating", "creation_unknown", "pending", "waiting", "confirming", "confirmed", "sending", "partially_paid"] } }),
     bankInvoice.countDocuments({ status: "waiting_for_approval", paymentType: "bank" }),
     CryptoInvoice.countDocuments({ status: "unpaid" }),
     WalletPurchase.countDocuments({ status: { $in: PENDING_ORDER_STATES } }),
     HooshPayInvoice.countDocuments({ status: { $in: ["failed", "reversed"] } }),
+    NowPaymentsInvoice.countDocuments({ status: { $in: ["failed", "refunded", "creation_failed"] } }),
     bankInvoice.countDocuments({ status: "rejected" }),
     CryptoInvoice.countDocuments({ status: "rejected" }),
     WalletPurchase.countDocuments({ status: { $in: FAILED_PROVISION_STATES } }),
@@ -224,8 +235,8 @@ export async function getDashboardMetrics({ now = new Date() } = {}) {
 
   const activeVpnCount = Number(panelStatus?.result?.count_active_services);
   const totalPanelVpns = Number(panelStatus?.result?.count_services);
-  const failedPayments = failedHoosh + failedBank + failedCrypto;
-  const pendingPayments = pendingHoosh + pendingBank + pendingCrypto;
+  const failedPayments = failedHoosh + failedNowPayments + failedBank + failedCrypto;
+  const pendingPayments = pendingHoosh + pendingNowPayments + pendingBank + pendingCrypto;
   const failedPaymentDenominator = failedPayments + pendingPayments + revenueMonth.count;
 
   return {

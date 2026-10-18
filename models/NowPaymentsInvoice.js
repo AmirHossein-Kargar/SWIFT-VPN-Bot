@@ -53,8 +53,18 @@ const nowPaymentsInvoiceSchema = new mongoose.Schema({
   creditLedgerVersion: { type: Number, default: 2 },
   paidAt: { type: Date, default: null },
   lastIpnAt: { type: Date, default: null },
-  recoveryStatus: { type: String, enum: ["none", "required", "resolved"], default: "none" },
-  recoveryReason: { type: String, default: null, maxlength: 240 },
+  recoveryStatus: { type: String, enum: ["none", "required", "resolved"], default: "none", index: true },
+  recoveryReason: { type: String, default: null, maxlength: 500 },
+  recoveryResolvedAt: { type: Date, default: null },
+  recoveryResolvedBy: { type: String, default: null },
+  retryCount: { type: Number, default: 0, min: 0 },
+  lastRetryAt: { type: Date, default: null },
+  lastRetryOperationId: { type: String, default: null, maxlength: 80 },
+  nextRetryAt: { type: Date, default: null },
+  lastErrorCode: { type: String, default: null, maxlength: 80 },
+  notificationPending: { type: Boolean, default: false },
+  notificationClaimedAt: { type: Date, default: null },
+  notifiedAt: { type: Date, default: null },
   ipnLog: { type: [ipnLogSchema], default: [] },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
@@ -69,8 +79,16 @@ nowPaymentsInvoiceSchema.index(
   { unique: true, sparse: true, name: "idx_nowpayments_payment" },
 );
 nowPaymentsInvoiceSchema.index(
+  { invoiceId: 1 },
+  { unique: true, sparse: true, name: "idx_nowpayments_invoice" },
+);
+nowPaymentsInvoiceSchema.index(
   { status: 1, balanceCredited: 1, createdAt: 1 },
   { name: "idx_nowpayments_recovery" },
+);
+nowPaymentsInvoiceSchema.index(
+  { userId: 1, createdAt: -1 },
+  { name: "idx_nowpayments_user_recent" },
 );
 
 const NowPaymentsInvoice = mongoose.models.NowPaymentsInvoice

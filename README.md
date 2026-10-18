@@ -157,6 +157,8 @@ authoritative list — every variable below is read somewhere in the codebase.
 | `VPN_API_KEY` | VPN panel bearer token | |
 | `HOOSHPAY_API_KEY` | HooshPay API key | |
 | `HOOSHPAY_WEBHOOK_SECRET` | HMAC-SHA256 secret for webhook signatures | **Mandatory.** If unset, every webhook is rejected. Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+| `NOWPAYMENTS_API_KEY` | NOWPayments API key for hosted TRON invoices | Sent only as `x-api-key`; do not use the public key. |
+| `NOWPAYMENTS_IPN_SECRET` | HMAC-SHA512 IPN secret | Must match the NOWPayments dashboard; if unset, every IPN is rejected. |
 | `WEBHOOK_BASE_URL` | Public HTTPS base URL of this server, **no trailing slash** | `https://your-app.up.railway.app` |
 | `TRX_WALLET` | Tron address receiving TRX (starts with `T`, 34 chars) | |
 
@@ -168,9 +170,7 @@ authoritative list — every variable below is read somewhere in the codebase.
 | `REDIS_PASSWORD` | *(empty)* | Redis password. Also accepts `REDISPASSWORD`. |
 | `MONGO_DB_NAME` | `swiftvpn` | Database name used when the Mongo URI does not specify one |
 | `CMC_API_KEY` | fallback `0.08` | CoinMarketCap key for the legacy direct-TRX quote. Customer TRON top-up does not use it. |
-| `NOWPAYMENTS_API_KEY` | *(unset)* | API key for NOWPayments TRON invoices. Sent only as `x-api-key`. |
-| `NOWPAYMENTS_IPN_SECRET` | *(unset)* | HMAC-SHA512 secret for `POST /api/nowpayments/ipn`. If unset, every IPN is rejected. |
-| `NOWPAYMENTS_IPN_CALLBACK_URL` | derived from `WEBHOOK_BASE_URL` | Public HTTPS IPN URL. Set the same URL in the NOWPayments dashboard. |
+| `NOWPAYMENTS_IPN_CALLBACK_URL` | derived from `WEBHOOK_BASE_URL` | Public HTTPS IPN URL. If explicitly set, register the identical URL in the NOWPayments dashboard. |
 | `GHEYMAT_API_TOKEN` | *(unset)* | Optional paid-plan token for `GET /api/prices`. Sent only as `x-api-token`. Free use needs no token. |
 | `NOWPAYMENTS_PRICE_CURRENCY` | `usd` | Fiat currency sent to NOWPayments. Keep `usd`; the live quote is USDT/IRT and does not price `eur`. |
 | `PORT` | `3000` | Express port. Railway injects this — do not hardcode it there. |
@@ -185,9 +185,9 @@ authoritative list — every variable below is read somewhere in the codebase.
 | `WIZARD_STATUS_TTL_SECONDS` | `90` | Live WizardXray status cache TTL for «سرویس‌های من» and admin views; `0` forces a fresh panel lookup. |
 | `CARD_NUMBER` | *(empty)* | **Legacy.** Direct card-to-card was removed from the purchase flow; the value is only validated if still set. No longer required. |
 
-> **Removed:** `NOW_PAYMENTS_API_KEY` and the whole NowPayments/TON flow were
-> deleted — they were unreachable at runtime (the session step that triggered
-> them was never set anywhere).
+> **Legacy name removed:** `NOW_PAYMENTS_API_KEY` (with an extra underscore) and
+> the old TON flow are not used. The active hosted TRON flow requires the exact
+> `NOWPAYMENTS_API_KEY` and `NOWPAYMENTS_IPN_SECRET` names shown above.
 
 ---
 
