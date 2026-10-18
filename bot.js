@@ -70,7 +70,9 @@ try {
     service: "startup",
     level: "fatal",
     message: "Application startup failed",
-    errorType: error?.name || "StartupError",
+    dependency: error?.dependency,
+    stage: error?.stage,
+    errorType: error?.errorType || error?.name || "StartupError",
     code: typeof error?.code === "string" || typeof error?.code === "number" ? error.code : undefined,
   }));
   process.exit(1);

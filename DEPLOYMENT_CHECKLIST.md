@@ -330,11 +330,33 @@ db.hooshpayinvoices.getIndexes()
 ```
 
 Expected indexes:
-- `{ uid: 1 }` — unique
+- `{ uid: 1 }` — unique **and sparse** (several invoices may have no `uid`)
 - `{ orderId: 1 }` — unique
 - `{ fulfilled: 1, balanceCredited: 1, status: 1 }` — recovery cron
 - `{ status: 1, createdAt: 1 }` — expiry cron
 - `{ userId: 1, createdAt: -1 }` — user lookup
+
+### Legacy `uid` index — automatic one-time migration
+
+Earlier releases created `{ uid: 1 }` as **unique but not sparse**. MongoDB never
+redefines an existing index, so that leftover index made index creation fail on
+every startup (`IndexOptionsConflict`, code 85) and the bot stopped before
+Telegram polling could begin.
+
+On startup the app now replaces **exactly** that legacy definition
+(`hooshpayinvoices.uid_1` — key `{ uid: 1 }`, `unique: true`, not sparse) with
+the required unique + sparse index. The replacement can only *relax* the
+constraint, so no invoice data is affected, and it is idempotent: a database
+that already carries the correct index is left untouched.
+
+Any other `uid` index (custom name, custom options, non-unique) is **never
+dropped**. The startup then fails closed with the stage `index_migration` and
+names the conflicting index, so it can be reconciled by hand:
+
+```js
+// Inspect the current indexes, then decide what to do with the custom one.
+db.hooshpayinvoices.getIndexes()
+```
 
 ---
 
@@ -373,6 +395,8 @@ grep '"message":"Crash recovery' logs/out.log
 
 | Pattern | Severity | Action |
 |---|---|---|
+| `"Critical startup dependency failed"` | 🔴 Critical | MongoDB/Redis is not ready — read the `stage` field: `mongo_config`, `mongo_connect`, `mongo_ping`, `index_migration`, `index_init`, `redis_connect` |
+| `"stage":"index_migration"` | 🔴 Critical | A custom `uid` index blocked the automatic legacy-index migration — the log names the index; reconcile it manually |
 | `"DB error crediting balance"` | 🔴 Critical | Check MongoDB, run `node scripts/preflight.js` |
 | `"Balance credit FAILED"` | 🔴 Critical | Admin notified via Telegram, but also check logs |
 | `"REVERSAL received"` | 🟠 High | Admin notified via Telegram automatically |
