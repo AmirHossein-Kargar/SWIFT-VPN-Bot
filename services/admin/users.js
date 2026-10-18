@@ -9,7 +9,25 @@ import { escapeRegex, parsePagination, requireReason, requireTelegramId, parsePo
 import sharedRedisClient from "../../config/redisClient.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const ACTIVITY_TOUCH_MS = 15 * 60_000;
+const LOCAL_TOUCH_CAP = 20_000;
 const ALLOWED_SORTS = new Set(["registered", "spending", "activity"]);
+const localActivityTouch = new Map();
+
+function recentlyTouchedLocally(id, now) {
+  const last = localActivityTouch.get(id);
+  if (last && now.getTime() - last < ACTIVITY_TOUCH_MS) return true;
+  localActivityTouch.set(id, now.getTime());
+  if (localActivityTouch.size <= LOCAL_TOUCH_CAP) return false;
+  const cutoff = now.getTime() - ACTIVITY_TOUCH_MS;
+  for (const [key, touchedAt] of localActivityTouch) {
+    if (touchedAt < cutoff) localActivityTouch.delete(key);
+  }
+  while (localActivityTouch.size > LOCAL_TOUCH_CAP) {
+    localActivityTouch.delete(localActivityTouch.keys().next().value);
+  }
+  return false;
+}
 
 export function buildUserSearchQuery({ search = "", activity = "all", paying = "all", blocked = "all", now = new Date() } = {}) {
   const query = {};
@@ -305,12 +323,18 @@ export async function touchUserActivity(telegramId, { redis = sharedRedisClient,
   const id = String(telegramId ?? "");
   if (!/^[1-9]\d{0,19}$/.test(id)) return false;
   const key = `admin:activity-touch:${id}`;
+  let redisAccepted = false;
   if (redis?.isReady && typeof redis.set === "function") {
     try {
       const touched = await redis.set(key, "1", { NX: true, EX: 900 });
       if (touched !== "OK") return false;
+      redisAccepted = true;
     } catch { /* activity is non-critical if Redis is unavailable */ }
   }
+  // Without Redis, every inbound message would otherwise hit MongoDB. The
+  // update predicate already ignores writes newer than 15 minutes; this only
+  // avoids the round trip. A live Redis lease remains the cross-process guard.
+  if (!redisAccepted && recentlyTouchedLocally(id, now)) return false;
   await User.updateOne(
     { telegramId: id, $or: [{ lastActivityAt: null }, { lastActivityAt: { $lt: new Date(now.getTime() - 15 * 60_000) } }] },
     { $set: { lastActivityAt: now } }

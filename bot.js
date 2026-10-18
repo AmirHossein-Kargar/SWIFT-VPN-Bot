@@ -19,7 +19,7 @@ import showPaymentMethods from "./handlers/message/showPaymentMethods.js";
 import supportMessageHandler from "./handlers/supportMessageHandler.js";
 
 // * 📦 Utilities & Config
-import { getSession, setSession } from "./config/sessionStore.js";
+import { getSession } from "./config/sessionStore.js";
 import hideKeyboard from "./utils/hideKeyboard.js";
 import { WELCOME_MESSAGE } from "./messages/staticMessages.js";
 import { getUnsupportedMediaMessage, getSupportDirectButton } from "./messages/supportContact.js";
@@ -51,7 +51,6 @@ async function showUnsupportedMediaNotice(bot, chatId, session) {
 import User from "./models/User.js";
 
 // * 📦 API
-import { StatusApi } from "./api/wizardApi.js";
 import showStatusApi from "./handlers/admin/showStatusApi.js";
 import { handleAdminPanelCommand } from "./handlers/admin/panel.js";
 import { isAdminUser } from "./utils/auth.js";
@@ -217,20 +216,25 @@ bot.on("callback_query", async (query) => {
 bot.on("photo", async (msg) => {
   try {
     const userId = msg.from?.id;
-    const session = await getSession(userId);
+    const chatId = msg.chat?.id;
+    // Support sessions are keyed by user id. Payment sessions are keyed by
+    // chat id. Those are the same in private chats; in a group they are not.
+    const userSession = userId == null ? {} : await getSession(userId);
+    const chatSession = chatId != null && String(chatId) !== String(userId)
+      ? await getSession(chatId)
+      : userSession;
 
-    // Check if user is in support mode
-    if (session?.support) {
+    if (userSession?.support) {
       await supportMessageHandler(bot, msg);
       return;
     }
 
-    // Handle receipt uploads
-    if (session?.step === "waiting_for_receipt_image") {
+    const receiptSession = chatSession?.step === "waiting_for_receipt_image" ? chatSession : userSession;
+    if (receiptSession?.step === "waiting_for_receipt_image") {
       const handleBankRecipt = (
         await import("./paymentHandlers/handleBankRecipt.js")
       ).default;
-      await handleBankRecipt(bot, msg, session);
+      await handleBankRecipt(bot, msg, receiptSession);
     }
   } catch (err) {
     console.error("❌ Error in bot.on('photo'):", err.message);
@@ -251,74 +255,25 @@ bot.on("video", async (msg) => {
   }
 });
 
-// * 🔊 Voice Handler (unsupported media types for support)
-bot.on("voice", async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  const session = await getSession(userId);
-
-  if (session?.support) {
+function registerUnsupportedMedia(event, label) {
+  bot.on(event, async (msg) => {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const session = await getSession(userId);
+    if (!session?.support) return;
     try {
-      // Delete the unsupported message
       try {
         await bot.deleteMessage(chatId, msg.message_id);
       } catch (deleteError) {
-        console.log("❗️خطا در حذف پیام voice:", deleteError.message);
-        // Continue even if message deletion fails
+        console.log(`❗️خطا در حذف پیام ${label}:`, deleteError.message);
       }
-
-      // Edit the previous support message to show error
       await showUnsupportedMediaNotice(bot, chatId, session);
     } catch (error) {
-      console.error("❌ Error deleting unsupported voice message:", error);
+      console.error(`❌ Error deleting unsupported ${label} message:`, error);
     }
-  }
-});
+  });
+}
 
-// * 🎥 Video Note Handler (unsupported media types for support)
-bot.on("video_note", async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  const session = await getSession(userId);
-
-  if (session?.support) {
-    try {
-      // Delete the unsupported message
-      try {
-        await bot.deleteMessage(chatId, msg.message_id);
-      } catch (deleteError) {
-        console.log("❗️خطا در حذف پیام video_note:", deleteError.message);
-        // Continue even if message deletion fails
-      }
-
-      // Edit the previous support message to show error
-      await showUnsupportedMediaNotice(bot, chatId, session);
-    } catch (error) {
-      console.error("❌ Error deleting unsupported video_note message:", error);
-    }
-  }
-});
-
-// * 📄 Document Handler (unsupported media types for support)
-bot.on("document", async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  const session = await getSession(userId);
-
-  if (session?.support) {
-    try {
-      // Delete the unsupported message
-      try {
-        await bot.deleteMessage(chatId, msg.message_id);
-      } catch (deleteError) {
-        console.log("❗️خطا در حذف پیام document:", deleteError.message);
-        // Continue even if message deletion fails
-      }
-
-      // Edit the previous support message to show error
-      await showUnsupportedMediaNotice(bot, chatId, session);
-    } catch (error) {
-      console.error("❌ Error deleting unsupported document message:", error);
-    }
-  }
-});
+registerUnsupportedMedia("voice", "voice");
+registerUnsupportedMedia("video_note", "video_note");
+registerUnsupportedMedia("document", "document");

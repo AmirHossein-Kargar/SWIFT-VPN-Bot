@@ -138,13 +138,21 @@ export async function createBroadcast({ actorId, operationId, message, audience,
 
       await AdminBroadcast.updateOne({ _id: broadcast._id }, { $set: { status: "running", startedAt: new Date() } });
       broadcast.status = "running";
+      const state = { cancelRequested: false, leaseLost: false };
+      // The lock TTL is 5 minutes, but a large audience takes longer. Renew it
+      // so a second broadcast cannot start while this one is still sending.
+      const stopHeartbeat = startRedisLeaseHeartbeat(lease, {
+        ttlSeconds: 300,
+        intervalMs: 60_000,
+        onLost: async () => { state.leaseLost = true; },
+      });
+      runningBroadcasts.set(operationId, state);
       const runner = runBroadcast(broadcast, { actorId, operationId }).finally(() => {
+        stopHeartbeat();
         runningBroadcasts.delete(operationId);
         releaseRedisLease(lease).catch(() => {});
       });
-      runningBroadcasts.set(operationId, { cancelRequested: false, runner });
-      // Delivery runs in the background so the request returns immediately with
-      // progress available through the status endpoints.
+      state.runner = runner;
       void runner;
       return { broadcast, started: true, auditSummary: { audience, total: broadcast.total, started: true } };
     },
@@ -172,13 +180,19 @@ async function runBroadcast(broadcast, { actorId, operationId }) {
   let failed = Number(broadcast.failed || 0);
   let lastId = broadcast.lastProcessedId || null;
   let cancelled = false;
+  let leaseLost = false;
   let lastError = null;
 
   try {
-    while (!cancelled) {
+    while (!cancelled && !leaseLost) {
       const state = runningBroadcasts.get(operationId);
       if (state?.cancelRequested) {
         cancelled = true;
+        break;
+      }
+      if (state?.leaseLost) {
+        leaseLost = true;
+        lastError = "broadcast_lease_lost";
         break;
       }
       const page = await User.find({ ...audienceQuery, ...(lastId ? { _id: { $gt: lastId } } : {}) })
@@ -222,7 +236,11 @@ async function runBroadcast(broadcast, { actorId, operationId }) {
     lastError = String(error?.code || error?.name || "BroadcastError").slice(0, 80);
   }
 
-  const finalStatus = cancelled ? "cancelled" : (failed > 0 && succeeded === 0 && processed > 0 ? "failed" : "completed");
+  const finalStatus = cancelled
+    ? "cancelled"
+    : leaseLost
+      ? "interrupted"
+      : (failed > 0 && succeeded === 0 && processed > 0 ? "failed" : "completed");
   await AdminBroadcast.updateOne(
     { _id: broadcast._id, status: { $in: ["queued", "running", "cancel_requested"] } },
     { $set: { status: finalStatus, processed, succeeded, failed, finishedAt: new Date(), lastErrorCode: lastError } }

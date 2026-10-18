@@ -1,78 +1,37 @@
+import { escapeErrorMessage } from "../../utils/escapeHtml.js";
 import CryptoInvoice from "../../models/CryptoInvoice.js";
-import invoice from "../../models/invoice.js";
-import User from "../../models/User.js";
+import bankInvoice from "../../models/invoice.js";
 import { plans30, plans60, plans90 } from "../../services/plans.js";
+import { sumAmount, sumUserBalances } from "../../services/admin/collectionStats.js";
+import { estimateCatalogConsumption } from "../../services/admin/reportMath.js";
 
-const profitChart = async (bot, query, session) => {
+const profitChart = async (bot, query) => {
   const chatId = query.message.chat.id;
   const messageId = query.message.message_id;
 
   try {
-    // دریافت آمار کامل
-    const paidCrypto = await CryptoInvoice.find({ status: "paid" });
-    const confirmedBank = await invoice.find({
-      status: { $in: ["paid", "confirmed"] },
-    });
-    const allUsers = await User.find({});
-
-    // محاسبات درآمد
-    const cryptoSum = paidCrypto.reduce(
-      (sum, inv) => sum + (inv.amount || 0),
-      0
-    );
-    const bankSum = confirmedBank.reduce(
-      (sum, inv) => sum + (inv.amount || 0),
-      0
-    );
-    const totalTopups = cryptoSum + bankSum;
-
-    // موجودی فعلی کاربران
-    const totalBalances = allUsers.reduce(
-      (sum, u) => sum + (u.balance || 0),
-      0
-    );
+    const [crypto, bank, totalBalances] = await Promise.all([
+      sumAmount(CryptoInvoice, { status: "paid" }),
+      sumAmount(bankInvoice, { status: { $in: ["paid", "confirmed"] } }),
+      sumUserBalances(),
+    ]);
+    const totalTopups = crypto.total + bank.total;
     const recognizedRevenue = Math.max(0, totalTopups - totalBalances);
+    const { estGigSold, estDaysSold } = estimateCatalogConsumption(recognizedRevenue, [
+      ...plans30,
+      ...plans60,
+      ...plans90,
+    ]);
 
-    // تخمین سرویس‌های فروخته شده
-    const allPlans = [...plans30, ...plans60, ...plans90]
-      .map((p) => ({ price: p.price, gig: p.gig, days: p.days }))
-      .sort((a, b) => b.price - a.price);
-
-    let remaining = recognizedRevenue;
-    let estGigSold = 0;
-    let estDaysSold = 0;
-
-    for (const plan of allPlans) {
-      if (plan.price > 0 && remaining >= plan.price) {
-        const cnt = Math.floor(remaining / plan.price);
-        if (cnt > 0) {
-          estGigSold += cnt * (plan.gig || 0);
-          estDaysSold += cnt * (plan.days || 0);
-          remaining -= cnt * plan.price;
-        }
-      }
-    }
-
-    // محاسبه هزینه‌ها
     const costPerDay = Number(process.env.COST_PER_DAY || 200);
     const costPerGb = Number(process.env.COST_PER_GB || 300);
     const totalCost = estDaysSold * costPerDay + estGigSold * costPerGb;
     const profit = recognizedRevenue - totalCost;
-
-    // محاسبه درصدها
-    const profitMargin =
-      recognizedRevenue > 0
-        ? ((profit / recognizedRevenue) * 100).toFixed(1)
-        : 0;
-    const costPercentage =
-      recognizedRevenue > 0
-        ? ((totalCost / recognizedRevenue) * 100).toFixed(1)
-        : 0;
-
-    // نمودار سود (با emoji)
+    const profitMargin = recognizedRevenue > 0 ? ((profit / recognizedRevenue) * 100).toFixed(1) : 0;
+    const costPercentage = recognizedRevenue > 0 ? ((totalCost / recognizedRevenue) * 100).toFixed(1) : 0;
     const createBarChart = (percentage, maxBars = 20) => {
       const bars = Math.round((percentage / 100) * maxBars);
-      return "█".repeat(bars) + "░".repeat(maxBars - bars);
+      return "█".repeat(Math.max(0, bars)) + "░".repeat(Math.max(0, maxBars - bars));
     };
 
     const report =
@@ -101,10 +60,7 @@ const profitChart = async (bot, query, session) => {
       reply_markup: {
         inline_keyboard: [
           [
-            {
-              text: "📊 جزئیات بیشتر",
-              callback_data: "admin_detailed_financial",
-            },
+            { text: "📊 جزئیات بیشتر", callback_data: "admin_detailed_financial" },
             { text: "📅 گزارش ماهانه", callback_data: "admin_monthly_report" },
           ],
           [
@@ -116,33 +72,24 @@ const profitChart = async (bot, query, session) => {
       },
     });
 
-    await bot.answerCallbackQuery(query.id, {
-      text: "✅ نمودار سود نمایش داده شد",
-    });
+    await bot.answerCallbackQuery(query.id, { text: "✅ نمودار سود نمایش داده شد" });
   } catch (error) {
     console.error("❌ Error in profit chart:", error.message);
-
     await bot.editMessageText(
-      `❌ خطا در نمایش نمودار سود:\n\n<code>${error.message}</code>`,
+      `❌ خطا در نمایش نمودار سود:\n\n<code>${escapeErrorMessage(error)}</code>`,
       {
         chat_id: chatId,
         message_id: messageId,
         parse_mode: "HTML",
         reply_markup: {
-          inline_keyboard: [
-            [
-              { text: "🔄 تلاش مجدد", callback_data: "admin_profit_chart" },
-              { text: "🏠 بازگشت", callback_data: "admin_financial_report" },
-            ],
-          ],
+          inline_keyboard: [[
+            { text: "🔄 تلاش مجدد", callback_data: "admin_profit_chart" },
+            { text: "🏠 بازگشت", callback_data: "admin_financial_report" },
+          ]],
         },
       }
     );
-
-    await bot.answerCallbackQuery(query.id, {
-      text: "❌ خطا در نمایش نمودار سود",
-      show_alert: true,
-    });
+    await bot.answerCallbackQuery(query.id, { text: "❌ خطا در نمایش نمودار سود", show_alert: true });
   }
 };
 

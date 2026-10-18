@@ -1,7 +1,6 @@
 import {
   acquireRedisLease,
   releaseRedisLease,
-  renewRedisLease,
 } from "../redisLease.js";
 
 const LOCK_PREFIX = "hoosh:lock:";
@@ -44,15 +43,6 @@ export async function acquireCronLock(jobName, ttlSeconds = 600) {
   } catch (error) {
     console.warn(`[HooshPay Cron] Redis lock unavailable for ${jobName} (${error?.name || "RedisError"}); skipping cycle`);
     return null;
-  }
-}
-
-export async function renewCronLock(lease) {
-  try {
-    return await renewRedisLease(lease, lease?.ttlSeconds, { timeoutMs: REDIS_OP_TIMEOUT_MS });
-  } catch (error) {
-    console.warn(`[HooshPay Cron] Redis lock renewal failed (${error?.name || "RedisError"})`);
-    return false;
   }
 }
 

@@ -2,6 +2,7 @@ import axios from "axios";
 
 const DEFAULT_BASE_URL = "https://hooshpay.xyz/api/v1";
 const TIMEOUT_MS = 15_000;
+const clientCache = new Map();
 
 export class HooshPayApiError extends Error {
   constructor(operation, { status, code, ambiguous = false } = {}) {
@@ -23,8 +24,12 @@ export function createHooshPayClient({ apiKey = process.env.HOOSHPAY_API_KEY, ba
     throw new Error("HooshPay API base URL must be HTTPS without credentials, query, or fragment");
   }
 
-  return axios.create({
-    baseURL: baseURL.replace(/\/+$/, ""),
+  const normalizedBase = baseURL.replace(/\/+$/, "");
+  const cacheKey = `${apiKey}\n${normalizedBase}`;
+  const cached = clientCache.get(cacheKey);
+  if (cached) return cached;
+  const client = axios.create({
+    baseURL: normalizedBase,
     timeout: TIMEOUT_MS,
     maxContentLength: 1_048_576,
     maxBodyLength: 1_048_576,
@@ -34,6 +39,9 @@ export function createHooshPayClient({ apiKey = process.env.HOOSHPAY_API_KEY, ba
       Accept: "application/json",
     },
   });
+  clientCache.set(cacheKey, client);
+  if (clientCache.size > 4) clientCache.delete(clientCache.keys().next().value);
+  return client;
 }
 
 function normalizeError(operation, error) {
@@ -90,11 +98,6 @@ export async function verifyInvoice(uid) {
     throw new HooshPayApiError("invoice verification", { code: "invalid_paid_flag", ambiguous: true });
   }
   return body;
-}
-
-export async function getInvoice(uid) {
-  if (typeof uid !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(uid)) throw new TypeError("Invalid HooshPay invoice UID");
-  return unwrap(await request("invoice lookup", "GET", `/invoices/${encodeURIComponent(uid)}`), "invoice lookup");
 }
 
 export async function cancelInvoice(uid) {

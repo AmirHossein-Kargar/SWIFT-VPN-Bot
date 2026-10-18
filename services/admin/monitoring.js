@@ -3,7 +3,6 @@ import SystemHealth from "../../models/SystemHealth.js";
 import redisClient, { isRedisReady, getRedisError } from "../../config/redisClient.js";
 import { default as botInstance } from "../../config/botInstance.js";
 import { StatusApi } from "../../api/wizardApi.js";
-import { verifyInvoice as apiVerifyInvoice } from "../hooshpay/hooshpayClient.js";
 import { createHooshPayClient } from "../hooshpay/hooshpayClient.js";
 import { assertAdminUser } from "./authorization.js";
 

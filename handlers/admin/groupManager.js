@@ -1,8 +1,9 @@
 import trxScanner from "../../services/trxWalletScanner.js";
 import CryptoInvoice from "../../models/CryptoInvoice.js";
-import invoice from "../../models/invoice.js";
-import User from "../../models/User.js";
+import bankInvoice from "../../models/invoice.js";
 import { plans30, plans60, plans90 } from "../../services/plans.js";
+import { sumAmount, sumUserBalances } from "../../services/admin/collectionStats.js";
+import { estimateCatalogConsumption } from "../../services/admin/reportMath.js";
 import { isAdmin } from "../../utils/auth.js";
 import { handleAdminPanelCommand } from "./panel.js";
 
@@ -187,45 +188,18 @@ const handleFinancialReport = async (bot, msg) => {
   const chatId = msg.chat.id;
 
   try {
-    // جمع شارژهای تایید شده
-    const paidCrypto = await CryptoInvoice.find({ status: "paid" });
-    const confirmedBank = await invoice.find({
-      status: { $in: ["paid", "confirmed"] },
-    });
-    const cryptoSum = paidCrypto.reduce(
-      (sum, inv) => sum + (inv.amount || 0),
-      0
-    );
-    const bankSum = confirmedBank.reduce(
-      (sum, inv) => sum + (inv.amount || 0),
-      0
-    );
-    const totalTopups = cryptoSum + bankSum;
-
-    // مجموع موجودی فعلی کاربران
-    const users = await User.find({});
-    const totalBalances = users.reduce((sum, u) => sum + (u.balance || 0), 0);
-
-    // درآمد خرج‌شده
+    const [crypto, bank, totalBalances] = await Promise.all([
+      sumAmount(CryptoInvoice, { status: "paid" }),
+      sumAmount(bankInvoice, { status: { $in: ["paid", "confirmed"] } }),
+      sumUserBalances(),
+    ]);
+    const totalTopups = crypto.total + bank.total;
     const recognizedRevenue = Math.max(0, totalTopups - totalBalances);
-
-    // تخمین حجم و روز فروخته‌شده برای محاسبه هزینه
-    const allPlans = [...plans30, ...plans60, ...plans90]
-      .map((p) => ({ price: p.price, gig: p.gig, days: p.days }))
-      .sort((a, b) => b.price - a.price);
-    let remaining = recognizedRevenue;
-    let estGigSold = 0;
-    let estDaysSold = 0;
-    for (const plan of allPlans) {
-      if (plan.price > 0 && remaining >= plan.price) {
-        const cnt = Math.floor(remaining / plan.price);
-        if (cnt > 0) {
-          estGigSold += cnt * (plan.gig || 0);
-          estDaysSold += cnt * (plan.days || 0);
-          remaining -= cnt * plan.price;
-        }
-      }
-    }
+    const { estGigSold, estDaysSold } = estimateCatalogConsumption(recognizedRevenue, [
+      ...plans30,
+      ...plans60,
+      ...plans90,
+    ]);
 
     // هزینه‌ها بر اساس ثابت‌ها
     const costPerDay = Number(process.env.COST_PER_DAY || 200);

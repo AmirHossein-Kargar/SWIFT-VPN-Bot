@@ -1,12 +1,7 @@
 import { setSession } from "../config/sessionStore.js";
 import invoice from "../models/invoice.js";
 import User from "../models/User.js";
-
-function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  })[character]);
-}
+import escapeHtml from "../utils/escapeHtml.js";
 
 const handleBankRecipt = async (bot, msg, session) => {
   const chatId = msg?.chat?.id;

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import HooshPayInvoice from "../../models/HooshPayInvoice.js";
 import CryptoInvoice from "../../models/CryptoInvoice.js";
 import bankInvoice from "../../models/invoice.js";
@@ -11,7 +10,7 @@ import { commitProvisionedPurchase, deliverPurchaseNotification } from "../buySe
 import trxScanner from "../trxWalletScanner.js";
 import { assertAdminUser, AdminServiceError } from "./authorization.js";
 import { runAuditedAction } from "./audit.js";
-import { escapeRegex, parsePagination, requireReason, requireTelegramId } from "./validation.js";
+import { escapeRegex, parsePagination, requireReason } from "./validation.js";
 
 const NORMALIZED_STATUSES = ["pending", "paid", "fulfilled", "failed", "cancelled", "refunded", "recovery-required"];
 const PURCHASE_PENDING = ["reserving", "reserved", "provisioning", "provisioned", "refund_pending"];

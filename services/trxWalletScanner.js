@@ -67,15 +67,6 @@ class TRXWalletScanner {
     this.botInstance = bot;
   }
 
-  // ── Pause/stop controls ────────────────────────────────────────────────────
-  pause(client) {
-    if (client && client.pause) client.pause();
-  }
-
-  resume(client) {
-    if (client && client.resume) client.resume();
-  }
-
   // ── Connectivity checks ────────────────────────────────────────────────────
   async checkDatabaseConnection() {
     try {

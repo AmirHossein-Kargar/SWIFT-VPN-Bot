@@ -64,7 +64,7 @@ export async function getAnalytics({ actorId, granularity = "monthly", now = new
   const startWeek = new Date(startToday.getTime() - ((startToday.getUTCDay() + 6) % 7) * DAY_MS);
   const startMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 
-  const [revenueSeries, totalUsers, newUsersToday, activeUsers, vpnCounts, ordersTotal, ordersCompleted, failedPayments, failedProvisioning, popularProducts, topSpenders] = await Promise.all([
+  const [revenueSeries, totalUsers, newUsersToday, activeUsers, vpnCounts, ordersTotal, ordersCompleted, failedPayments, failedProvisioning, popularProducts, topSpenders, payingUsers, catalog, revenueToday, revenueWeek, revenueMonth] = await Promise.all([
     providerRevenueSeries(from, to, config.bucketMs, config.buckets),
     User.countDocuments({}),
     User.countDocuments({ createdAt: { $gte: startToday } }),
@@ -92,16 +92,13 @@ export async function getAnalytics({ actorId, granularity = "monthly", now = new
       { $limit: 10 },
       { $project: { _id: 0, telegramId: "$_id", totalSpent: 1, orderCount: 1 } },
     ]),
-  ]);
-
-  const [revenueToday, revenueWeek, revenueMonth] = await Promise.all([
+    User.countDocuments({ successfulPayments: { $gt: 0 } }),
+    AdminProduct.find({}).sort({ displayOrder: 1 }).lean().catch(() => []),
     revenueForPeriod(startToday, new Date(startToday.getTime() + DAY_MS)),
     revenueForPeriod(startWeek, now),
     revenueForPeriod(startMonth, now),
   ]);
 
-  const payingUsers = await User.countDocuments({ successfulPayments: { $gt: 0 } });
-  const catalog = await AdminProduct.find({}).sort({ displayOrder: 1 }).lean().catch(() => []);
   const marginByProduct = popularProducts.map((item) => {
     const product = catalog.find((candidate) => candidate.productId === item.productId);
     const cost = product ? Number(product.costToman || 0) * item.count : null;

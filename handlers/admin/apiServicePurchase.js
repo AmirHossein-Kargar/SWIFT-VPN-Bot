@@ -1,3 +1,4 @@
+import { escapeErrorMessage } from "../../utils/escapeHtml.js";
 import { createVpnService, StatusApi } from "../../api/wizardApi.js";
 import { setSession } from "../../config/sessionStore.js";
 import { isAdmin } from "../../utils/auth.js";
@@ -316,7 +317,7 @@ const createApiService = async (bot, query, session) => {
   } catch (error) {
     console.error("Error in createApiService:", error);
     await bot.editMessageText(
-      `❌ خطا در ایجاد سرویس:\n\n<code>${error.message}</code>`,
+      `❌ خطا در ایجاد سرویس:\n\n<code>${escapeErrorMessage(error)}</code>`,
       {
         chat_id: chatId,
         message_id: messageId,
