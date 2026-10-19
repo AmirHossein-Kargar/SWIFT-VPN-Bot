@@ -674,7 +674,7 @@ describe("Telegram dynamic currency & network selection flow", () => {
     await handleNowPaymentsCurrencyMenu(
       bot,
       { id: "cb1", from: { id: 501 }, message: { chat: { id: 501 }, message_id: 10 } },
-      { messageId: 10 },
+      { messageId: 10, ownerId: 501, paymentType: "nowpayments", step: "waiting_for_nowpayments_currency" },
       { catalog },
     );
     const currencyButtons = edits.at(-1).options.reply_markup.inline_keyboard.flat();
@@ -685,7 +685,7 @@ describe("Telegram dynamic currency & network selection flow", () => {
       bot,
       { id: "cb2", from: { id: 501 }, message: { chat: { id: 501 }, message_id: 10 } },
       "USDT",
-      { messageId: 10 },
+      { messageId: 10, ownerId: 501, paymentType: "nowpayments", step: "waiting_for_nowpayments_currency" },
       { catalog },
     );
     const netButtons = edits.at(-1).options.reply_markup.inline_keyboard.flat();
@@ -697,7 +697,14 @@ describe("Telegram dynamic currency & network selection flow", () => {
       bot,
       { id: "cb3", from: { id: 501 }, message: { chat: { id: 501 }, message_id: 10 } },
       "usdttrc20",
-      { messageId: 10, ownerId: 501, nowpaymentsAmount: 100_000 },
+      {
+        messageId: 10,
+        ownerId: 501,
+        paymentType: "nowpayments",
+        step: "waiting_for_nowpayments_network",
+        nowpaymentsPendingTicker: "USDT",
+        nowpaymentsAmount: 100_000,
+      },
       {
         catalog,
         quoteTronTopUp: async (input) => ({

@@ -14,6 +14,7 @@ const ENV = {
   NOWPAYMENTS_IPN_SECRET: "s".repeat(40),
   NOWPAYMENTS_IPN_CALLBACK_URL: "https://pay.example.test/api/nowpayments/ipn",
 };
+const TRX_ASSET = { payCurrency: "trx", ticker: "TRX", network: "TRX", currencyPrecision: 6, minAmount: null };
 const NOW = new Date("2026-10-18T16:16:13.406Z");
 
 function botStub() {
@@ -47,7 +48,9 @@ describe("customer TRON top-up routing", () => {
       from: { id: 77 },
       message: { chat: { id: 77 }, message_id: 9 },
     });
-    assert.match(bot.edits.at(-1).text, /NOWPayments/);
+    // Currency selection comes first: never the Toman amount prompt.
+    assert.match(bot.edits.at(-1).text, /در دسترس نیست|انتخاب کنید/);
+    assert.doesNotMatch(bot.edits.at(-1).text, /مبلغ شارژ را وارد کنید/);
     assert.doesNotMatch(bot.edits.at(-1).text, new RegExp(LEGACY_ERROR));
     assert.equal(JSON.stringify(bot.edits).includes("USDPrice"), false);
   });
@@ -59,7 +62,7 @@ describe("customer TRON top-up routing", () => {
       from: { id: 78 },
       message: { chat: { id: 78 }, message_id: 4 },
     }, { messageId: 4, step: "waiting_for_trx_amount" });
-    assert.match(bot.edits.at(-1).text, /NOWPayments/);
+    assert.doesNotMatch(bot.edits.at(-1).text, /مبلغ شارژ را وارد کنید/);
     assert.doesNotMatch(bot.edits.at(-1).text, new RegExp(LEGACY_ERROR));
     const customerSources = [
       "paymentHandlers/handleTrxAmount.js",
@@ -154,7 +157,7 @@ describe("TRON quote and invoice guards", () => {
 
     const bot = botStub();
     let created = 0;
-    await handleNowPaymentsAmount(bot, { chat: { id: 81 }, message_id: 2, text: "50000" }, { messageId: 8, ownerId: 81 }, {
+    await handleNowPaymentsAmount(bot, { chat: { id: 81 }, message_id: 2, text: "50000" }, { messageId: 8, ownerId: 81, paymentType: "nowpayments", nowpaymentsAsset: TRX_ASSET }, {
       quoteTronTopUp: async () => {
         const error = new Error("unavailable");
         error.code = "rate_unavailable";
@@ -167,7 +170,7 @@ describe("TRON quote and invoice guards", () => {
     assert.doesNotMatch(bot.edits.at(-1).text, new RegExp(LEGACY_ERROR));
 
     const missing = botStub();
-    await handleNowPaymentsAmount(missing, { chat: { id: 82 }, message_id: 2, text: "50000" }, { messageId: 8, ownerId: 82 }, {
+    await handleNowPaymentsAmount(missing, { chat: { id: 82 }, message_id: 2, text: "50000" }, { messageId: 8, ownerId: 82, paymentType: "nowpayments", nowpaymentsAsset: TRX_ASSET }, {
       quoteTronTopUp: async () => {
         const error = new Error("not_configured");
         error.code = "not_configured";

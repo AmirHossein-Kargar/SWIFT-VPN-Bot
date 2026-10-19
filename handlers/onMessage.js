@@ -5,6 +5,7 @@ import handleTrxAmount from "../paymentHandlers/handleTrxAmount.js";
 import { handleHooshAmount } from "../paymentHandlers/payHoosh.js";
 import { handleNowPaymentsAmount } from "../paymentHandlers/payNowPayments.js";
 import supportMessageHandler from "./supportMessageHandler.js";
+import { getSupportDirectButton } from "../messages/supportContact.js";
 import {
   handleApiGigInput,
   handleApiDaysInput,
@@ -92,6 +93,16 @@ async function handleMessage(bot, msg) {
 
   if ((session?.step === "waiting_for_nowpayments_amount" || session?.step === "nowpayments_confirm") && msg.text) {
     await handleNowPaymentsAmount(bot, msg, session);
+    return;
+  }
+
+  // Free text while the customer is still choosing a currency / network is
+  // not an amount: drop it so the keyboard stays the single source of input.
+  if (
+    (session?.step === "waiting_for_nowpayments_currency" || session?.step === "waiting_for_nowpayments_network")
+    && msg.text
+  ) {
+    await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
     return;
   }
 
@@ -238,16 +249,10 @@ async function handleMessage(bot, msg) {
 
       await bot.sendMessage(targetChatId, userMessage, {
         parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "📞 تماس با پشتیبانی",
-                url: "https://t.me/Swift_servicebot",
-              },
-            ],
-          ],
-        },
+        // The direct-support button exists only when SUPPORT_CONTACT is set.
+        reply_markup: getSupportDirectButton().length
+          ? { inline_keyboard: getSupportDirectButton() }
+          : undefined,
       });
 
       // تایید به ادمین

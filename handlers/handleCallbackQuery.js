@@ -44,7 +44,11 @@ import { sendTrxWallet } from "../paymentHandlers/handleTrxAmount.js";
 import { payHoosh } from "../paymentHandlers/payHoosh.js";
 import {
   confirmNowPaymentsTopUp,
+  handleNowPaymentsBackToAmount,
+  handleNowPaymentsCancel,
   handleNowPaymentsCurrencyMenu,
+  handleNowPaymentsPage,
+  handleNowPaymentsStatus,
   handleNowPaymentsSelectAsset,
   handleNowPaymentsSelectNetwork,
   payNowPayments,
@@ -374,6 +378,18 @@ const handleCallbackQuery = async (bot, query) => {
       await confirmNowPaymentsTopUp(bot, query, session);
       break;
 
+    case "np_back_amount":
+      await handleNowPaymentsBackToAmount(bot, query, session);
+      break;
+
+    case "np_cancel":
+      await handleNowPaymentsCancel(bot, query, session);
+      break;
+
+    case "np_noop":
+      await bot.answerCallbackQuery(query.id).catch(() => {});
+      break;
+
     case "pay_trx":
       await payNowPayments(bot, query, session);
       break;
@@ -671,6 +687,16 @@ const handleCallbackQuery = async (bot, query) => {
   if (data.startsWith("np_asset:")) {
     const ticker = data.slice("np_asset:".length);
     await handleNowPaymentsSelectAsset(bot, query, ticker, session);
+    return;
+  }
+
+  if (data.startsWith("np_page:")) {
+    await handleNowPaymentsPage(bot, query, data.slice("np_page:".length), session);
+    return;
+  }
+
+  if (data.startsWith("np_status:")) {
+    await handleNowPaymentsStatus(bot, query, data.slice("np_status:".length));
     return;
   }
 

@@ -1,7 +1,7 @@
 import { setSession } from "../../config/sessionStore.js";
 
-export const HOOSH_PAY_BUTTON = "💳 پرداخت آنلاین – کارت به کارت (HooshPay)";
-export const NOWPAYMENTS_BUTTON = "₮ پرداخت با ترون (NOWPayments)";
+export const HOOSH_PAY_BUTTON = "💳 پرداخت آنلاین کارت به کارت";
+export const NOWPAYMENTS_BUTTON = "🪙 پرداخت با کریپتو";
 
 // HooshPay stays the first method and still uses its own provider.
 // New TRON top-ups use NOWPayments. The older direct TRX callback remains

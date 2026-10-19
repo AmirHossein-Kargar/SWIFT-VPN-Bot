@@ -27,7 +27,7 @@ export async function payHoosh(bot, query, session) {
 
   try {
     await bot.editMessageText(
-      `💳 <b>پرداخت آنلاین – HooshPay</b>\n\n` +
+      `💳 <b>پرداخت آنلاین کارت به کارت</b>\n\n` +
       `🔹 <b>لطفاً مبلغ مورد نظر را به تومان و با کاما وارد کنید.</b>\n` +
       `مثال: <code>50,000</code> | <code>200,000</code>\n\n` +
       `🔻 <b>محدودیت مبلغ:</b>\n` +
