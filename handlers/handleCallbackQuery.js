@@ -45,6 +45,7 @@ import { payHoosh } from "../paymentHandlers/payHoosh.js";
 import {
   confirmNowPaymentsTopUp,
   handleNowPaymentsBackToAmount,
+  handleNowPaymentsBackToNetwork,
   handleNowPaymentsCancel,
   handleNowPaymentsCurrencyMenu,
   handleNowPaymentsPage,
@@ -380,6 +381,10 @@ const handleCallbackQuery = async (bot, query) => {
 
     case "np_back_amount":
       await handleNowPaymentsBackToAmount(bot, query, session);
+      break;
+
+    case "np_back_network":
+      await handleNowPaymentsBackToNetwork(bot, query, session);
       break;
 
     case "np_cancel":

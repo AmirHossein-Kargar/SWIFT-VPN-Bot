@@ -1,47 +1,27 @@
 /**
- * Display-only Persian names for well-known tickers. Availability always comes
- * from the live NOWPayments catalog; a ticker missing here is shown by its
- * ticker alone, never with an invented name.
+ * Display-only emoji for the preferred tickers. Availability always comes from
+ * the merchant's NOWPayments catalog; every other ticker gets a neutral icon
+ * and is shown by its ticker alone, never with an invented name.
  */
-const PERSIAN_NAMES = Object.freeze({
-  BTC: "بیت‌کوین",
-  ETH: "اتریوم",
-  LTC: "لایت‌کوین",
-  TRX: "ترون",
-  USDT: "تتر",
-  USDC: "یو‌اس‌دی‌کوین",
-  TON: "تون‌کوین",
-  SOL: "سولانا",
-  DOGE: "دوج‌کوین",
-  BNB: "بایننس‌کوین",
-  XRP: "ریپل",
-  BCH: "بیت‌کوین کش",
-  DASH: "دش",
-  XMR: "مونرو",
-  ADA: "کاردانو",
-  MATIC: "پالیگان",
-  DAI: "دای",
+const TICKER_EMOJI = Object.freeze({
+  USDT: "🟢",
+  TON: "💎",
+  TRX: "🔴",
+  BTC: "🟡",
+  LTC: "🟣",
+  ETH: "🔷",
 });
 
 export const CURRENCY_PAGE_SIZE = 8;
 
-export function persianCurrencyName(ticker) {
-  return PERSIAN_NAMES[String(ticker || "").toUpperCase()] || null;
-}
-
-/** Button label: "🪙 بیت‌کوین · BTC" or "🪙 تتر · USDT (3 شبکه)". */
+/** Button label: "🟢 USDT". Each asset appears once; networks come on the next step. */
 export function currencyGroupLabel(group) {
   const ticker = String(group.ticker).toUpperCase();
-  const name = persianCurrencyName(ticker);
-  const base = name ? `${name} · ${ticker}` : ticker;
-  const suffix = group.requiresNetworkSelection
-    ? ` (${group.networks.length} شبکه)`
-    : "";
-  return `🪙 ${base}${suffix}`;
+  return `${TICKER_EMOJI[ticker] || "🪙"} ${ticker}`;
 }
 
 export function networkLabel(ticker, network) {
-  return `🌐 ${String(ticker).toUpperCase()} · شبکه ${String(network).toUpperCase()}`;
+  return `🌐 شبکه ${String(network).toUpperCase()}`;
 }
 
 /** One page of currency groups, with a clamped page index. */

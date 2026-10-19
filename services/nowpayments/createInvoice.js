@@ -13,6 +13,7 @@ import {
   NowPaymentsFlowError,
 } from "./money.js";
 import { createNowPaymentsRequest, NowPaymentsApiError } from "./nowpaymentsClient.js";
+import { fetchNowPaymentsCatalog, validateCatalogSelection } from "./catalog.js";
 import { logQuoteFailure } from "../pricing/quoteLog.js";
 
 const OPEN_CREATE = ["creating", "creation_unknown"];
@@ -46,6 +47,7 @@ export async function createNowPaymentsTopUp({
   env = process.env,
   invoiceModel = NowPaymentsInvoice,
   request,
+  catalog: providedCatalog = null,
   resolveRate = resolveTomanPerFiat,
   now = () => new Date(),
 } = {}) {
@@ -180,6 +182,25 @@ export async function createNowPaymentsTopUp({
       });
       await markFailed(invoiceModel, orderId);
       throw new NowPaymentsFlowError("currency_unavailable");
+    }
+
+    // The exact currency/network the customer picked must still be enabled for
+    // this merchant right now; nothing is ever substituted silently.
+    const expectedTicker = requestedTicker || quote?.ticker || null;
+    const expectedNetwork = requestedNetwork || quote?.network || null;
+    try {
+      const catalog = providedCatalog || await fetchNowPaymentsCatalog({ env, request: call });
+      const asset = validateCatalogSelection(catalog, { payCurrency: targetPayCurrency });
+      if (expectedTicker && asset.ticker !== String(expectedTicker).trim().toUpperCase()) {
+        throw new NowPaymentsFlowError("invalid_currency_selection");
+      }
+      if (expectedNetwork && asset.network !== String(expectedNetwork).trim().toUpperCase()) {
+        throw new NowPaymentsFlowError("invalid_network_selection");
+      }
+    } catch (error) {
+      logQuoteFailure("nowpayments_merchant_selection", error);
+      await markFailed(invoiceModel, orderId);
+      throw error instanceof NowPaymentsFlowError ? error : new NowPaymentsFlowError("currency_unavailable");
     }
 
     const payload = buildInvoiceRequest({

@@ -500,8 +500,8 @@ describe("NOWPayments API capability matrix & dynamic catalog", () => {
       (err) => err.code === "network_selection_required",
     );
 
-    // Selecting USDT on TRX network resolves usdttrc20
-    const usdtTrc20 = validateCatalogSelection(catalog, { ticker: "USDT", network: "TRX" });
+    // Selecting USDT on TRC20 network resolves usdttrc20
+    const usdtTrc20 = validateCatalogSelection(catalog, { ticker: "USDT", network: "TRC20" });
     assert.equal(usdtTrc20.code, "usdttrc20");
     assert.equal(usdtTrc20.fixedRateSupported, true);
 
@@ -531,7 +531,7 @@ describe("Dynamic pricing with Gheymat Online, min-amount enforcement, and immut
     const quote = await quoteCryptoPayment({
       planSelection: { durationDays: 90, gig: 100 }, // 164,000 Toman in catalog
       ticker: "USDT",
-      network: "TRX",
+      network: "TRC20",
       env: TEST_ENV,
       now: new Date("2026-10-19T08:00:00.000Z"),
       usdtQuote: async () => ({
@@ -548,7 +548,7 @@ describe("Dynamic pricing with Gheymat Online, min-amount enforcement, and immut
     assert.equal(quote.priceAmountCents, 200); // $2.00
     assert.equal(quote.payCurrency, "usdttrc20");
     assert.equal(quote.ticker, "USDT");
-    assert.equal(quote.network, "TRX");
+    assert.equal(quote.network, "TRC20");
     assert.equal(quote.estimatedAmount, 2);
     assert.equal(quote.quoteSnapshot.gheymatQuote.unit, "toman");
     assert.equal(quote.quoteSnapshot.gheymatQuote.value, 82_000);
@@ -559,7 +559,7 @@ describe("Dynamic pricing with Gheymat Online, min-amount enforcement, and immut
       () => quoteCryptoPayment({
         planSelection: { durationDays: 90, gig: 100 }, // $2.00 < $10.00 min
         ticker: "USDT",
-        network: "ETH",
+        network: "ERC20",
         env: TEST_ENV,
         now: new Date("2026-10-19T08:00:00.000Z"),
         usdtQuote: async () => ({
@@ -592,7 +592,7 @@ describe("Dynamic pricing with Gheymat Online, min-amount enforcement, and immut
 
     assert.equal(invoice.payCurrency, "usdttrc20");
     assert.equal(invoice.ticker, "USDT");
-    assert.equal(invoice.network, "TRX");
+    assert.equal(invoice.network, "TRC20");
     const saved = invoiceModel.docs.get(invoice.orderId);
     assert.equal(saved.payCurrency, "usdttrc20");
     assert.equal(saved.planId, "s90_100");
@@ -723,7 +723,7 @@ describe("Telegram dynamic currency & network selection flow", () => {
       },
     );
     assert.match(edits.at(-1).text, /USDT/);
-    assert.match(edits.at(-1).text, /TRX/);
+    assert.match(edits.at(-1).text, /TRC20/);
   });
 });
 

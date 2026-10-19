@@ -8,6 +8,7 @@ import { signNowPaymentsIpn, verifyNowPaymentsSignature } from "../../services/n
 import { readNowPaymentsConfig, tomanToFiatCents, NowPaymentsFlowError } from "../../services/nowpayments/money.js";
 import { resolveTomanPerFiat } from "../../services/nowpayments/exchangeRate.js";
 import { createNowPaymentsRequest } from "../../services/nowpayments/nowpaymentsClient.js";
+import { buildCatalogFromProviderData } from "../../services/nowpayments/catalog.js";
 import { createNowPaymentsTopUp, resetNowPaymentsCreateLocksForTests } from "../../services/nowpayments/createInvoice.js";
 import { applyNowPaymentsUpdate } from "../../services/nowpayments/applyStatus.js";
 import { handleNowPaymentsIpn } from "../../services/nowpayments/ipnHandler.js";
@@ -90,10 +91,14 @@ function makeInvoiceModel(seed = []) {
   };
 }
 
+const TRX_CATALOG = buildCatalogFromProviderData({ currencies: ["trx", "btc"], merchantCoins: ["trx", "btc"] });
+
 function successTransport(calls) {
   return async (options) => {
     calls.push(options);
     if (options.url.endsWith("/currencies")) return { status: 200, data: { currencies: ["btc", "trx", "eth"] } };
+    if (options.url.endsWith("/merchant/coins")) return { status: 200, data: { selectedCurrencies: ["btc", "trx", "eth"] } };
+    if (options.url.endsWith("/full-currencies") || options.url.includes("fixed_rate")) return { status: 404, data: {} };
     return {
       status: 200,
       data: {
@@ -218,6 +223,7 @@ describe("NOWPayments invoice creation", () => {
       env: ENV,
       invoiceModel: missingModel,
       resolveRate: testRate,
+      catalog: TRX_CATALOG,
       request: createNowPaymentsRequest({
         apiKey: API_KEY,
         baseURL: "https://api.nowpayments.io/v1",
@@ -237,6 +243,7 @@ describe("NOWPayments invoice creation", () => {
       env: ENV,
       invoiceModel: rejected,
       resolveRate: testRate,
+      catalog: TRX_CATALOG,
       request: createNowPaymentsRequest({
         apiKey: API_KEY,
         baseURL: "https://api.nowpayments.io/v1",
@@ -254,6 +261,7 @@ describe("NOWPayments invoice creation", () => {
       env: ENV,
       invoiceModel: malformed,
       resolveRate: testRate,
+      catalog: TRX_CATALOG,
       request: createNowPaymentsRequest({
         apiKey: API_KEY,
         baseURL: "https://api.nowpayments.io/v1",
@@ -281,8 +289,8 @@ describe("NOWPayments invoice creation", () => {
         throw error;
       },
     });
-    await assert.rejects(() => createNowPaymentsTopUp({ userId: 7105, amountToman: 50_000, env: ENV, invoiceModel: model, request, resolveRate: testRate }), (error) => error.code === "ambiguous");
-    await assert.rejects(() => createNowPaymentsTopUp({ userId: 7105, amountToman: 50_000, env: ENV, invoiceModel: model, request, resolveRate: testRate }), (error) => error.code === "in_flight");
+    await assert.rejects(() => createNowPaymentsTopUp({ userId: 7105, amountToman: 50_000, env: ENV, invoiceModel: model, request, catalog: TRX_CATALOG, resolveRate: testRate }), (error) => error.code === "ambiguous");
+    await assert.rejects(() => createNowPaymentsTopUp({ userId: 7105, amountToman: 50_000, env: ENV, invoiceModel: model, request, catalog: TRX_CATALOG, resolveRate: testRate }), (error) => error.code === "in_flight");
     assert.equal(posts, 1);
     assert.equal([...model.docs.values()][0].status, "creation_unknown");
     assert.equal([...model.docs.values()][0].recoveryStatus, "required");

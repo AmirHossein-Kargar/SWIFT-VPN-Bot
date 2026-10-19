@@ -73,7 +73,7 @@ export function nowPaymentsAmountPrompt(selectedAsset = null) {
 }
 
 function amountKeyboard() {
-  return [ASSET_BUTTON, CANCEL];
+  return [[{ text: "🔙 بازگشت", callback_data: "np_back_network" }, ...CANCEL]];
 }
 
 function confirmKeyboard() {
@@ -91,9 +91,8 @@ export function nowPaymentsConfirmMessage(quote) {
   const tomanPerCoin = quote?.tomanPerCrypto ?? quote?.tomanPerTrx;
   const amountText = formatTopUpAmount(quote.amountToman);
   const amount = `💰 <b>مبلغ شارژ:</b> <code>${amountText}</code> تومان`;
-  const networkLine = ticker !== network
-    ? `🌐 <b>رمزارز و شبکه:</b> <code>${ticker} (${network})</code>\n`
-    : "";
+  const assetLabel = ticker !== network ? `${ticker} (${network})` : ticker;
+  const networkLine = `🌐 <b>رمزارز و شبکه:</b> <code>${assetLabel}</code>\n`;
   const closing = "مبلغ پرداختی تقریبی است و ممکن است با مبلغ نهایی صفحه پرداخت تفاوت داشته باشد. "
     + `موجودی کیف پول فقط پس از تأیید معتبر پرداخت، به مبلغ <code>${amountText}</code> تومان شارژ خواهد شد.`;
 
@@ -239,8 +238,8 @@ export async function handleNowPaymentsCurrencyMenu(bot, query, session, deps = 
       bot,
       chatId,
       messageId,
-      "🪙 <b>پرداخت با کریپتو</b>\n\nلطفاً رمزارز موردنظر خود را انتخاب کنید.\n"
-        + "برای رمزارزهایی که چند شبکه دارند، در مرحله بعد شبکه را انتخاب می‌کنید.",
+      "🪙 <b>ارز دیجیتال موردنظر را انتخاب کنید</b>\n\n" +
+        "شبکهٔ انتقال را در مرحلهٔ بعد انتخاب می‌کنید.",
       rows,
     );
   } catch (error) {
@@ -275,36 +274,7 @@ export async function handleNowPaymentsSelectAsset(bot, query, tickerInput, sess
     if (!group || !group.networks.length) {
       throw Object.assign(new Error("currency_unavailable"), { code: "currency_unavailable" });
     }
-    if (group.requiresNetworkSelection) {
-      await setSession(chatId, {
-        ...session,
-        step: "waiting_for_nowpayments_network",
-        messageId,
-        paymentType: "nowpayments",
-        nowpaymentsPendingTicker: group.ticker,
-        nowpaymentsQuote: null,
-      });
-      const netRows = group.networks.map((net) => ([{
-        text: networkLabel(group.ticker, net.network),
-        callback_data: `np_net:${net.payCurrency}`,
-      }]));
-      netRows.push([...BACK_TO_CURRENCY, ...CANCEL]);
-      await edit(
-        bot,
-        chatId,
-        messageId,
-        `🌐 <b>انتخاب شبکه برای ${group.ticker}</b>\n\n`
-          + "لطفاً شبکه‌ای را انتخاب کنید که کیف پول مبدأ شما از آن پشتیبانی می‌کند.\n"
-          + "⚠️ ارسال وجه از شبکه اشتباه باعث از دست رفتن آن می‌شود.",
-        netRows,
-      );
-      return;
-    }
-    await handleNowPaymentsSelectNetwork(bot, query, group.networks[0].payCurrency, session, {
-      ...deps,
-      catalog,
-      skipAck: true,
-    });
+    await showNetworkMenu(bot, chatId, messageId, group, session);
   } catch (error) {
     const code = error?.code || "currency_unavailable";
     try {
@@ -388,6 +358,62 @@ export async function handleNowPaymentsSelectNetwork(bot, query, payCurrencyInpu
         ASSET_BUTTON,
         ...BACK,
       ]);
+    } catch { /* ignore */ }
+  }
+}
+
+/** Second step: every network the merchant can actually accept for this asset. */
+async function showNetworkMenu(bot, chatId, messageId, group, session) {
+  await setSession(chatId, {
+    ...session,
+    step: "waiting_for_nowpayments_network",
+    messageId,
+    paymentType: "nowpayments",
+    nowpaymentsPendingTicker: group.ticker,
+    nowpaymentsAmount: null,
+    nowpaymentsQuote: null,
+  });
+  const netRows = group.networks.map((net) => ([{
+    text: networkLabel(group.ticker, net.network),
+    callback_data: `np_net:${net.payCurrency}`,
+  }]));
+  netRows.push([...BACK_TO_CURRENCY, ...CANCEL]);
+  await edit(
+    bot,
+    chatId,
+    messageId,
+    `🌐 <b>شبکه انتقال ${group.ticker} را انتخاب کنید</b>\n\n`
+      + "شبکه‌ای را انتخاب کنید که کیف پول مبدأ شما از آن پشتیبانی می‌کند.\n"
+      + "⚠️ ارسال وجه از شبکه اشتباه باعث از دست رفتن آن می‌شود.",
+    netRows,
+  );
+}
+
+/** Amount prompt -> network menu of the asset already chosen. */
+export async function handleNowPaymentsBackToNetwork(bot, query, session, deps = {}) {
+  const chatId = query?.message?.chat?.id ?? query?.from?.id;
+  const messageId = session?.messageId ?? query?.message?.message_id;
+  await ack(bot, query);
+  if (!isOwner(query, session, chatId)) return;
+  const ticker = String(session?.nowpaymentsAsset?.ticker || session?.nowpaymentsPendingTicker || "").toUpperCase();
+  if (!flowIsActive(session) || !ticker) {
+    await showExpiredKeyboard(bot, chatId, messageId);
+    return;
+  }
+  try {
+    const catalog = deps.catalog || await (deps.fetchCatalog || fetchNowPaymentsCatalog)({
+      env: deps.env || process.env,
+      request: deps.request,
+    });
+    const group = catalog.groups.find((item) => item.ticker === ticker);
+    if (!group || !group.networks.length) {
+      throw Object.assign(new Error("currency_unavailable"), { code: "currency_unavailable" });
+    }
+    await showNetworkMenu(bot, chatId, messageId, group, { ...session, nowpaymentsAsset: null });
+  } catch (error) {
+    const code = error?.code || "currency_unavailable";
+    try {
+      await edit(bot, chatId, messageId, FAILURE_TEXT[code] || FAILURE_TEXT.currency_unavailable, [ASSET_BUTTON, ...BACK]);
     } catch { /* ignore */ }
   }
 }

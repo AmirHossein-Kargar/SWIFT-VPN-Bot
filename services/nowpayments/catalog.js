@@ -4,6 +4,7 @@ import {
   readNowPaymentsConfig,
 } from "./money.js";
 import { createNowPaymentsClient } from "./nowpaymentsClient.js";
+import { logQuoteFailure } from "../pricing/quoteLog.js";
 
 const catalogCache = new Map();
 
@@ -11,17 +12,29 @@ export function resetNowPaymentsCatalogCacheForTests() {
   catalogCache.clear();
 }
 
+// Customers know "USDT on TRC20", while the provider's own network field for
+// that asset is "trx". The code suffix after the ticker is the unambiguous
+// label (usdttrc20 -> TRC20, usdtton -> TON); the provider network is only
+// used when the code carries no suffix.
 function normalizeNetworkCode(network, code, ticker) {
-  if (typeof network === "string" && network.trim()) {
-    return network.trim().toUpperCase();
-  }
   const cleanCode = String(code || "").trim().toLowerCase();
   const cleanTicker = String(ticker || "").trim().toLowerCase();
   if (cleanTicker && cleanCode.startsWith(cleanTicker) && cleanCode.length > cleanTicker.length) {
     const suffix = cleanCode.slice(cleanTicker.length).replace(/^[-_]+/, "");
     if (suffix) return suffix.toUpperCase();
   }
+  if (typeof network === "string" && network.trim()) {
+    return network.trim().toUpperCase();
+  }
   return (cleanTicker || cleanCode).toUpperCase();
+}
+
+/** Customer-facing order of the first menu; every other asset follows. */
+export const PREFERRED_TICKERS = Object.freeze(["USDT", "TON", "TRX", "BTC", "LTC", "ETH"]);
+
+function preferredRank(ticker) {
+  const index = PREFERRED_TICKERS.indexOf(ticker);
+  return index === -1 ? PREFERRED_TICKERS.length : index;
 }
 
 function normalizeTickerCode(ticker, code) {
@@ -153,11 +166,20 @@ export function buildCatalogFromProviderData({
     assetsByCode.set(normalized.code, normalized);
   }
 
-  const assets = [...assetsByCode.values()].sort((a, b) => {
+  const sorted = [...assetsByCode.values()].sort((a, b) => {
     if (a.priority != null && b.priority != null && a.priority !== b.priority) {
       return a.priority - b.priority;
     }
     return a.code.localeCompare(b.code);
+  });
+  // One option per ticker/network pair: aliases of the same pair collapse to
+  // the first record, so no duplicate button can ever be rendered.
+  const seenPairs = new Set();
+  const assets = sorted.filter((asset) => {
+    const pair = `${asset.ticker}:${asset.network}`;
+    if (seenPairs.has(pair)) return false;
+    seenPairs.add(pair);
+    return true;
   });
 
   const groupsMap = new Map();
@@ -185,9 +207,14 @@ export function buildCatalogFromProviderData({
     group.requiresNetworkSelection = group.networks.length > 1;
   }
 
+  const groups = [...groupsMap.values()]
+    .map((group, index) => ({ group, index }))
+    .sort((a, b) => preferredRank(a.group.ticker) - preferredRank(b.group.ticker) || a.index - b.index)
+    .map(({ group }) => group);
+
   return {
     assets,
-    groups: [...groupsMap.values()],
+    groups,
     byCode: Object.fromEntries(assets.map((asset) => [asset.code, asset])),
     fetchedAt,
     expiresAt: fetchedAt + ttlMs,
@@ -259,11 +286,19 @@ export async function fetchNowPaymentsCatalog({
         fullCurrencies = parsed;
       }
     }
+    // Merchant availability is mandatory: without it the global currency list
+    // would offer coins this account cannot actually accept. Fail closed.
     if (merchantRes.status === "fulfilled") {
       const parsed = extractCurrencyArray(merchantRes.value?.data);
       if (Array.isArray(parsed) && parsed.length > 0) {
         merchantCoins = parsed;
       }
+    }
+    if (!merchantCoins) {
+      logQuoteFailure("nowpayments_merchant_coins", merchantRes.status === "rejected"
+        ? merchantRes.reason
+        : { code: "empty_merchant_coins", status: merchantRes.value?.status, message: "merchant coin list unavailable" });
+      throw new NowPaymentsFlowError("currency_unavailable");
     }
     if (fixedRes.status === "fulfilled") {
       const parsed = extractCurrencyArray(fixedRes.value?.data);

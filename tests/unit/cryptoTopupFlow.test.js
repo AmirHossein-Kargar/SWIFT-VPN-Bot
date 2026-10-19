@@ -131,13 +131,13 @@ describe("crypto currency selection comes before the amount", () => {
     assert.equal(callbacks.includes("np_asset:SHD"), false, "disabled provider currency must not be offered");
     assert.doesNotMatch(bot.edits.at(-1).text, /مبلغ شارژ را وارد کنید/);
     const usdt = buttons.find((b) => b.callback_data === "np_asset:USDT");
-    assert.match(usdt.text, /تتر · USDT \(2 شبکه\)/);
+    assert.equal(usdt.text, "🟢 USDT");
   });
 
   test("labels use real tickers and fall back to the ticker without inventing names", () => {
     const catalog = makeCatalog([coin("zzz", "ZZZ", "ZZZ")]);
     const labels = Object.fromEntries(catalog.groups.map((g) => [g.ticker, currencyGroupLabel(g)]));
-    assert.equal(labels.BTC, "🪙 بیت‌کوین · BTC");
+    assert.equal(labels.BTC, "🟡 BTC");
     assert.equal(labels.ZZZ, "🪙 ZZZ");
   });
 
@@ -151,12 +151,14 @@ describe("crypto currency selection comes before the amount", () => {
     assert.equal(paginateGroups(groups, "x").page, 0);
   });
 
-  test("single-network coin goes straight to the amount prompt with its ticker", async () => {
+  test("even a single-network coin gets a network step before the amount", async () => {
     const bot = botStub();
     const catalog = makeCatalog();
     await handleNowPaymentsSelectAsset(bot, query("c2"), "BTC", sess(), { catalog });
-    assert.match(bot.edits.at(-1).text, /مبلغ شارژ را وارد کنید/);
+    assert.deepEqual(flat(bot).map((b) => b.callback_data), ["np_net:btc", "np_select_currency", "np_cancel"]);
+    await handleNowPaymentsSelectNetwork(bot, query("c2b"), "btc", sess({ step: "waiting_for_nowpayments_network", nowpaymentsPendingTicker: "BTC" }), { catalog });
     assert.match(bot.edits.at(-1).text, /BTC/);
+    assert.deepEqual(flat(bot).map((b) => b.callback_data), ["np_back_network", "np_cancel"]);
   });
 
   test("multi-network coin asks for the network and rejects a network of another coin", async () => {
