@@ -25,6 +25,7 @@ import {
 } from "../services/admin/custody.js";
 import { previewBroadcast, createBroadcast, getBroadcastStatus, requestBroadcastCancel, listBroadcasts } from "../services/admin/broadcast.js";
 import { getAnalytics } from "../services/admin/analytics.js";
+import { getAnalyticsReport, reportToCsv } from "../services/admin/analyticsReport.js";
 import { getSystemHealth } from "../services/admin/monitoring.js";
 import { listAuditLogs } from "../services/admin/audit.js";
 import { listAdmins, addAdmin, removeAdmin } from "../services/admin/adminRegistry.js";
@@ -568,6 +569,35 @@ router.get("/broadcasts", async (req, res, next) => {
 });
 
 // Analytics
+router.get("/analytics/report", async (req, res, next) => {
+  try {
+    const data = await getAnalyticsReport({ actorId: req.adminActorId, query: req.query, refresh: req.query.refresh === "1" });
+    res.json({ ok: true, data });
+  } catch (error) { next(error); }
+});
+
+// CSV export: admin session + CSRF-free GET, but strictly rate limited and audited.
+router.get("/analytics/export.csv", rateLimitMiddleware({ limit: 10 }), async (req, res, next) => {
+  try {
+    // A cross-site page must not be able to trigger an export (and its audit record).
+    if (req.get("sec-fetch-site") === "cross-site") return res.status(403).json({ ok: false, error: "origin_not_allowed" });
+    const data = await getAnalyticsReport({ actorId: req.adminActorId, query: req.query });
+    await runAuditedAction({
+      actorTelegramId: req.adminActorId,
+      operationId: newOperationId().replace(/-/g, ""),
+      action: "ANALYTICS_EXPORTED",
+      targetType: "analytics",
+      targetId: String(req.query.range || "30d").slice(0, 20),
+      ipAddress: clientIp(req),
+      metadata: { range: data.range.key, from: data.range.from, to: data.range.to },
+      execute: async () => ({ ok: true, auditSummary: { rows: data.kpis.length } }),
+    });
+    res.set("Content-Type", "text/csv; charset=utf-8");
+    res.set("Content-Disposition", `attachment; filename="swift-analytics-${data.range.key}.csv"`);
+    res.send(reportToCsv(data));
+  } catch (error) { next(error); }
+});
+
 router.get("/analytics", async (req, res, next) => {
   try { res.json({ ok: true, data: await getAnalytics({ actorId: req.adminActorId, granularity: req.query.granularity }) }); }
   catch (error) { next(error); }
