@@ -1,10 +1,10 @@
 import User from "../../models/User.js";
 import WalletPurchase from "../../models/WalletPurchase.js";
-import { findService, changeLinkService, deactiveService, deleteService } from "../../api/wizardApi.js";
+import { findService, changeLinkService, deactiveService, deleteService, upgradeServiceTime, upgradeServiceSize, listClients } from "../../api/wizardApi.js";
 import { acquireRedisLease, releaseRedisLease } from "../redisLease.js";
 import { assertAdminUser, AdminServiceError } from "./authorization.js";
 import { runAuditedAction } from "./audit.js";
-import { escapeRegex, parsePagination, requireReason, requireServiceUsername } from "./validation.js";
+import { escapeRegex, parsePagination, parsePositiveInteger, requireReason, requireServiceUsername } from "./validation.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SUPPORTED_ACTIONS = new Set(["change-link", "disable", "revoke", "extend-time", "increase-traffic", "regenerate-config"]);
@@ -173,24 +173,32 @@ export async function getVpnDetail({ actorId, username } = {}) {
       changeLink: Boolean(panel),
       disable: Boolean(panel && online.status === "active"),
       revoke: Boolean(panel),
-      extendTime: false,
-      increaseTraffic: false,
+      extendTime: Boolean(panel),
+      increaseTraffic: Boolean(panel),
       regenerateConfig: false,
     },
     unavailableActions: {
-      extendTime: "WizardXray integration has no safe extend-time endpoint.",
-      increaseTraffic: "WizardXray integration has no safe traffic-adjustment endpoint.",
       regenerateConfig: "WizardXray integration has no regenerate-config endpoint.",
     },
   };
 }
 
-export async function performVpnAction({ actorId, operationId, username, action, reason, ipAddress, bot } = {}) {
+export async function performVpnAction({ actorId, operationId, username, action, reason, ipAddress, bot, days, gig } = {}) {
   assertAdminUser(actorId);
   const clientId = requireServiceUsername(username);
   if (!SUPPORTED_ACTIONS.has(action)) throw new AdminServiceError("عملیات پشتیبانی نشده است.", { status: 400, code: "invalid_vpn_action" });
-  if (["revoke", "disable"].includes(action) && !reason) throw new AdminServiceError("دلیل انجام عملیات الزامی است.", { status: 400, code: "confirmation_required" });
+  if (["revoke", "disable", "extend-time", "increase-traffic"].includes(action) && !reason) throw new AdminServiceError("دلیل انجام عملیات الزامی است.", { status: 400, code: "confirmation_required" });
   const safeReason = reason ? requireReason(reason) : null;
+  // Amounts are validated before anything is audited or sent to the panel.
+  let extendDays = null;
+  let addGig = null;
+  if (action === "extend-time") extendDays = parsePositiveInteger(days, { name: "days", min: 1, max: 3650 });
+  if (action === "increase-traffic") {
+    addGig = Number(gig);
+    if (!Number.isFinite(addGig) || addGig < 0.5 || addGig > 100_000 || Math.round(addGig * 100) / 100 !== addGig) {
+      throw new AdminServiceError("مقدار حجم باید حداقل ۰٫۵ گیگابایت (حداکثر دو رقم اعشار) باشد.", { status: 400, code: "invalid_gig" });
+    }
+  }
   const actionNames = {
     "change-link": "VPN_LINK_CHANGED",
     disable: "VPN_DISABLED",
@@ -206,10 +214,10 @@ export async function performVpnAction({ actorId, operationId, username, action,
     targetType: "vpn",
     targetId: clientId,
     ipAddress,
-    metadata: { reason: safeReason },
+    metadata: { reason: safeReason, ...(extendDays ? { days: extendDays } : {}), ...(addGig ? { gig: addGig } : {}) },
     execute: async () => {
-      if (["extend-time", "increase-traffic", "regenerate-config"].includes(action)) {
-        throw new AdminServiceError("این عملیات در دسترس نیست: کلاینت WizardXray تنظیم‌شده نقطه پایانی امنی برای آن ندارد.", { status: 501, code: "wizard_action_unavailable" });
+      if (action === "regenerate-config") {
+        throw new AdminServiceError("این عملیات در دسترس نیست: API نسخهٔ ۱ ویزاردایکس چنین متدی ندارد (برای لینک جدید از «تغییر لینک» استفاده کنید).", { status: 501, code: "wizard_action_unavailable" });
       }
       const owner = await getOwner(clientId);
       let lease;
@@ -225,6 +233,49 @@ export async function performVpnAction({ actorId, operationId, username, action,
           await User.updateOne({ telegramId: String(owner.user.telegramId), "services.username": clientId }, { $set: { "services.$.sub_link": link } });
           if (owner.purchase?._id) await WalletPurchase.updateOne({ _id: owner.purchase._id }, { $set: { serviceLink: link } });
           return { ok: true, changed: true, auditSummary: { changed: true } };
+        }
+        if (action === "extend-time" || action === "increase-traffic") {
+          const before = await findService(clientId);
+          const beforeInfo = before?.result?.latest_info || {};
+          if (!before?.result || typeof before.result !== "object") throw new AdminServiceError("سرویس در WizardXray پیدا نشد؛ تغییری اعمال نشد.", { status: 404, code: "wizard_service_not_found" });
+          if (action === "extend-time") await upgradeServiceTime(clientId, extendDays);
+          else await upgradeServiceSize(clientId, addGig);
+          // Re-read the service: success is only declared when the panel shows the change.
+          let after = null;
+          try { after = (await findService(clientId))?.result?.latest_info || null; } catch { after = null; }
+          let verified = null;
+          if (action === "extend-time" && typeof beforeInfo.expire_date === "string" && typeof after?.expire_date === "string") {
+            verified = after.expire_date !== beforeInfo.expire_date;
+          }
+          if (action === "increase-traffic" && Number.isFinite(Number(beforeInfo.gig)) && Number.isFinite(Number(after?.gig))) {
+            verified = Number(after.gig) + 1e-6 >= Number(beforeInfo.gig) + addGig;
+          }
+          if (verified === false) {
+            throw new AdminServiceError("WizardXray تغییر را در سرویس نشان نداد؛ پیش از تلاش دوباره وضعیت را در پنل بررسی کنید.", { status: 502, code: "wizard_change_not_confirmed" });
+          }
+          // Remote success is authoritative. Local copies are best-effort; a failure is reported, never hidden.
+          let localSynced = true;
+          try {
+            if (action === "extend-time") {
+              const base = owner.service.expiresAt || owner.purchase?.expiresAt;
+              if (base) {
+                const next = new Date(new Date(base).getTime() + extendDays * DAY_MS);
+                await User.updateOne({ telegramId: String(owner.user.telegramId), "services.username": clientId }, { $set: { "services.$.expiresAt": next } });
+                if (owner.purchase?._id) await WalletPurchase.updateOne({ _id: owner.purchase._id }, { $set: { expiresAt: next } });
+              } else localSynced = false;
+            } else if (Number.isFinite(Number(owner.service.trafficGb))) {
+              await User.updateOne({ telegramId: String(owner.user.telegramId), "services.username": clientId }, { $inc: { "services.$.trafficGb": addGig } });
+            } else localSynced = false;
+          } catch { localSynced = false; }
+          return {
+            ok: true,
+            changed: true,
+            verified: verified === true,
+            localSynced,
+            panelExpiry: typeof after?.expire_date === "string" ? after.expire_date.slice(0, 80) : null,
+            panelGig: Number.isFinite(Number(after?.gig)) ? Number(after.gig) : null,
+            auditSummary: { changed: true, verified: verified === true, localSynced, ...(extendDays ? { days: extendDays } : { gig: addGig }) },
+          };
         }
         if (action === "disable") {
           const current = await findService(clientId);
@@ -265,6 +316,32 @@ export async function performVpnAction({ actorId, operationId, username, action,
     },
   });
   return result;
+}
+
+/**
+ * Live services created through the API key (documented `clients` method),
+ * cross-checked against local user records so unknown/orphan services are visible.
+ */
+export async function listRemoteClients({ actorId, limit = 100 } = {}) {
+  assertAdminUser(actorId);
+  const cap = Math.min(500, Math.max(1, Number.isSafeInteger(Number(limit)) ? Number(limit) : 100));
+  let response;
+  try { response = await listClients(cap); }
+  catch (error) { throw new AdminServiceError(safeWizardError(error), { status: error?.ambiguous ? 503 : 502, code: error?.code || "wizard_api_failed" }); }
+  const raw = Array.isArray(response?.result) ? response.result : Object.values(response?.result || {});
+  const SENSITIVE = /link|hash|token|key|pass|secret|uuid/i;
+  const items = raw.filter((row) => row && typeof row === "object").slice(0, cap).map((row) => {
+    const safe = {};
+    for (const [key, value] of Object.entries(row)) {
+      if (SENSITIVE.test(key) || !["string", "number", "boolean"].includes(typeof value)) continue;
+      safe[key] = typeof value === "string" ? value.slice(0, 120) : value;
+    }
+    return safe;
+  });
+  const names = items.map((row) => row.username).filter((name) => typeof name === "string" && /^[A-Za-z0-9_.-]{1,128}$/.test(name));
+  const known = names.length ? await User.find({ "services.username": { $in: names } }).select("services.username").lean() : [];
+  const knownSet = new Set(known.flatMap((user) => (user.services || []).map((service) => service.username)));
+  return { source: "wizardxray", fetchedAt: new Date().toISOString(), count: items.length, items: items.map((row) => ({ ...row, knownLocally: knownSet.has(row.username) })) };
 }
 
 export const isSafeWizardError = (error) => safeWizardError(error);

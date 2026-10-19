@@ -319,7 +319,7 @@ async function screenVpnDetail(bot, chatId, messageId, session, rowIndex) {
     ...(data.availableActions.changeLink ? [[{ text: "🔗 تغییر لینک", callback_data: `adm:vpact:change-link:${rowIndex}` }]] : []),
     ...(data.availableActions.disable ? [[{ text: "⛔ غیرفعال‌سازی", callback_data: `adm:vpact:disable:${rowIndex}` }]] : []),
     ...(data.availableActions.revoke ? [[{ text: "🗑 حذف قطعی", callback_data: `adm:vpact:revoke:${rowIndex}` }]] : []),
-    [{ text: "⏱ تمدید / 📦 حجم / 🔐 بازسازی — غیرفعال", callback_data: "adm:vpunavail" }],
+    [{ text: "⏱ تمدید / 📦 حجم — از پنل وب", callback_data: "adm:vpunavail" }],
     [REFRESH_BTN, BACK_BTN],
   ] };
   await editOrSend(bot, chatId, messageId, text, keyboard);
@@ -598,7 +598,7 @@ async function handleAdminCallbackInner(bot, query) {
       }
       case "vpunavail":
         await bot.answerCallbackQuery(query.id, {
-          text: "API تنظیم‌شده WizardXray نقطه پایانی امنی برای تمدید/افزایش حجم/بازسازی ندارد. از تغییر لینک یا حذف استفاده کنید.",
+          text: "تمدید زمان و افزایش حجم (متدهای upg_time و upg_size) از پنل وب انجام می‌شود تا مقدار و تأیید پنل دیده شود. بازسازی کانفیگ در API نسخهٔ ۱ وجود ندارد؛ از تغییر لینک استفاده کنید.",
           show_alert: true,
         }).catch(() => {});
         break;

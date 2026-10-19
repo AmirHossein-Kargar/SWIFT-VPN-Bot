@@ -89,7 +89,7 @@ panel, and an admin panel that runs entirely inside a Telegram group.
 | **MongoDB** | Authoritative store for users, balances, invoices and services. All money mutations use atomic single-document writes. |
 | **Redis** | Session store (TTL'd), in-flight payment locks, cron/scanner mutual exclusion. **Never** authoritative for money. |
 | **HooshPay** | Primary online gateway. Invoice created via REST; confirmation arrives as a signed webhook. |
-| **WizardXray** | VPN panel REST API: create / find / change-link / delete / deactivate service. |
+| **WizardXray** | VPN panel REST API v1 (all documented methods): status, clients, create, find, delsv, change_link, upg_time, upg_size, reverse_mode. |
 | **TRX scanner** | Polls TronScan every 5 minutes, matches incoming TRX against unpaid invoices, credits the wallet. |
 | **Express server** | Receives HooshPay webhooks, serves health probes and hosts the **web admin dashboard** (`/admin`, `web/public`) plus the admin JSON API (`/api/admin/*`). Runs inside the same process as the bot. |
 | **Admin services** | `services/admin/*` — the single implementation of authorization, audit logging, user/VPN/payment/product management, recovery, broadcast, analytics and health checks shared by the Telegram panel and the web dashboard. |
@@ -160,7 +160,7 @@ authoritative list — every variable below is read somewhere in the codebase.
 | `MONGO_URL` | MongoDB connection string | Also accepts `MONGODB_URI`, `MONGO_URI`, `DATABASE_URL`, or `MONGOHOST`+`MONGOPORT`+`MONGOUSER`+`MONGOPASSWORD`. `mongodb://user:pass@host:27017/swiftvpn?authSource=admin` |
 | `REDIS_HOST` | Redis host | Also accepts `REDISHOST`, or a full `REDIS_URL`. `127.0.0.1` |
 | `REDIS_PORT` | Redis port | Also accepts `REDISPORT`. `6379` |
-| `WIZARD_API_URL` | VPN panel base URL, no trailing slash | `https://panel.example.com` |
+| `WIZARD_API_URL` | WizardXray API v1 base URL, no trailing slash (method name is appended) | `https://robot.wizardxray.shop/newbot/api/v1` |
 | `VPN_API_KEY` | VPN panel bearer token | |
 | `HOOSHPAY_API_KEY` | HooshPay API key | |
 | `HOOSHPAY_WEBHOOK_SECRET` | HMAC-SHA256 secret for webhook signatures | **Mandatory.** If unset, every webhook is rejected. Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
@@ -716,9 +716,10 @@ and no destructive migration is run.
 
 ### 12.5 Honest limitations
 
-- VPN **extend-time / increase-traffic / regenerate-config** are marked
-  unavailable everywhere: the configured WizardXray client has no safe
-  endpoint for them (the user-facing bot already shows the same notice).
+- VPN **extend-time** (`upg_time`) and **increase-traffic** (`upg_size`) are implemented against the
+  provider document (min 1 day / 0.5 GB), are never auto-retried, re-read the service from the panel
+  and only report success when the panel shows the change. **regenerate-config** has no method in API v1
+  and stays unavailable (use change-link).
 - **Customer pricing scope:** the Telegram checkout uses the fixed ten-plan
   customer selling configuration in `customerPlans` (`services/plans.js`).
   `AdminProduct` continues to power management and analytics only; admin edits

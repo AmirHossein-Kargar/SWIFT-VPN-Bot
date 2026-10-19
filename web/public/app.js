@@ -795,11 +795,11 @@
           ${actionButton("change-link", "🔄 Change link", "", data.availableActions.changeLink)}
           ${actionButton("disable", "⛔ Disable", "danger", data.availableActions.disable)}
           ${actionButton("revoke", "🗑 Revoke permanently", "danger", data.availableActions.revoke)}
-          ${actionButton("extend-time", "⏱ Extend time", "", false, data.unavailableActions.extendTime)}
-          ${actionButton("increase-traffic", "📦 Increase traffic", "", false, data.unavailableActions.increaseTraffic)}
+          ${actionButton("extend-time", "⏱ Extend time", "", data.availableActions.extendTime)}
+          ${actionButton("increase-traffic", "📦 Increase traffic", "", data.availableActions.increaseTraffic)}
           ${actionButton("regenerate-config", "🔐 Regenerate config", "", false, data.unavailableActions.regenerateConfig)}
         </div>
-        <div class="warn-box" style="margin-top:10px">Disabled actions are not supported by the configured WizardXray API client and are intentionally not faked.</div>
+        <div class="warn-box" style="margin-top:10px">Regenerate config is not offered by the WizardXray API v1 and is intentionally not faked; use “Change link” for a new subscription link.</div>
       </div>`;
 
     openDrawer("VPN Service", clientId, html);
@@ -813,6 +813,8 @@
     const labels = {
       "change-link": { title: "Change subscription link", text: "WizardXray will issue a new subscription link for this service. The user's old link stops working.", confirm: "Change link", danger: false, reason: false },
       disable: { title: "Disable VPN service", text: "The service will be deactivated on WizardXray. It can be re-enabled later.", confirm: "Disable service", danger: true, reason: true },
+      "extend-time": { title: "Extend service time", text: "Adds days to the service on WizardXray (upg_time). The change is verified against the panel before it is reported as done.", confirm: "Extend time", danger: false, reason: true, field: ["days", "DAYS TO ADD", "e.g. 30"] },
+      "increase-traffic": { title: "Increase service traffic", text: "Adds traffic on WizardXray (upg_size, minimum 0.5 GB). The change is verified against the panel before it is reported as done.", confirm: "Add traffic", danger: false, reason: true, field: ["gig", "GB TO ADD", "e.g. 10"] },
       revoke: { title: "Revoke VPN service", text: "The service is permanently deleted from WizardXray and removed from the user's account. This cannot be undone.", confirm: "Revoke permanently", danger: true, reason: true },
     };
     const config = labels[action];
@@ -821,15 +823,16 @@
       title: config.title,
       bodyHtml: `
         ${config.danger ? `<div class="danger-box">${esc(config.text)}</div>` : `<div class="warn-box">${esc(config.text)}</div>`}
+        ${config.field ? fieldHtml(config.field[1], config.field[0], { type: "number", placeholder: config.field[2] }) : ""}
         ${config.reason ? reasonField() : ""}`,
       confirmText: config.confirm,
       danger: config.danger,
       onConfirm: async (values) => {
         try {
           const result = (await POST(`/vpns/${encodeURIComponent(vpn.clientId)}/actions`, {
-            operationId: newOperationId(), action, reason: values.reason,
+            operationId: newOperationId(), action, reason: values.reason, days: values.days, gig: values.gig,
           })).data;
-          toast("success", `Action completed (${action}).`);
+          toast(result.localSynced === false ? "info" : "success", `Action completed (${action}).${result.localSynced === false ? " Local copy not updated — panel values are authoritative." : ""}`);
           closeModal(); showVpn(vpn.clientId); loadVpns();
         } catch (error) { toast("error", error.message); }
       },

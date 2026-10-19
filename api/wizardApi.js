@@ -1,5 +1,13 @@
 import axios from "axios";
 
+/**
+ * WizardXray web service v1 (see the provider document "API v1"):
+ *   base   https://robot.wizardxray.shop/newbot/api/v1/<method>   (WIZARD_API_URL)
+ *   header Authorization: Bearer <api key>                        (VPN_API_KEY)
+ *   output JSON { ok, error, result, http_code }; success = ok:true / http_code 200
+ * Methods: status(GET) clients(GET, limit) create find delsv change_link
+ *          upg_time upg_size reverse_mode (POST, form encoded).
+ */
 const TIMEOUT_MS = 15_000;
 const MAX_BODY_BYTES = 1_048_576;
 let cachedClient = null;
@@ -128,10 +136,23 @@ function validatedProvisioningResponse(data, operation) {
   return data;
 }
 
-export async function createVpnService(gig, day, test = 0) {
-  if (!Number.isSafeInteger(Number(gig)) || Number(gig) <= 0 || !Number.isSafeInteger(Number(day)) || Number(day) <= 0) {
-    throw new TypeError("gig and day must be positive integers");
+const MIN_GIG = 0.5;
+function requireGig(value, name = "gig") {
+  const gig = Number(value);
+  if (!Number.isFinite(gig) || gig < MIN_GIG || gig > 100_000 || Math.round(gig * 100) / 100 !== gig) {
+    throw new TypeError(`${name} must be a number of at least ${MIN_GIG} (max two decimals)`);
   }
+  return gig;
+}
+function requireDays(value, name = "day") {
+  const days = Number(value);
+  if (!Number.isSafeInteger(days) || days < 1 || days > 3650) throw new TypeError(`${name} must be a positive integer number of days`);
+  return days;
+}
+
+export async function createVpnService(gig, day, test = 0) {
+  gig = requireGig(gig);
+  day = requireDays(day);
   if (![0, 1].includes(Number(test))) throw new TypeError("test must be 0 or 1");
   const data = await request("service creation", "POST", "/create", form({ gig, day, test }), { mutation: true });
   return validatedProvisioningResponse(data, "service creation");
@@ -154,12 +175,39 @@ export async function changeLinkService(username) {
 
 export async function deleteService(username) {
   requireUsername(username);
-  return request("service deletion", "POST", "/delsvc", form({ username }), { mutation: true });
+  return request("service deletion", "POST", "/delsv", form({ username }), { mutation: true });
 }
 
 export async function deactiveService(username) {
   requireUsername(username);
   return request("service mode change", "POST", "/reverse_mode", form({ username }), { mutation: true });
+}
+
+/** Documented `clients` (GET, optional limit): services created through this key. */
+export async function listClients(limit) {
+  let path = "/clients";
+  if (limit !== undefined && limit !== null && limit !== "") {
+    const value = Number(limit);
+    if (!Number.isSafeInteger(value) || value < 1 || value > 10_000) throw new TypeError("limit must be a positive integer");
+    path += `?limit=${value}`;
+  }
+  const data = await request("clients lookup", "GET", path);
+  if (data.result != null && !Array.isArray(data.result) && typeof data.result !== "object") {
+    throw new WizardApiError("clients lookup", { code: "invalid_response" });
+  }
+  return data;
+}
+
+/** Documented `upg_time`: add `day` days (min 1) to an existing service. Mutation: never auto-retried. */
+export async function upgradeServiceTime(username, day) {
+  requireUsername(username);
+  return request("service time upgrade", "POST", "/upg_time", form({ username, day: requireDays(day) }), { mutation: true });
+}
+
+/** Documented `upg_size`: add `gig` GB (min 0.5) to an existing service. Mutation: never auto-retried. */
+export async function upgradeServiceSize(username, gig) {
+  requireUsername(username);
+  return request("service size upgrade", "POST", "/upg_size", form({ username, gig: requireGig(gig) }), { mutation: true });
 }
 
 export async function StatusApi() {

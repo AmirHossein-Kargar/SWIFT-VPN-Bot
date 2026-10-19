@@ -5,7 +5,7 @@ import { AdminServiceError } from "../services/admin/authorization.js";
 import { runAuditedAction } from "../services/admin/audit.js";
 import { getDashboardMetrics } from "../services/admin/dashboard.js";
 import { listUsers, getUserDetail, changeUserBalance, setUserBlocked, getReferralOverview, resetTestServiceEligibility } from "../services/admin/users.js";
-import { listVpns, getVpnDetail, performVpnAction } from "../services/admin/vpns.js";
+import { listVpns, getVpnDetail, performVpnAction, listRemoteClients } from "../services/admin/vpns.js";
 import { listProducts, createProduct, updateProduct, duplicateProduct, reorderProducts } from "../services/admin/products.js";
 import { listPayments, getPaymentDetail, retryPayment, markPaymentRecoveryRequired, resolvePaymentRecovery, confirmBankInvoice, rejectBankInvoice } from "../services/admin/payments.js";
 import { getRecoveryQueue, retrySafeRecoveryItems } from "../services/admin/recovery.js";
@@ -293,6 +293,11 @@ router.get("/vpns", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+router.get("/vpns-remote/clients", async (req, res, next) => {
+  try { res.json({ ok: true, data: await listRemoteClients({ actorId: req.adminActorId, limit: req.query.limit }) }); }
+  catch (error) { next(error); }
+});
+
 router.get("/vpns/:username", async (req, res, next) => {
   try { res.json({ ok: true, data: await getVpnDetail({ actorId: req.adminActorId, username: req.params.username }) }); }
   catch (error) { next(error); }
@@ -306,6 +311,8 @@ router.post("/vpns/:username/actions", requireBody(), async (req, res, next) => 
       username: req.params.username,
       action: req.body.action,
       reason: req.body.reason,
+      days: req.body.days,
+      gig: req.body.gig,
       ipAddress: clientIp(req),
     });
     res.json({ ok: true, data: result });
