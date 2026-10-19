@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { applyTerminalStatusStamp } from "./terminalStamp.js";
 
 /**
  * HooshPayInvoice
@@ -181,6 +182,9 @@ hooshPayInvoiceSchema.index(
 // Index for user invoice lookup (profile, admin search)
 hooshPayInvoiceSchema.index({ userId: 1, createdAt: -1 }, { name: "idx_user_recent" });
 hooshPayInvoiceSchema.index({ recoveryStatus: 1, status: 1, createdAt: 1 }, { name: "idx_hoosh_recovery_queue" });
+
+// First-entry timestamp for cancelled/failed, used by the 24h invoice cleanup.
+applyTerminalStatusStamp(hooshPayInvoiceSchema, ["cancelled", "failed"]);
 
 const HooshPayInvoice = mongoose.model("HooshPayInvoice", hooshPayInvoiceSchema);
 export default HooshPayInvoice;

@@ -1,6 +1,7 @@
 import { applyNowPaymentsUpdate } from "./applyStatus.js";
 import { notifyNowPaymentsCredit } from "./notify.js";
 import { verifyNowPaymentsSignature } from "./signature.js";
+import { findTombstone, recordLateEvent } from "../payments/invoiceCleanup.js";
 
 function send(res, status, body) {
   if (res.headersSent) return;
@@ -19,6 +20,8 @@ export async function handleNowPaymentsIpn(req, res, {
   apply = applyNowPaymentsUpdate,
   bot = null,
   notify = notifyNowPaymentsCredit,
+  lookupTombstone = findTombstone,
+  recordLate = recordLateEvent,
 } = {}) {
   if (!secret) {
     log("error", "IPN secret is not configured", { requestId });
@@ -56,6 +59,23 @@ export async function handleNowPaymentsIpn(req, res, {
   }
 
   if (result.outcome === "unknown_order") {
+    // Signed notification for an invoice removed by the 24h cleanup: acknowledge
+    // (so the provider stops retrying), remember it, and never credit.
+    try {
+      const tombstone = await lookupTombstone({
+        provider: "nowpayments",
+        orderId: typeof payload.order_id === "string" ? payload.order_id : null,
+        paymentId: payload.payment_id != null ? String(payload.payment_id) : null,
+        invoiceId: payload.invoice_id != null ? String(payload.invoice_id) : null,
+      });
+      if (tombstone) {
+        await recordLate({ tombstone, status: payload.payment_status });
+        log("warn", "Signed IPN for an invoice removed by cleanup; ignored", { requestId });
+        return send(res, 200, { ok: true, received: true, ignored: "invoice_removed", request_id: requestId });
+      }
+    } catch {
+      return send(res, 503, { ok: false, error: "temporarily_unavailable", request_id: requestId });
+    }
     log("warn", "Signed IPN did not match an order", { requestId });
     return send(res, 404, { ok: false, error: "invoice_not_found", request_id: requestId });
   }
