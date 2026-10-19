@@ -77,9 +77,9 @@ describe("profile history and privacy", () => {
     assert.match(message, /شناسه کاربری: <code>123<\/code>/);
     assert.match(message, /علی &lt;تست&gt;/);
     assert.match(message, /@ali_user/);
-    assert.match(message, /125,000 تومان/);
-    assert.match(message, /خدمات فعال: <b>1<\/b> از 3 سرویس/);
-    assert.match(message, /پرداخت‌های موفق: <b>4<\/b>/);
+    assert.match(message, /۱۲۵٬۰۰۰ تومان/);
+    assert.match(message, /سرویس‌های فعال: <b>۱<[/]b>/);
+    assert.match(message, /پرداخت‌های موفق: <b>۴<[/]b>/);
     assert.match(message, /SWIFT-TEST/);
     assert.ok(message.includes(EMPTY_RECENT_ORDERS));
     assert.equal(message.includes(user.phoneNumber), false);

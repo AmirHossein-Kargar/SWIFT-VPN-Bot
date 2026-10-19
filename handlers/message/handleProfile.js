@@ -5,83 +5,162 @@ import HooshPayInvoice from "../../models/HooshPayInvoice.js";
 import NowPaymentsInvoice from "../../models/NowPaymentsInvoice.js";
 import CryptoInvoice from "../../models/CryptoInvoice.js";
 import bankInvoice from "../../models/invoice.js";
-import formatDate from "../../utils/formatDate.js";
 import escapeHtml from "../../utils/escapeHtml.js";
 import {
+  activeWindowQuery,
   eligibleRecentOrderStatusQuery,
-  isHiddenRecentOrderStatus,
+  isVisibleRecentOrder,
   normalizePaymentStatus,
 } from "../../services/payments/status.js";
 
 moment.loadPersian({ usePersianDigits: false, dialect: "persian-modern" });
 
-const EMPTY_RECENT_ORDERS = "▫️ سفارش واجد شرایطی برای نمایش وجود ندارد.";
+const EMPTY_RECENT_ORDERS = "▫️ هنوز سفارشی برای نمایش وجود ندارد.";
+const RECENT_ORDER_LIMIT = 5;
+// Per-provider over-fetch so collapsing duplicate pending rows can still fill the list.
+const PROVIDER_FETCH_LIMIT = 10;
+const SEPARATOR = "┄┄┄┄┄┄┄┄┄┄┄┄┄┄";
+const PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹";
+
+const PROVIDER_LABELS = Object.freeze({
+  hoosh: "پرداخت آنلاین",
+  nowpayments: "پرداخت با کریپتو",
+  trx: "پرداخت TRX",
+  bank: "کارت به کارت",
+});
+
+/** Persian digits for display text. Copyable identifiers stay Latin. */
+export function toPersianDigits(value) {
+  return String(value).replace(/\d/g, (digit) => PERSIAN_DIGITS[Number(digit)]);
+}
+
+export function formatToman(value) {
+  const number = Number(value);
+  return `${toPersianDigits((Number.isFinite(number) ? number : 0).toLocaleString("en-US").replaceAll(",", "٬"))} تومان`;
+}
+
+export function formatJalaliDate(value) {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) return "—";
+  return toPersianDigits(moment(date).format("jYYYY/jMM/jDD"));
+}
 
 /** Persian payment-status summary for the profile's recent-orders list. */
 export function paymentStatusFa(provider, record) {
-  if (record.recoveryStatus === "required") return "🔔 نیاز به بررسی";
+  if (record.recoveryStatus === "required") return "🔔 در حال بررسی";
   const status = normalizePaymentStatus(provider, record.status);
   if (status === "paid") return record.balanceCredited ? "✅ موفق" : "⏳ در حال تسویه";
   if (status === "partially_paid") return "⚠️ پرداخت ناقص";
-  if (status === "failed") return "❌ ناموفق";
   if (status === "reversed") return "↩️ بازگشت داده شد";
   if (provider === "bank") return "⏳ در انتظار تأیید";
   return "⏳ در انتظار پرداخت";
 }
 
-function queryWithVisibleStatus(extraExcluded = []) {
-  const status = eligibleRecentOrderStatusQuery();
-  return extraExcluded.length
-    ? { ...status, $nin: [...status.$nin, ...extraExcluded] }
-    : status;
+function visibleQuery(provider, userId, extra = {}, now = Date.now()) {
+  return {
+    userId,
+    status: eligibleRecentOrderStatusQuery(),
+    ...activeWindowQuery(provider, now),
+    ...extra,
+  };
 }
 
-async function recent(model, query, limit = 4) {
-  return model.find(query).sort({ createdAt: -1 }).limit(limit).lean();
+async function recent(model, query) {
+  return model.find(query).sort({ createdAt: -1, _id: -1 }).limit(PROVIDER_FETCH_LIMIT).lean();
+}
+
+function orderKey(provider, record) {
+  const id = record.uid || record.orderId || record.paymentId || record.invoiceId || record._id;
+  return id == null ? null : `${provider}:${id}`;
 }
 
 /**
- * Load eligible orders before sorting/limiting the cross-provider result. This
- * intentionally filters at MongoDB rather than fetching private/irrelevant rows
- * and hiding their labels in the rendered message.
+ * Load eligible orders before sorting/limiting the cross-provider result. The
+ * status/age predicate runs in MongoDB, so cancelled, expired, failed and
+ * abandoned rows are never fetched; the in-memory pass below only repeats the
+ * same policy for stores that ignore the predicate and collapses duplicates.
+ * Historical records are untouched.
  */
 export async function loadRecentProfileOrders(userId, {
   hooshModel = HooshPayInvoice,
   nowPaymentsModel = NowPaymentsInvoice,
   cryptoModel = CryptoInvoice,
   bankModel = bankInvoice,
+  now = Date.now(),
 } = {}) {
   const numericUserId = Number(userId);
-  const visible = queryWithVisibleStatus();
   const [hooshPayments, nowPayments, trxPayments, bankPayments] = await Promise.all([
-    recent(hooshModel, {
-      userId: numericUserId,
-      status: visible,
-      creationStatus: { $in: [null, "created"] },
-    }),
-    recent(nowPaymentsModel, {
-      userId: numericUserId,
-      status: queryWithVisibleStatus(["creation_failed"]),
-    }),
-    recent(cryptoModel, { userId: numericUserId, status: visible }),
-    recent(bankModel, { userId: numericUserId, status: visible }),
+    recent(hooshModel, visibleQuery("hoosh", numericUserId, { creationStatus: { $in: [null, "created"] } }, now)),
+    recent(nowPaymentsModel, visibleQuery("nowpayments", numericUserId, {}, now)),
+    recent(cryptoModel, visibleQuery("trx", numericUserId, {}, now)),
+    recent(bankModel, visibleQuery("bank", numericUserId, {}, now)),
   ]);
 
-  return [
-    ...hooshPayments.map((record) => ({ provider: "hoosh", label: "پرداخت آنلاین", record })),
-    ...nowPayments.map((record) => ({ provider: "nowpayments", label: "پرداخت ترون", record })),
-    ...trxPayments.map((record) => ({ provider: "trx", label: "پرداخت TRX", record })),
-    ...bankPayments.map((record) => ({ provider: "bank", label: "کارت به کارت", record })),
+  const candidates = [
+    ...hooshPayments.map((record) => ({ provider: "hoosh", label: PROVIDER_LABELS.hoosh, record })),
+    ...nowPayments.map((record) => ({ provider: "nowpayments", label: PROVIDER_LABELS.nowpayments, record })),
+    ...trxPayments.map((record) => ({ provider: "trx", label: PROVIDER_LABELS.trx, record })),
+    ...bankPayments.map((record) => ({ provider: "bank", label: PROVIDER_LABELS.bank, record })),
   ]
-    // Defensive legacy guard: the database predicate is authoritative, while
-    // this protects output if a test adapter or old non-Mongo store ignores it.
-    .filter(({ provider, record }) => !isHiddenRecentOrderStatus(provider, record.status))
-    .sort((a, b) => new Date(b.record.createdAt || 0) - new Date(a.record.createdAt || 0))
-    .slice(0, 4);
+    .filter(({ provider, record }) => isVisibleRecentOrder(provider, record, now))
+    .sort((a, b) => {
+      const delta = new Date(b.record.createdAt || 0) - new Date(a.record.createdAt || 0);
+      return delta || String(orderKey(b.provider, b.record)).localeCompare(String(orderKey(a.provider, a.record)));
+    });
+
+  const seen = new Set();
+  const pendingProviders = new Set();
+  const result = [];
+  for (const item of candidates) {
+    const key = orderKey(item.provider, item.record);
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    // Repeated attempts leave several open invoices; only the newest open one
+    // per provider is meaningful to the customer.
+    if (normalizePaymentStatus(item.provider, item.record.status) === "pending" && item.record.recoveryStatus !== "required") {
+      if (pendingProviders.has(item.provider)) continue;
+      pendingProviders.add(item.provider);
+    }
+    result.push(item);
+    if (result.length === RECENT_ORDER_LIMIT) break;
+  }
+  return result;
 }
 
 function paymentAmount(provider, record) {
   return provider === "nowpayments" ? Number(record.amountToman || 0) : Number(record.amount || 0);
+}
+
+/** Pure renderer so the layout can be tested without Telegram or MongoDB. */
+export function renderProfileMessage({ user, activeServices, orders }) {
+  const displayName = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
+  const orderLines = orders.map(({ provider, label, record }) =>
+    `${paymentStatusFa(provider, record)} · ${formatToman(paymentAmount(provider, record))}\n`
+    + `     ${label} · ${formatJalaliDate(record.createdAt)}`);
+
+  return [
+    "👤 <b>پروفایل من</b>",
+    SEPARATOR,
+    "",
+    "🪪 <b>اطلاعات حساب</b>",
+    `▫️ نام: ${displayName ? `<b>${escapeHtml(displayName)}</b>` : "ثبت نشده"}`,
+    `▫️ شناسه کاربری: <code>${escapeHtml(user.telegramId)}</code>`,
+    `▫️ نام کاربری: ${user.username ? `@${escapeHtml(user.username)}` : "ثبت نشده"}`,
+    `▫️ تاریخ عضویت: ${formatJalaliDate(user.createdAt)}`,
+    "",
+    "💰 <b>کیف پول</b>",
+    `▫️ موجودی: <b>${formatToman(user.balance)}</b>`,
+    "",
+    "📦 <b>سرویس‌های من</b>",
+    `▫️ سرویس‌های فعال: <b>${toPersianDigits(activeServices)}</b>`,
+    `▫️ پرداخت‌های موفق: <b>${toPersianDigits(user.successfulPayments || 0)}</b>`,
+    ...(user.referralCode
+      ? ["", "🎁 <b>دعوت از دوستان</b>", `▫️ کد معرف: <code>${escapeHtml(user.referralCode)}</code> (برای کپی لمس کنید)`]
+      : []),
+    "",
+    "🧾 <b>آخرین سفارش‌ها</b>",
+    ...(orderLines.length ? orderLines : [EMPTY_RECENT_ORDERS]),
+  ].join("\n");
 }
 
 const handleProfile = async (bot, chatId, userId, dependencies = {}) => {
@@ -93,8 +172,6 @@ const handleProfile = async (bot, chatId, userId, dependencies = {}) => {
       return;
     }
 
-    const formattedDate = formatDate(user.createdAt);
-
     // Active services = not revoked and (no expiry known OR expiry in future).
     const now = Date.now();
     const services = Array.isArray(user.services) ? user.services : [];
@@ -104,30 +181,8 @@ const handleProfile = async (bot, chatId, userId, dependencies = {}) => {
       return new Date(service.expiresAt).getTime() > now;
     }).length;
 
-    const recentOrders = await loadRecentProfileOrders(userId, dependencies);
-    const recentLines = recentOrders.map(({ provider, label, record }) => {
-      const amount = paymentAmount(provider, record).toLocaleString("en-US");
-      const date = record.createdAt ? moment(new Date(record.createdAt)).format("jYY/jMM/jDD") : "—";
-      return `▫️ ${label} — <code>${amount}</code> تومان | ${paymentStatusFa(provider, record)} | ${date}`;
-    });
-
-    const displayName = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
-    const balance = Number(user.balance || 0).toLocaleString("en-US");
-
-    const message = `
-👤 <b>پروفایل من</b>
-
-🆔 شناسه کاربری: <code>${escapeHtml(user.telegramId)}</code>
-${displayName ? `📌 نام: <b>${escapeHtml(displayName)}</b>\n` : ""}${user.username ? `🔗 یوزرنیم: @${escapeHtml(user.username)}\n` : ""}
-💰 موجودی کیف پول: <b>${balance} تومان</b>
-
-📦 خدمات فعال: <b>${activeServices}</b> از ${services.length} سرویس
-✅ پرداخت‌های موفق: <b>${user.successfulPayments || 0}</b>
-${user.referralCode ? `🎟️ کد معرف شما: <code>${escapeHtml(user.referralCode)}</code>\n` : ""}
-🧾 <b>آخرین سفارش‌ها:</b>
-${recentLines.length ? recentLines.join("\n") : EMPTY_RECENT_ORDERS}
-
-🕒 تاریخ عضویت: <code>${formattedDate}</code>`;
+    const orders = await loadRecentProfileOrders(userId, dependencies);
+    const message = renderProfileMessage({ user, activeServices, orders });
 
     const reply_markup = {
       reply_markup: {

@@ -157,10 +157,24 @@ function mapPaymentHistory(provider, record) {
   };
 }
 
+const TEST_SERVICE_IN_FLIGHT = ["provisioning", "manual_review"];
+
+/** Read-only summary of the existing test-service eligibility fields. */
+export function testServiceSummary(user) {
+  const status = user?.testServiceStatus || null;
+  const received = Boolean(user?.hasReceivedTest) || status === "completed";
+  return {
+    received,
+    status,
+    inFlight: TEST_SERVICE_IN_FLIGHT.includes(status),
+    eligible: !received && !status,
+  };
+}
+
 export async function getUserDetail({ actorId, telegramId, now = new Date() } = {}) {
   assertAdminUser(actorId);
   const id = requireTelegramId(telegramId);
-  const user = await User.findOne({ telegramId: id }).select("telegramId username firstName lastName balance successfulPayments totalServices services createdAt lastActivityAt isBanned blockedAt blockedBy blockReason referralCode referredByTelegramId").lean();
+  const user = await User.findOne({ telegramId: id }).select("telegramId username firstName lastName balance successfulPayments totalServices services createdAt lastActivityAt isBanned blockedAt blockedBy blockReason referralCode referredByTelegramId hasReceivedTest testServiceStatus testServiceNotificationPending").lean();
   if (!user) throw new AdminServiceError("کاربر یافت نشد.", { status: 404, code: "user_not_found" });
   const [spendRows, tracked, referralCount, purchases, hoosh, nowPayments, bank, crypto] = await Promise.all([
     WalletPurchase.aggregate([
@@ -200,6 +214,7 @@ export async function getUserDetail({ actorId, telegramId, now = new Date() } = 
     blockedAt: user.blockedAt || null,
     blockedBy: user.blockedBy || null,
     blockReason: user.blockReason || null,
+    testService: testServiceSummary(user),
     totalSpent: Number(spend.totalSpent || 0),
     orderCount: Number(spend.orderCount || 0),
     activeVpns: tracked.active,
@@ -300,6 +315,75 @@ export async function setUserBlocked({ actorId, operationId, telegramId, blocked
     },
   });
   return result;
+}
+
+/**
+ * Restore a user's eligibility for one more test service. This only clears the
+ * existing eligibility fields (hasReceivedTest / testServiceStatus) that
+ * services/createTestService.js already enforces; it never provisions anything.
+ * Refuses while a test service is being provisioned, awaits manual review, or
+ * its delivery message is still pending, so a reset can never cause a second
+ * concurrent issue or drop an undelivered link.
+ */
+export async function resetTestServiceEligibility({ actorId, operationId, telegramId, reason, ipAddress, userModel = User, auditModel } = {}) {
+  assertAdminUser(actorId);
+  const id = requireTelegramId(telegramId);
+  const safeReason = requireReason(reason);
+  const { result, replayed } = await runAuditedAction({
+    actorTelegramId: actorId,
+    operationId,
+    action: "USER_TEST_ELIGIBILITY_RESET",
+    targetType: "user",
+    targetId: id,
+    targetUserId: id,
+    ipAddress,
+    metadata: { reason: safeReason },
+    resumeStarted: true,
+    auditModel,
+    execute: async () => {
+      const before = await userModel.findOne({ telegramId: id }).select("hasReceivedTest testServiceStatus testServiceNotificationPending").lean();
+      if (!before) throw new AdminServiceError("کاربر یافت نشد.", { status: 404, code: "user_not_found" });
+      const summary = testServiceSummary(before);
+      if (summary.inFlight) {
+        throw new AdminServiceError("سرویس تست این کاربر در حال ساخت یا در انتظار بررسی دستی است؛ بعد از تعیین‌تکلیف دوباره تلاش کنید.", { status: 409, code: "test_service_in_progress" });
+      }
+      if (before.testServiceNotificationPending) {
+        throw new AdminServiceError("لینک سرویس تست قبلی هنوز برای کاربر ارسال نشده است.", { status: 409, code: "test_service_delivery_pending" });
+      }
+      if (summary.eligible) {
+        return { ok: true, telegramId: id, eligible: true, alreadyEligible: true, auditSummary: { alreadyEligible: true } };
+      }
+      const updated = await userModel.findOneAndUpdate(
+        {
+          telegramId: id,
+          testServiceStatus: { $nin: TEST_SERVICE_IN_FLIGHT },
+          testServiceNotificationPending: { $ne: true },
+        },
+        {
+          $set: {
+            hasReceivedTest: false,
+            testServiceStatus: null,
+            testServiceAttemptId: null,
+            testServiceStartedAt: null,
+            testServiceNotificationPending: false,
+          },
+          $unset: { testServiceNotificationClaimedAt: 1 },
+        },
+        { new: true },
+      ).select("telegramId hasReceivedTest testServiceStatus").lean();
+      if (!updated) {
+        throw new AdminServiceError("وضعیت سرویس تست هم‌زمان تغییر کرد؛ دوباره تلاش کنید.", { status: 409, code: "test_service_state_changed" });
+      }
+      return {
+        ok: true,
+        telegramId: id,
+        eligible: true,
+        alreadyEligible: false,
+        auditSummary: { previousStatus: before.testServiceStatus || null, hadReceivedTest: Boolean(before.hasReceivedTest) },
+      };
+    },
+  });
+  return replayed ? { ok: true, telegramId: id, eligible: true, replayed: true, ...result } : result;
 }
 
 export async function getReferralOverview({ actorId, page = 1, pageSize = 25 } = {}) {
