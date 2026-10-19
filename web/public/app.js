@@ -19,21 +19,18 @@
   // ── Utilities ──────────────────────────────────────────────────────────────
   const icon = (name) => `<svg class="ic"><use href="#i-${name}"/></svg>`;
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  const num = (value) => (value == null || Number.isNaN(Number(value))) ? "—" : Number(value).toLocaleString("en-US");
-  const money = (value) => (value == null || Number.isNaN(Number(value))) ? "—" : Number(value).toLocaleString("en-US") + " T";
-  const pct = (value) => (value == null || Number.isNaN(Number(value))) ? "—" : (100 * Number(value)).toFixed(1) + "%";
-  const dateFmt = (value) => {
-    if (!value) return "—";
-    const d = new Date(value);
-    if (Number.isNaN(d.getTime())) return "—";
-    return d.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
-  };
-  const dateShort = (value) => {
-    if (!value) return "—";
-    const d = new Date(value);
-    if (Number.isNaN(d.getTime())) return "—";
-    return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" });
-  };
+  const I18N = window.SwiftI18n;
+  const FMT = window.SwiftFormat;
+  const lang = () => I18N.lang();
+  const t = (key, vars) => I18N.t(key, vars);
+  const num = (value) => FMT.number(value, lang());
+  const money = (value) => FMT.money(value, lang());
+  const pct = (value) => FMT.percent(value, lang());
+  const compact = (value) => FMT.compact(value, lang());
+  const dateFmt = (value) => FMT.dateTime(value, lang());
+  const dateShort = (value) => FMT.date(value, lang());
+  const dayLabel = (value) => FMT.dayLabel(value, lang());
+  I18N.init();
 
   const debounce = (fn, ms) => {
     let timer;
@@ -87,16 +84,18 @@
   }
 
   // ── Modal ──────────────────────────────────────────────────────────────────
+  let modalOpener = null;
   function openModal({ title, bodyHtml, confirmText = "Confirm", danger = false, onConfirm }) {
+    modalOpener = document.activeElement;
     $("#modal-title").textContent = title;
     $("#modal-body").innerHTML = bodyHtml;
     const foot = $("#modal-foot");
     foot.innerHTML = "";
     const cancel = document.createElement("button");
-    cancel.className = "btn"; cancel.textContent = "Cancel";
+    cancel.className = "btn"; cancel.type = "button"; cancel.textContent = "Cancel";
     cancel.onclick = closeModal;
     const ok = document.createElement("button");
-    ok.className = `btn ${danger ? "danger" : "primary"}`;
+    ok.className = `btn ${danger ? "danger" : "primary"}`; ok.type = "button";
     ok.innerHTML = `${confirmText}`;
     ok.onclick = async () => {
       const values = {};
@@ -108,8 +107,17 @@
     };
     foot.append(cancel, ok);
     $("#modal-backdrop").classList.add("show");
+    document.body.classList.add("modal-open");
+    const first = $("#modal-body input, #modal-body textarea, #modal-body select") || ok;
+    window.setTimeout(() => first.focus(), 0);
   }
-  function closeModal() { $("#modal-backdrop").classList.remove("show"); }
+  function closeModal() {
+    if (!$("#modal-backdrop").classList.contains("show")) return;
+    $("#modal-backdrop").classList.remove("show");
+    document.body.classList.remove("modal-open");
+    if (modalOpener && typeof modalOpener.focus === "function") modalOpener.focus();
+    modalOpener = null;
+  }
   $("#modal-backdrop").addEventListener("click", (event) => { if (event.target.id === "modal-backdrop") closeModal(); });
 
   const fieldHtml = (label, name, { placeholder = "", type = "text", value = "", hint = "" } = {}) => `
@@ -122,16 +130,26 @@
   const reasonField = (hint = "Recorded in the audit log.") => fieldHtml("REASON", "reason", { placeholder: "Why is this action being taken?", hint });
 
   // ── Drawer ─────────────────────────────────────────────────────────────────
+  let drawerOpener = null;
   function openDrawer(title, sub, html) {
+    if (!$("#drawer").classList.contains("open")) drawerOpener = document.activeElement;
     $("#drawer-title").textContent = title;
     $("#drawer-sub").textContent = sub || "";
     $("#drawer-body").innerHTML = html;
     $("#drawer").classList.add("open");
+    $("#drawer").removeAttribute("inert");
     $("#drawer-backdrop").classList.add("show");
+    document.body.classList.add("modal-open");
+    window.setTimeout(() => $("#drawer-close").focus(), 0);
   }
   function closeDrawer() {
+    if (!$("#drawer").classList.contains("open")) return;
     $("#drawer").classList.remove("open");
+    $("#drawer").setAttribute("inert", "");
     $("#drawer-backdrop").classList.remove("show");
+    document.body.classList.remove("modal-open");
+    if (drawerOpener && typeof drawerOpener.focus === "function") drawerOpener.focus();
+    drawerOpener = null;
   }
   $("#drawer-close").onclick = closeDrawer;
   $("#drawer-backdrop").onclick = closeDrawer;
@@ -151,44 +169,87 @@
   };
 
   // ── Charts (SVG) ───────────────────────────────────────────────────────────
-  function lineChart(series, { height = 220, color = "#3B82F6", fill = true, format = num } = {}) {
-    if (!series || !series.length) return `<div class="empty">No data for this period yet.</div>`;
-    const width = 720;
-    const pad = { top: 14, right: 10, bottom: 24, left: 46 };
-    const values = series.map((d) => Number(d.value || 0));
-    const max = Math.max(...values, 1);
+  // Dependency-free renderer: colours come from CSS tokens (grid/labels), so
+  // both themes work; labels use the active language's digits and Jalali dates;
+  // the time axis always runs left-to-right (svg { direction: ltr }). The
+  // viewBox width follows the viewport so text stays readable on phones.
+  const chartWidth = () => (window.innerWidth < 560 ? 340 : window.innerWidth < 900 ? 560 : 720);
+
+  function niceMax(value) {
+    if (value <= 0) return 1;
+    const pow = 10 ** Math.floor(Math.log10(value));
+    const unit = [1, 2, 2.5, 5, 10].find((step) => step * pow >= value) * pow;
+    return unit;
+  }
+
+  function multiLineChart(rows, defs, { height = 220, format = num } = {}) {
+    if (!rows || !rows.length) return `<div class="empty">${esc(t("No data for this period yet."))}</div>`;
+    const width = chartWidth();
+    const pad = { top: 14, right: 12, bottom: 26, left: width < 400 ? 40 : 54 };
     const innerW = width - pad.left - pad.right;
     const innerH = height - pad.top - pad.bottom;
-    const x = (i) => pad.left + (series.length === 1 ? innerW / 2 : (i / (series.length - 1)) * innerW);
+    const max = niceMax(Math.max(...defs.flatMap((d) => rows.map((r) => Number(r[d.key] || 0))), 0));
+    const x = (i) => pad.left + (rows.length === 1 ? innerW / 2 : (i / (rows.length - 1)) * innerW);
     const y = (v) => pad.top + innerH - (v / max) * innerH;
-    const points = series.map((d, i) => `${x(i).toFixed(1)},${y(Number(d.value || 0)).toFixed(1)}`).join(" ");
-    const area = `${pad.left},${pad.top + innerH} ${points} ${pad.left + innerW},${pad.top + innerH}`;
-    const ticks = [0, max / 2, max];
-    const grid = ticks.map((t) =>
-      `<line x1="${pad.left}" x2="${width - pad.right}" y1="${y(t)}" y2="${y(t)}" stroke="#20262E" stroke-width="1"/>
-       <text x="${pad.left - 7}" y="${y(t) + 3.5}" fill="#5E6B7E" font-size="10" text-anchor="end">${format(t)}</text>`).join("");
-    const labels = series
-      .filter((_, i) => i % Math.ceil(series.length / 7) === 0 || i === series.length - 1)
-      .map((d) => {
-        const i = series.indexOf(d);
-        return `<text x="${x(i)}" y="${height - 6}" fill="#5E6B7E" font-size="9.5" text-anchor="middle">${esc(String(d.date).slice(5))}</text>`;
-      }).join("");
-    const dots = series.map((d, i) => `<circle cx="${x(i)}" cy="${y(Number(d.value || 0))}" r="2.4" fill="${color}"><title>${esc(d.date)}: ${format(d.value)}</title></circle>`).join("");
-    return `
-      <svg class="chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
-        ${grid}
-        ${fill ? `<polygon points="${area}" fill="rgba(59,130,246,0.10)"/>` : ""}
-        <polyline points="${points}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-        ${dots}
-        ${labels}
-      </svg>`;
+    const grid = [0, max / 2, max].map((tick) =>
+      `<line class="grid-line" x1="${pad.left}" x2="${width - pad.right}" y1="${y(tick)}" y2="${y(tick)}"/>
+       <text class="axis-label" x="${pad.left - 6}" y="${y(tick) + 3.5}" text-anchor="end">${esc(format(tick))}</text>`).join("");
+    const step = Math.max(1, Math.ceil(rows.length / (width < 400 ? 4 : 7)));
+    const labels = rows.map((row, i) => (i % step === 0 || i === rows.length - 1)
+      ? `<text class="axis-label" x="${x(i)}" y="${height - 7}" text-anchor="middle">${esc(row.label || "")}</text>` : "").join("");
+    const lines = defs.map((d, index) => {
+      const points = rows.map((r, i) => `${x(i).toFixed(1)},${y(Number(r[d.key] || 0)).toFixed(1)}`).join(" ");
+      const area = index === 0 ? `<polygon points="${pad.left},${pad.top + innerH} ${points} ${pad.left + innerW},${pad.top + innerH}" fill="${d.color}" opacity="0.10"/>` : "";
+      return `${area}<polyline points="${points}" fill="none" stroke="${d.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`
+        + rows.map((r, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(Number(r[d.key] || 0)).toFixed(1)}" r="2.3" fill="${d.color}"/>`).join("");
+    }).join("");
+    const summary = defs.map((d) => `${d.name}: ${format(rows.reduce((sum, r) => sum + Number(r[d.key] || 0), 0))}`).join("; ");
+    return `<svg class="chart" role="img" aria-label="${esc(summary)}" viewBox="0 0 ${width} ${height}" data-w="${width}" data-padl="${pad.left}" data-inner="${innerW}">${grid}${lines}${labels}</svg>`;
+  }
+
+  /** Touch- and mouse-friendly tooltip: pointer position -> nearest data point. */
+  function attachChartTips(selector, rows, defs, fmt) {
+    const box = $(selector);
+    const svg = box && box.querySelector("svg.chart");
+    if (!svg || !rows.length) return;
+    const tip = document.createElement("div");
+    tip.className = "chart-tip";
+    tip.hidden = true;
+    tip.setAttribute("role", "status");
+    box.appendChild(tip);
+    const show = (event) => {
+      const rect = svg.getBoundingClientRect();
+      const viewWidth = Number(svg.dataset.w);
+      const padLeft = Number(svg.dataset.padl);
+      const inner = Number(svg.dataset.inner);
+      const px = ((event.clientX - rect.left) / rect.width) * viewWidth;
+      const index = Math.min(rows.length - 1, Math.max(0, Math.round(((px - padLeft) / inner) * (rows.length - 1))));
+      const row = rows[index];
+      tip.textContent = `${row.label} — ${defs.map((d) => `${d.name}: ${fmt(row[d.key])}`).join(" · ")}`;
+      tip.hidden = false;
+      const boxRect = box.getBoundingClientRect();
+      const left = Math.min(Math.max(8, event.clientX - boxRect.left - 20), Math.max(8, boxRect.width - tip.offsetWidth - 8));
+      tip.style.left = `${left}px`;
+      tip.style.top = "4px";
+    };
+    svg.addEventListener("pointerdown", show);
+    svg.addEventListener("pointermove", show);
+    svg.addEventListener("pointerleave", (event) => { if (event.pointerType === "mouse") tip.hidden = true; });
+    // Touch: the tooltip stays after the finger lifts and closes on the next tap elsewhere.
+    document.addEventListener("pointerdown", (event) => { if (!svg.contains(event.target)) tip.hidden = true; });
+  }
+
+  function lineChart(series, { height = 220, color = "#3B82F6", format = num } = {}) {
+    if (!series || !series.length) return `<div class="empty">${esc(t("No data for this period yet."))}</div>`;
+    const rows = series.map((d) => ({ label: dayLabel(d.date), value: Number(d.value || 0) }));
+    return multiLineChart(rows, [{ key: "value", name: "", color }], { height, format });
   }
 
   function barChart(items, { height = 220, color = "#3B82F6", format = num } = {}) {
     const entries = (items || []).slice(0, 8);
-    if (!entries.length) return `<div class="empty">No data yet.</div>`;
-    const width = 720;
-    const pad = { top: 14, right: 10, bottom: 40, left: 46 };
+    if (!entries.length) return `<div class="empty">${esc(t("No data yet."))}</div>`;
+    const width = chartWidth();
+    const pad = { top: 14, right: 10, bottom: 40, left: 10 };
     const max = Math.max(...entries.map((e) => Number(e.count || 0)), 1);
     const innerW = width - pad.left - pad.right;
     const innerH = height - pad.top - pad.bottom;
@@ -199,13 +260,13 @@
       const bx = pad.left + i * slot + (slot - barW) / 2;
       const by = pad.top + innerH - barH;
       const label = String(entry.name || entry.productId || "?");
-      const short = label.length > 14 ? label.slice(0, 13) + "…" : label;
+      const short = label.length > 12 ? label.slice(0, 11) + "…" : label;
       return `
-        <rect x="${bx}" y="${by}" width="${barW}" height="${Math.max(barH, 1)}" rx="4" fill="${color}" opacity="${0.55 + 0.45 * (Number(entry.count || 0) / max)}"><title>${esc(label)}: ${num(entry.count)} (${money(entry.revenue)})</title></rect>
-        <text x="${bx + barW / 2}" y="${height - 22}" fill="#98A2B3" font-size="9.5" text-anchor="middle">${esc(short)}</text>
-        <text x="${bx + barW / 2}" y="${height - 10}" fill="#5E6B7E" font-size="9" text-anchor="middle">${format(entry.count)}</text>`;
+        <rect x="${bx}" y="${by}" width="${barW}" height="${Math.max(barH, 1)}" rx="4" fill="${color}" opacity="${0.55 + 0.45 * (Number(entry.count || 0) / max)}"><title>${esc(label)}: ${esc(num(entry.count))} (${esc(money(entry.revenue))})</title></rect>
+        <text class="axis-label-dim" x="${bx + barW / 2}" y="${height - 22}" text-anchor="middle">${esc(short)}</text>
+        <text class="axis-label" x="${bx + barW / 2}" y="${height - 10}" text-anchor="middle">${esc(format(entry.count))}</text>`;
     }).join("");
-    return `<svg class="chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">${bars}</svg>`;
+    return `<svg class="chart" role="img" aria-label="${esc(entries.map((e) => `${e.name || e.productId}: ${num(e.count)}`).join("; "))}" viewBox="0 0 ${width} ${height}">${bars}</svg>`;
   }
 
   // ── Navigation ─────────────────────────────────────────────────────────────
@@ -241,7 +302,7 @@
         section = item.section;
         html += `<div class="nav-label">${esc(section)}</div>`;
       }
-      html += `<div class="nav-item ${state.route === item.id ? "active" : ""}" data-route="${item.id}">${icon(item.icon)}<span>${esc(item.label)}</span><span class="badge" id="badge-${item.id}" style="display:none"></span></div>`;
+      html += `<a class="nav-item" href="#/${item.id}" data-route="${item.id}" ${state.route === item.id ? 'aria-current="page"' : ""}>${icon(item.icon)}<span>${esc(item.label)}</span><span class="badge" id="badge-${item.id}" style="display:none"></span></a>`;
     }
     html += `
       <div class="sidebar-footer">
@@ -250,14 +311,16 @@
         </div>
       </div>`;
     sidebar.innerHTML = html;
+    sidebar.querySelectorAll(".nav-item").forEach((el) => el.classList.toggle("active", el.dataset.route === state.route));
     $("#bottom-nav").innerHTML = ["dashboard", "users", "vpns", "payments", "recovery", "system"]
       .map((id) => {
         const item = NAV.find((n) => n.id === id);
-        return `<div class="nav-item ${state.route === id ? "active" : ""}" data-route="${id}">${icon(item.icon)}<span>${esc(item.label.split(" ")[0])}</span></div>`;
+        return `<a class="nav-item ${state.route === id ? "active" : ""}" href="#/${id}" data-route="${id}" ${state.route === id ? 'aria-current="page"' : ""}>${icon(item.icon)}<span>${esc(item.label.split(" ")[0])}</span></a>`;
       }).join("");
     $$(".nav-item").forEach((el) => {
-      el.onclick = () => navigate(el.dataset.route);
+      el.addEventListener("click", () => closeNav());
     });
+    syncNavInert();
   }
 
   async function setBadge(id, count) {
@@ -284,16 +347,19 @@
   }
 
   function pagerHtml(page, pages, total, handlerName) {
-    if (!pages || pages <= 1) return `<div class="pager"><div class="grow"></div><span>${num(total)} record${total === 1 ? "" : "s"}</span></div>`;
+    const first = lang() === "fa" ? "»" : "«";
+    const last = lang() === "fa" ? "«" : "»";
+    const count = t(total === 1 ? "{n} record" : "{n} records", { n: num(total) });
+    if (!pages || pages <= 1) return `<div class="pager"><div class="grow"></div><span>${esc(count)}</span></div>`;
     return `
-      <div class="pager">
-        <button class="btn sm" data-pager="${handlerName}" data-page="1" ${page <= 1 ? "disabled" : ""}>«</button>
-        <button class="btn sm" data-pager="${handlerName}" data-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>Prev</button>
-        <span class="grow">Page ${page} of ${pages}</span>
-        <span>${num(total)} records</span>
-        <button class="btn sm" data-pager="${handlerName}" data-page="${page + 1}" ${page >= pages ? "disabled" : ""}>Next</button>
-        <button class="btn sm" data-pager="${handlerName}" data-page="${pages}" ${page >= pages ? "disabled" : ""}>»</button>
-      </div>`;
+      <nav class="pager" aria-label="Pagination">
+        <button class="btn sm" type="button" data-pager="${handlerName}" data-page="1" aria-label="First page" ${page <= 1 ? "disabled" : ""}>${first}</button>
+        <button class="btn sm" type="button" data-pager="${handlerName}" data-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>Prev</button>
+        <span class="grow">${esc(t("Page {page} of {pages}", { page: num(page), pages: num(pages) }))}</span>
+        <span>${esc(count)}</span>
+        <button class="btn sm" type="button" data-pager="${handlerName}" data-page="${page + 1}" ${page >= pages ? "disabled" : ""}>Next</button>
+        <button class="btn sm" type="button" data-pager="${handlerName}" data-page="${pages}" aria-label="Last page" ${page >= pages ? "disabled" : ""}>${last}</button>
+      </nav>`;
   }
 
   function bindPagers() {
@@ -369,7 +435,6 @@
     if (!data.__health) loadHealthInto("#health-grid");
   }
 
-  const compact = (v) => (v >= 1_000_000 ? (v / 1_000_000).toFixed(1) + "M" : v >= 1000 ? (v / 1000).toFixed(v >= 10_000 ? 0 : 1) + "k" : Math.round(v));
 
   function stat(label, value, ic, tone = "", foot = "") {
     return `<div class="stat ${tone ? `tone-${tone}` : ""}">
@@ -381,7 +446,7 @@
 
   function errorBox(error) {
     return `<div class="card card-pad"><div class="danger-box">${icon("alert")} ${esc(error.message || "Could not load this page.")}</div>
-      <div style="margin-top:12px"><button class="btn" onclick="window.dispatchEvent(new HashChangeEvent('hashchange'))">Try again</button></div></div>`;
+      <div style="margin-top:12px"><button class="btn" type="button" data-retry>Try again</button></div></div>`;
   }
 
   function healthCards(services) {
@@ -398,7 +463,7 @@
           <div><span>Last check</span><span>${dateFmt(service.lastCheckedAt)}</span></div>
           <div><span>Last success</span><span>${dateFmt(service.lastSuccessAt)}</span></div>
           <div><span>Last failure</span><span>${dateFmt(service.lastFailureAt)}</span></div>
-          ${service.error ? `<div><span>Issue</span><span style="color:#FCA5A5">${esc(service.error)}</span></div>` : ""}
+          ${service.error ? `<div><span>Issue</span><span style="color:var(--on-red)">${esc(service.error)}</span></div>` : ""}
           ${service.lastErrorMessage && !service.error ? `<div><span>Last error</span><span>${esc(service.lastErrorMessage)}</span></div>` : ""}
         </div>
       </div>`).join("");
@@ -519,8 +584,9 @@
           <dt>Orders</dt><dd>${num(data.orderCount)}</dd>
           <dt>Active VPNs</dt><dd>${num(data.activeVpns)}${data.untrackedServiceCount ? ` <span class="pill gray">+${data.untrackedServiceCount} untracked</span>` : ""}</dd>
           <dt>Expired VPNs</dt><dd>${num(data.expiredVpns)}</dd>
+          <dt>Test service</dt><dd>${data.testService?.inFlight ? "In progress" : data.testService?.eligible ? "Eligible" : "Already received"}</dd>
           <dt>Referrals</dt><dd>${num(data.referral.referralCount)} referred${data.referral.referredByTelegramId ? ` · referred by ${esc(data.referral.referredByTelegramId)}` : ""}${data.referral.trackingAvailable ? "" : " · not yet tracked"}</dd>
-          ${user.isBanned ? `<dt>Blocked</dt><dd style="color:#FCA5A5">${dateFmt(data.blockedAt)}${data.blockReason ? ` — ${esc(data.blockReason)}` : ""}</dd>` : ""}
+          ${user.isBanned ? `<dt>Blocked</dt><dd style="color:var(--on-red)">${dateFmt(data.blockedAt)}${data.blockReason ? ` — ${esc(data.blockReason)}` : ""}</dd>` : ""}
         </div>
       </div>
       <div>
@@ -529,6 +595,8 @@
           <button class="btn success sm" data-act="add-balance">${icon("plus")} Add balance</button>
           <button class="btn danger sm" data-act="remove-balance">Remove balance</button>
           <button class="btn sm" data-act="refresh-user">${icon("refresh")} Refresh</button>
+          ${data.testService && !data.testService.eligible && !data.testService.inFlight
+            ? `<button class="btn sm" data-act="restore-test">${icon("refresh")} Restore test service</button>` : ""}
           ${user.isBanned
             ? `<button class="btn success sm" data-act="unblock">${icon("check")} Unblock</button>`
             : `<button class="btn danger sm" data-act="block">Block user</button>`}
@@ -567,6 +635,7 @@
         const action = button.dataset.act;
         if (action === "refresh-user") return showUser(telegramId);
         if (action === "add-balance" || action === "remove-balance") return balanceModal(telegramId, action === "add-balance" ? "add" : "remove");
+        if (action === "restore-test") return testEligibilityModal(telegramId);
         if (action === "block") return blockModal(telegramId, true);
         if (action === "unblock") return blockModal(telegramId, false);
       };
@@ -588,6 +657,23 @@
             operationId: newOperationId(), amount: values.amount, direction, reason: values.reason,
           })).data;
           toast("success", `Balance updated — new balance ${money(result.balance)}.`);
+          closeModal(); showUser(telegramId);
+        } catch (error) { toast("error", error.message); }
+      },
+    });
+  }
+
+  function testEligibilityModal(telegramId) {
+    openModal({
+      title: "Restore test service",
+      bodyHtml: `<div class="warn-box">This only lets the user request one more test service. No service is created.</div>
+        <div class="kv"><dt>Telegram ID</dt><dd class="mono">${esc(telegramId)}</dd></div>
+        ${reasonField()}`,
+      confirmText: "Restore test service",
+      onConfirm: async (values) => {
+        try {
+          await POST(`/users/${encodeURIComponent(telegramId)}/test-eligibility`, { operationId: newOperationId(), reason: values.reason });
+          toast("success", t("Test service eligibility restored."));
           closeModal(); showUser(telegramId);
         } catch (error) { toast("error", error.message); }
       },
@@ -700,7 +786,7 @@
           <dt>Traffic limit</dt><dd>${data.trafficGb != null ? num(data.trafficGb) + " GB" : "—"}</dd>
           <dt>Traffic used</dt><dd>${esc(data.trafficUsed || "—")}</dd>
           <dt>Traffic left</dt><dd>${data.trafficRemainingGb != null ? num(data.trafficRemainingGb) + " GB" : "—"}</dd>
-          <dt>WizardXray</dt><dd>${pill(data.wizardXray.status)} ${data.wizardXray.latencyMs != null ? `<span class="mono" style="color:var(--text-faint)">${data.wizardXray.latencyMs}ms</span>` : ""}${data.wizardXray.error ? `<div style="color:#FCA5A5;font-size:12px">${esc(data.wizardXray.error)}</div>` : ""}</dd>
+          <dt>WizardXray</dt><dd>${pill(data.wizardXray.status)} ${data.wizardXray.latencyMs != null ? `<span class="mono" style="color:var(--text-faint)">${data.wizardXray.latencyMs}ms</span>` : ""}${data.wizardXray.error ? `<div style="color:var(--on-red);font-size:12px">${esc(data.wizardXray.error)}</div>` : ""}</dd>
         </div>
       </div>
       <div>
@@ -828,7 +914,7 @@
           <dt>Fulfilled at</dt><dd>${dateFmt(data.fulfilledAt)}</dd>
           <dt>Status</dt><dd>${pill(data.status)} <span style="color:var(--text-faint);font-size:11.5px">raw: ${esc(data.rawStatus)}</span></dd>
           <dt>Retries</dt><dd>${num(data.retryCount)}${data.lastRetryAt ? ` · last ${dateFmt(data.lastRetryAt)}` : ""}${data.nextRetryAt ? ` · next ${dateFmt(data.nextRetryAt)}` : ""}</dd>
-          ${data.lastError ? `<dt>Last error</dt><dd style="color:#FCA5A5">${esc(data.lastError)}</dd>` : ""}
+          ${data.lastError ? `<dt>Last error</dt><dd style="color:var(--on-red)">${esc(data.lastError)}</dd>` : ""}
           ${data.purchase ? `<dt>Service</dt><dd class="mono">${esc(data.purchase.serviceUsername || "—")}</dd><dt>Plan</dt><dd>${esc(data.purchase.product || "—")} · ${num(data.purchase.trafficGb)} GB · ${num(data.purchase.durationDays)}d</dd>` : ""}
         </div>
       </div>
@@ -967,7 +1053,7 @@
               <td class="mono">${esc(item.userId)}</td>
               <td class="num">${money(item.amount)}</td>
               <td class="num">${num(item.retryCount)}</td>
-              <td style="color:#FCA5A5">${esc(item.lastError || "—")}</td>
+              <td style="color:var(--on-red)">${esc(item.lastError || "—")}</td>
               <td>${dateFmt(item.nextRetryAt)}</td>
               <td>${item.retrySafe ? `<button class="btn sm" data-retry-key="${esc(item.key)}">${icon("refresh")} Retry</button>` : `<button class="btn ghost sm" data-resolve-key="${esc(item.key)}">Resolve…</button>`}</td>
             </tr>`).join("")}
@@ -1327,77 +1413,176 @@
   }
 
   // ── Analytics ──────────────────────────────────────────────────────────────
-  let analyticsGranularity = "monthly";
+  // Server-side report (/analytics/report): every figure carries a definition,
+  // a comparison with the preceding equivalent period and an explicit
+  // "not available" instead of a silent zero. Top-ups (cash into wallets) and
+  // sales (services bought) are shown separately and never added together.
+  const analyticsState = { range: "30d", from: "", to: "" };
+  const RANGE_TABS = [
+    ["today", "Today"], ["7d", "Last 7 days"], ["30d", "Last 30 days"],
+    ["thisMonth", "This month"], ["prevMonth", "Previous month"], ["custom", "Custom range"],
+  ];
+  const KPI_LABELS = {
+    users_total: "Total users", users_new: "New users in period", users_active: "Active users",
+    services_active: "Active services", services_activated: "New activations", services_expiring_7d: "Expiring in 7 days",
+    payment_attempts: "Payment attempts", payments_successful: "Successful payments", payment_success_rate: "Success rate",
+    payments_failed: "Failed payments", payments_cancelled: "Cancelled payments", payments_review: "Partial / manual review",
+    buyers_unique: "Unique buyers", buyer_retention: "Buyer retention",
+    topups_gross: "Gross top-ups", topups_count: "Top-up count", topups_average: "Average top-up",
+    refunds_reversals: "Refunds & reversals", refunds_reversals_count: "Refund & reversal count", topups_net: "Net top-ups",
+    wallet_balance_total: "Wallet balances (now)",
+    sales_gross: "Gross sales", sales_refunded: "Refunded purchases", sales_net: "Net sales", sales_average_order: "Average order value",
+  };
+  const KPI_GROUPS = [
+    { group: "operational", title: "Operational", sub: "People, services and payment attempts." },
+    { group: "financial", title: "Financial — wallet top-ups", sub: "Money received into wallets. A top-up is not revenue." },
+    { group: "sales", title: "Sales — services bought", sub: "Services customers bought from their wallets. Not cash collected." },
+  ];
+
+  function kpiValueHtml(item) {
+    if (item.value === null || item.value === undefined) return `<div class="kpi-value na">${esc(t("Not available"))}</div>`;
+    const text = item.unit === "toman" ? money(item.value) : item.unit === "ratio" ? pct(item.value) : num(item.value);
+    return `<div class="kpi-value">${esc(text)}</div>`;
+  }
+
+  function deltaHtml(change) {
+    if (!change) return "";
+    if (change.state === "up" || change.state === "down") {
+      const arrow = change.state === "up" ? "▲" : "▼";
+      return `<span class="delta ${change.state}">${arrow} ${esc(pct(Math.abs(change.pct)))}</span>`;
+    }
+    if (change.state === "flat") return `<span class="delta flat">${esc(t("No change"))}</span>`;
+    if (change.state === "no_baseline") return `<span class="delta no_baseline">${esc(t("No baseline"))}</span>`;
+    return "";
+  }
+
+  function kpiCard(item, definitions) {
+    const label = KPI_LABELS[item.id] || item.id;
+    const previous = item.previous === undefined || item.previous === null ? "" : (item.unit === "toman" ? money(item.previous) : item.unit === "ratio" ? pct(item.previous) : num(item.previous));
+    return `<div class="kpi" data-kpi="${esc(item.id)}">
+      <div class="kpi-label"><span>${esc(t(label))}</span>
+        <button type="button" class="def-btn" data-def="${esc(item.id)}" aria-label="${esc(t("Definition"))}: ${esc(t(label))}" title="${esc(definitions[item.id] || "")}">i</button></div>
+      ${kpiValueHtml(item)}
+      <div class="kpi-sub">${deltaHtml(item.change)}${previous ? `<span>${esc(t("vs previous"))}: <span class="num">${esc(previous)}</span></span>` : ""}</div>
+    </div>`;
+  }
+
+  function distributionRows(rows, { labelOf, amountOf, countOf }) {
+    const max = Math.max(...rows.map(amountOf), 1);
+    return rows.map((row) => `<div class="dist-row">
+        <span>${esc(labelOf(row))}</span>
+        <span class="bar" aria-hidden="true"><span style="width:${Math.max(2, Math.round((amountOf(row) / max) * 100))}%"></span></span>
+        <span class="amount num">${esc(money(amountOf(row)))} · ${esc(num(countOf(row)))}</span>
+      </div>`).join("");
+  }
 
   async function pageAnalytics() {
+    const fa = lang() === "fa";
     $("#content").innerHTML = `
-      <div class="filter-bar" style="border-radius:var(--radius-lg) var(--radius-lg) 0 0;background:var(--bg-elev);border:1px solid var(--border);border-bottom:none">
-        <div class="tabs">
-          ${["daily", "weekly", "monthly"].map((granularity) => `<button class="tab ${analyticsGranularity === granularity ? "active" : ""}" data-gran="${granularity}">${granularity}</button>`).join("")}
+      <div class="range-bar">
+        <div class="tabs" role="tablist" aria-label="${esc(t("Compared with the preceding equivalent period"))}">
+          ${RANGE_TABS.map(([id, label]) => `<button type="button" role="tab" aria-selected="${analyticsState.range === id}" class="tab ${analyticsState.range === id ? "active" : ""}" data-range="${id}">${esc(t(label))}</button>`).join("")}
         </div>
+        <button type="button" class="btn sm" id="an-export">${icon("download")} ${esc(t("Export CSV"))}</button>
       </div>
-      <div id="analytics-body" style="background:var(--bg-elev);border:1px solid var(--border);border-top:none;border-radius:0 0 var(--radius-lg) var(--radius-lg)">${loading()}</div>`;
-    $$("#content [data-gran]").forEach((tab) => {
-      tab.onclick = () => { analyticsGranularity = tab.dataset.gran; pageAnalytics(); };
+      ${analyticsState.range === "custom" ? `<div class="range-bar"><div class="custom">
+        <label class="field"><span class="sr-only">${esc(t("Start date"))}</span><input id="an-from" class="input" type="date" value="${esc(analyticsState.from)}" aria-label="${esc(t("Start date"))}" /></label>
+        <label class="field"><span class="sr-only">${esc(t("End date"))}</span><input id="an-to" class="input" type="date" value="${esc(analyticsState.to)}" aria-label="${esc(t("End date"))}" /></label>
+        <button type="button" class="btn primary sm" id="an-apply">${esc(t("Apply"))}</button></div></div>` : ""}
+      <div id="analytics-body" aria-live="polite">${loading()}</div>`;
+
+    $$("#content [data-range]").forEach((tab) => {
+      tab.onclick = () => { analyticsState.range = tab.dataset.range; pageAnalytics(); };
     });
-    let data;
-    try { data = (await GET(`/analytics?granularity=${analyticsGranularity}`)).data; }
+    const queryString = (extra = {}) => {
+      const params = new URLSearchParams({ range: analyticsState.range, calendar: fa ? "jalali" : "gregorian", ...extra });
+      if (analyticsState.range === "custom") { params.set("from", analyticsState.from); params.set("to", analyticsState.to); }
+      return params.toString();
+    };
+    if ($("#an-apply")) $("#an-apply").onclick = () => {
+      analyticsState.from = $("#an-from").value; analyticsState.to = $("#an-to").value;
+      if (!analyticsState.from || !analyticsState.to) return toast("error", t("Start date") + " / " + t("End date"));
+      pageAnalytics();
+    };
+    $("#an-export").onclick = () => {
+      if (analyticsState.range === "custom" && (!analyticsState.from || !analyticsState.to)) return toast("error", t("Start date") + " / " + t("End date"));
+      window.location.assign(`/api/admin/analytics/export.csv?${queryString()}`);
+      toast("success", t("Export started."));
+    };
+    if (analyticsState.range === "custom" && (!analyticsState.from || !analyticsState.to)) {
+      $("#analytics-body").innerHTML = `<div class="empty">${icon("chart")} ${esc(t("Start date"))} / ${esc(t("End date"))}</div>`;
+      return;
+    }
+
+    let report;
+    try { report = (await GET(`/analytics/report?${queryString()}`)).data; }
     catch (error) { $("#analytics-body").innerHTML = errorBox(error); return; }
-    const m = data.metrics;
+
+    const byId = Object.fromEntries(report.kpis.map((item) => [item.id, item]));
+    const rangeText = `${dateShort(report.range.from)} → ${dateShort(new Date(new Date(report.range.to).getTime() - 1))}`;
+    const cacheText = report.cache.cached ? `${t("Showing cached results")} (${num(report.cache.ageSeconds)} ${t("seconds ago")})` : t("Live");
+    const series = report.series;
+    const chartRows = series.map((row) => ({ label: dayLabel(row.start), topups: row.topups, sales: row.sales, newUsers: row.newUsers, orders: row.orders }));
+    const providerNames = { hooshpay: "HooshPay", nowpayments: "NOWPayments", trx: "TRX", bank: "Bank card" };
+    const outcomeKeys = ["successful", "settling", "pending", "failed", "cancelled", "expired", "partial", "refunded", "review", "other"];
+
     $("#analytics-body").innerHTML = `
-      <div style="padding:16px 16px 0">
-        <div class="grid cols-4">
-          ${stat("Revenue (month)", money(m.revenue.month), "card", "green")}
-          ${stat("Orders (completed)", num(m.orders.completed), "box")}
-          ${stat("Conversion rate", pct(m.conversionRate), "users", "blue", data.definitions.conversionRate)}
-          ${stat("Avg top-up (month)", money(m.averageTopUpValueMonth), "card")}
-        </div>
-        <div class="grid cols-4" style="margin-top:14px">
-          ${stat("Users total", num(m.users.total), "users")}
-          ${stat("Active users (30d)", num(m.users.active), "users", "green")}
-          ${stat("Paying users", num(m.users.paying), "users", "blue")}
-          ${stat("Active VPNs (tracked)", num(m.vpns.activeTracked), "globe")}
-        </div>
-        <div class="grid cols-4" style="margin-top:14px;margin-bottom:14px">
-          ${stat("Failed payment rate", pct(m.failedPaymentRate), "alert", m.failedPaymentRate > 0.1 ? "red" : "", data.definitions.failedPaymentRate)}
-          ${stat("Failed provisioning rate", pct(m.failedProvisioningRate), "alert", m.failedProvisioningRate > 0.05 ? "red" : "", data.definitions.failedProvisioningRate)}
-          ${stat("Expired VPNs (tracked)", num(m.vpns.expiredTracked), "clock", "yellow")}
-          ${stat("Revenue today", money(m.revenue.today), "card", "green")}
+      <p class="fresh-note">${esc(rangeText)} · ${esc(t("Timezone: Asia/Tehran"))} · ${esc(t("Amounts are in Toman"))} · ${esc(cacheText)} ·
+        <a href="#" id="an-nocache">${esc(t("Re-run without cache"))}</a></p>
+      ${KPI_GROUPS.map((g) => `<section class="kpi-group" aria-labelledby="kg-${g.group}">
+        <h2 id="kg-${g.group}">${esc(t(g.title))}</h2><p>${esc(t(g.sub))}</p>
+        <div class="kpi-grid">${report.kpis.filter((item) => item.group === g.group).map((item) => kpiCard(item, report.definitions)).join("")}</div>
+      </section>`).join("")}
+      <div class="grid cols-2" style="margin-bottom:16px">
+        <div class="card chart-card">
+          <div class="card-head"><h3>${esc(t("Top-ups vs sales"))}</h3><span class="sub">${esc(t("Amounts are in Toman"))}</span></div>
+          <div class="legend"><span><i style="background:var(--blue)"></i>${esc(t("Top-ups"))}</span><span><i style="background:var(--green)"></i>${esc(t("Sales"))}</span></div>
+          <div class="card-pad chart-box" id="chart-money">${multiLineChart(chartRows, [
+            { key: "topups", name: t("Top-ups"), color: "#3B82F6" },
+            { key: "sales", name: t("Sales"), color: "#22C55E" },
+          ], { format: compact, tipFormat: money })}</div>
         </div>
         <div class="card chart-card">
-          <div class="card-head"><h3>Revenue trend (${data.granularity})</h3>
-            <span class="sub">HooshPay + NOWPayments + TRX + bank · ${Object.entries(m.revenue.byProviderMonth).map(([provider, amount]) => `${provider}: ${money(amount)}`).join(" · ")}</span>
-          </div>
-          <div class="card-pad">${lineChart(data.series.map((row) => ({ date: row.date, value: row.revenue })), { format: compact })}</div>
+          <div class="card-head"><h3>${esc(t("New users per day"))}</h3></div>
+          <div class="card-pad chart-box" id="chart-users">${multiLineChart(chartRows, [{ key: "newUsers", name: t("New users in period"), color: "#8B5CF6" }], { format: num, tipFormat: num })}</div>
         </div>
-        <div class="grid cols-2" style="margin-top:14px">
-          <div class="card chart-card">
-            <div class="card-head"><h3>Popular products</h3><span class="sub">all-time completed orders</span></div>
-            <div class="card-pad">${barChart(data.popularProducts)}</div>
-          </div>
-          <div class="card">
-            <div class="card-head"><h3>Top spenders</h3></div>
-            <div class="table-wrap"><table class="data">
-              <thead><tr><th>User</th><th class="num">Orders</th><th class="num">Total spent</th></tr></thead>
-              <tbody>${data.topSpenders.map((spender) => `
-                <tr data-user="${esc(spender.telegramId)}"><td class="mono">${esc(spender.telegramId)}</td><td class="num">${num(spender.orderCount)}</td><td class="num">${money(spender.totalSpent)}</td></tr>`).join("")}
-              </tbody></table></div>
-          </div>
-        </div>
-        <div class="card" style="margin:14px 0 16px">
-          <div class="card-head"><h3>Product margins</h3><span class="sub">${esc(data.definitions.estimatedProfit)}</span></div>
-          <div class="table-wrap"><table class="data">
-            <thead><tr><th>Product</th><th class="num">Orders</th><th class="num">Revenue</th><th class="num">Est. cost</th><th class="num">Est. profit</th></tr></thead>
-            <tbody>${data.popularProducts.map((product) => `
-              <tr><td>${esc(product.name || product.productId)}</td><td class="num">${num(product.count)}</td><td class="num">${money(product.revenue)}</td>
-              <td class="num">${product.estimatedCost == null ? "—" : money(product.estimatedCost)}</td>
-              <td class="num" style="color:${product.estimatedProfit == null ? "" : product.estimatedProfit >= 0 ? "var(--green)" : "var(--red)"}">${product.estimatedProfit == null ? "—" : money(product.estimatedProfit)}</td></tr>`).join("")}
-            </tbody></table></div>
-        </div>
-      </div>`;
-    $("#analytics-body").querySelectorAll("[data-user]").forEach((row) => {
-      row.onclick = () => showUser(row.dataset.user);
+      </div>
+      <div class="grid cols-2" style="margin-bottom:16px">
+        <div class="card"><div class="card-head"><h3>${esc(t("Top-ups by provider"))}</h3></div><div class="card-pad">
+          ${report.distributions.providers.some((p) => p.count) ? distributionRows(report.distributions.providers.filter((p) => p.count), { labelOf: (p) => providerNames[p.provider] || p.provider, amountOf: (p) => p.amount, countOf: (p) => p.count }) : `<div class="empty">${esc(t("No data for this range."))}</div>`}
+        </div></div>
+        <div class="card"><div class="card-head"><h3>${esc(t("Top-ups by cryptocurrency / network"))}</h3></div><div class="card-pad">
+          ${report.distributions.crypto.length ? distributionRows(report.distributions.crypto, { labelOf: (c) => `${c.ticker || "?"}${c.network && c.network !== c.ticker ? " · " + c.network : ""}`, amountOf: (c) => c.amount, countOf: (c) => c.count }) : `<div class="empty">${esc(t("No data for this range."))}</div>`}
+        </div></div>
+      </div>
+      <div class="grid cols-2" style="margin-bottom:16px">
+        <div class="card"><div class="card-head"><h3>${esc(t("Plan popularity"))}</h3></div><div class="card-pad">
+          ${report.distributions.plans.length ? distributionRows(report.distributions.plans, { labelOf: (p) => p.name, amountOf: (p) => p.amount, countOf: (p) => p.count }) : `<div class="empty">${esc(t("No data for this range."))}</div>`}
+        </div></div>
+        <div class="card"><div class="card-head"><h3>${esc(t("Payment outcomes"))}</h3><span class="sub">${esc(t("Definition"))}: ${esc(report.definitions.payment_success_rate)}</span></div>
+          <div class="table-wrap"><table class="data"><thead><tr><th>${esc(t("Provider"))}</th>${outcomeKeys.map((k) => `<th class="num">${esc(t(k))}</th>`).join("")}</tr></thead><tbody>
+            ${Object.entries(report.attempts.current.byProvider).map(([provider, outcomes]) => `<tr><td>${esc(providerNames[provider] || provider)}</td>${outcomeKeys.map((k) => `<td class="num">${esc(num(outcomes[k] || 0))}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${outcomeKeys.length + 1}">${esc(t("No data for this range."))}</td></tr>`}
+          </tbody></table></div></div>
+      </div>
+      <div class="card card-pad" style="margin-bottom:16px">
+        <div class="section-title">${esc(t("Data not available"))}</div>
+        <ul class="unavailable-list">${report.unavailable.map((u) => `<li>${esc(u.reason)}</li>`).join("")}</ul>
+      </div>
+      <details class="card card-pad" style="margin-bottom:16px">
+        <summary>${esc(t("Metric definitions"))}</summary>
+        <dl class="kv" style="margin-top:12px">${report.kpis.map((item) => `<dt>${esc(t(KPI_LABELS[item.id] || item.id))}</dt><dd>${esc(report.definitions[item.id] || "")}</dd>`).join("")}</dl>
+      </details>`;
+
+    $("#an-nocache").onclick = async (event) => {
+      event.preventDefault();
+      try { await GET(`/analytics/report?${queryString({ refresh: "1" })}`); pageAnalytics(); } catch (error) { apiErrorToast(error); }
+    };
+    $$("#analytics-body [data-def]").forEach((button) => {
+      button.onclick = () => toast("info", `${t(KPI_LABELS[button.dataset.def] || button.dataset.def)}: ${report.definitions[button.dataset.def] || ""}`);
     });
+    attachChartTips("#chart-money", chartRows, [{ key: "topups", name: t("Top-ups") }, { key: "sales", name: t("Sales") }], money);
+    attachChartTips("#chart-users", chartRows, [{ key: "newUsers", name: t("New users in period") }], num);
+    void byId;
   }
 
   // ── Referrals ──────────────────────────────────────────────────────────────
@@ -2426,7 +2611,7 @@
     recovery: { title: "Payment Recovery", render: pageRecovery },
     custody: { title: "NOWPayments & Custody", render: pageCustody },
     products: { title: "Products", render: pageProducts },
-    broadcast: { title: "Broadcast — ارسال پیام همگانی", render: pageBroadcast },
+    broadcast: { title: "Broadcast", render: pageBroadcast },
     referrals: { title: "Referrals", render: pageReferrals },
     audit: { title: "Audit Log", render: pageAudit },
     admins: { title: "Admins", render: pageAdmins },
@@ -2463,16 +2648,15 @@
 
   $("#login-request").onclick = async () => {
     const telegramId = $("#login-tid").value.trim();
-    if (!/^\d{5,20}$/.test(telegramId)) return toast("error", "Enter a numeric Telegram ID.");
+    if (!/^\d{5,20}$/.test(telegramId)) return toast("error", t("Enter a numeric Telegram ID."));
     const button = $("#login-request");
     button.disabled = true;
     try {
       const result = await POST("/auth/request-code", { telegramId });
       $("#login-verify").disabled = false;
       $("#login-code").focus();
-      toast("success", result.delivered
-        ? "Sign-in code sent — check the bot's direct message."
-        : "Code created, but the bot could not DM it right now. Make sure the bot can message you and try again.");
+      void result;
+      toast("success", t("If this ID is authorized, a sign-in code was sent to the bot chat."));
     } catch (error) {
       toast("error", error.message);
     } finally { button.disabled = false; }
@@ -2480,14 +2664,14 @@
 
   $("#login-verify").onclick = async () => {
     const code = $("#login-code").value.trim();
-    if (!code) return toast("error", "Paste the sign-in code from the bot.");
+    if (!code) return toast("error", t("Paste the sign-in code from the bot."));
     const button = $("#login-verify");
     button.disabled = true;
     try {
       const result = await POST("/auth/verify", { code });
       state.csrfToken = result.csrfToken;
       state.actorId = result.actorTelegramId;
-      toast("success", "Signed in.");
+      toast("success", t("Signed in."));
       showApp();
     } catch (error) {
       toast("error", error.message);
@@ -2505,10 +2689,127 @@
   $("#btn-refresh").onclick = () => renderRoute(true);
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") { closeModal(); closeDrawer(); }
+    if (event.key === "Escape") { closeModal(); closeDrawer(); closeNav(); }
+  });
+
+  // ── Theme, language, mobile navigation, responsive tables ────────────────────
+  const currentTheme = () => (document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark");
+
+  function syncControls() {
+    const light = currentTheme() === "light";
+    $$("[data-theme-toggle]").forEach((button) => {
+      const label = light ? "Switch to dark theme" : "Switch to light theme";
+      button.setAttribute("aria-label", label);
+      button.setAttribute("title", label);
+      button.innerHTML = icon(light ? "moon" : "sun");
+    });
+    $$("[data-lang]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.lang === lang())));
+    const toggle = $("#nav-toggle");
+    if (toggle) toggle.setAttribute("aria-expanded", String($("#sidebar").classList.contains("open")));
+  }
+
+  function setTheme(theme) {
+    const root = document.documentElement;
+    root.classList.add("theme-switching");
+    root.setAttribute("data-theme", theme);
+    const meta = document.querySelector('meta[name="color-scheme"]');
+    if (meta) meta.setAttribute("content", theme);
+    try { localStorage.setItem("swift.theme", theme); } catch { /* storage blocked */ }
+    window.setTimeout(() => root.classList.remove("theme-switching"), 320);
+    syncControls();
+    // Charts bake theme-independent colours only; grid/labels follow CSS tokens, so no re-render is needed.
+  }
+
+  function setLanguage(next) {
+    if (next === lang()) return;
+    I18N.setLang(next);
+    syncControls();
+    window.dispatchEvent(new Event("swift:langchange"));
+  }
+
+  const mobileNav = window.matchMedia("(max-width: 900px)");
+  function syncNavInert() {
+    const sidebar = $("#sidebar");
+    if (!sidebar) return;
+    const open = sidebar.classList.contains("open");
+    if (mobileNav.matches && !open) sidebar.setAttribute("inert", ""); else sidebar.removeAttribute("inert");
+  }
+  let navOpener = null;
+  function openNav() {
+    navOpener = document.activeElement;
+    $("#sidebar").classList.add("open");
+    $("#sidebar").removeAttribute("inert");
+    document.body.classList.add("nav-open");
+    syncControls();
+    const first = $("#sidebar .nav-item");
+    if (first) window.setTimeout(() => first.focus(), 0);
+  }
+  function closeNav() {
+    const sidebar = $("#sidebar");
+    if (!sidebar || !sidebar.classList.contains("open")) return;
+    sidebar.classList.remove("open");
+    document.body.classList.remove("nav-open");
+    syncNavInert();
+    syncControls();
+    if (navOpener && typeof navOpener.focus === "function") navOpener.focus();
+    navOpener = null;
+  }
+  mobileNav.addEventListener("change", () => { if (!mobileNav.matches) closeNav(); syncNavInert(); });
+  $("#nav-toggle").onclick = () => ($("#sidebar").classList.contains("open") ? closeNav() : openNav());
+  $("#nav-backdrop").onclick = closeNav;
+
+  // Keep keyboard focus inside whichever overlay is open.
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Tab") return;
+    const layer = document.body.classList.contains("nav-open") ? $("#sidebar")
+      : $("#modal-backdrop").classList.contains("show") ? $("#modal-backdrop .modal")
+      : $("#drawer").classList.contains("open") ? $("#drawer") : null;
+    if (!layer) return;
+    const focusable = [...layer.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+      .filter((el) => el.offsetParent !== null);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  });
+
+  $$("[data-theme-toggle]").forEach((button) => { button.onclick = () => setTheme(currentTheme() === "light" ? "dark" : "light"); });
+  $$("[data-lang]").forEach((button) => { button.onclick = () => setLanguage(button.dataset.lang); });
+  window.addEventListener("swift:langchange", () => {
+    if ($("#app").classList.contains("ready")) { renderNav(); renderRoute(true); }
+  });
+
+  // Wide tables turn into labelled card lists on phones (CSS) - labels come from <th>.
+  function enhanceTables(rootNode) {
+    rootNode.querySelectorAll("table.data").forEach((table) => {
+      const headers = [...table.querySelectorAll("thead th")].map((th) => th.textContent.trim());
+      table.querySelectorAll("tbody tr").forEach((row) => {
+        [...row.children].forEach((cell, index) => {
+          if (cell.tagName === "TD" && !cell.hasAttribute("data-label") && headers[index]) cell.setAttribute("data-label", headers[index]);
+        });
+      });
+      table.classList.add("stack");
+    });
+  }
+  let enhanceQueued = false;
+  new MutationObserver(() => {
+    if (enhanceQueued) return;
+    enhanceQueued = true;
+    window.requestAnimationFrame(() => {
+      enhanceQueued = false;
+      ["#content", "#drawer-body", "#modal-body"].forEach((selector) => { const el = $(selector); if (el) enhanceTables(el); });
+    });
+  }).observe(document.body, { childList: true, subtree: true });
+
+  // The "Try again" button carries no inline handler (strict CSP).
+  document.addEventListener("click", (event) => {
+    if (event.target.closest("[data-retry]")) window.dispatchEvent(new HashChangeEvent("hashchange"));
   });
 
   // ── Boot ───────────────────────────────────────────────────────────────────
+  syncControls();
+  syncNavInert();
   (async function boot() {
     try {
       const session = await GET("/auth/session");

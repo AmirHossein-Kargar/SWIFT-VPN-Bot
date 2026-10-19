@@ -358,3 +358,36 @@ describe("input handling, errors and headers", () => {
     assert.equal(/javascript:/i.test(app + html), false);
   });
 });
+
+describe("analytics endpoints and export", () => {
+  test("report and CSV export require an admin session", async () => {
+    for (const path of ["/api/admin/analytics/report?range=7d", "/api/admin/analytics/export.csv?range=7d", "/api/admin/analytics"]) {
+      const result = await call("GET", path);
+      assert.equal(result.status, 401, path);
+      assert.equal(result.text.includes("kpi"), false);
+    }
+  });
+
+  test("a cross-site page cannot trigger an export", async () => {
+    const { cookie } = await login();
+    const result = await call("GET", "/api/admin/analytics/export.csv?range=7d", { cookie, headers: { "sec-fetch-site": "cross-site" } });
+    assert.equal(result.status, 403);
+  });
+
+  test("invalid ranges are rejected with structured 400s before any query", async () => {
+    const { cookie } = await login();
+    for (const query of ["range=decade", "range=custom&from=2026-02-30&to=2026-03-01", "range=custom&from=a&to=b", "range=custom"]) {
+      const result = await call("GET", `/api/admin/analytics/report?${query}`, { cookie });
+      assert.equal(result.status, 400, query);
+      assert.equal(result.data.ok, false);
+    }
+  });
+
+  test("the export is rate limited per admin", async () => {
+    const { cookie } = await login();
+    const statuses = [];
+    for (let i = 0; i < 13; i += 1) statuses.push((await call("GET", "/api/admin/analytics/export.csv?range=decade", { cookie })).status);
+    assert.ok(statuses.slice(0, 10).every((s) => s === 400));
+    assert.ok(statuses.slice(10).every((s) => s === 429));
+  });
+});
