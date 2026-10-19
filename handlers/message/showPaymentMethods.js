@@ -1,7 +1,11 @@
 import { setSession } from "../../config/sessionStore.js";
 
-export const HOOSH_PAY_BUTTON = "💳 پرداخت آنلاین – کارت به کارت (HooshPay)";
-export const NOWPAYMENTS_BUTTON = "₮ پرداخت با ترون (NOWPayments)";
+// Customer-facing labels for the two live top-up methods. The crypto entry
+// point is a multi-asset NOWPayments flow (currency/network picker included),
+// so it is labelled generically rather than as TRON-only. Callback identifiers
+// are unchanged and must stay in sync with handlers/handleCallbackQuery.js.
+export const HOOSH_PAY_BUTTON = "💳 پرداخت کارت به کارت";
+export const NOWPAYMENTS_BUTTON = "₿ پرداخت کریپتو";
 
 // HooshPay stays the first method and still uses its own provider.
 // New TRON top-ups use NOWPayments. The older direct TRX callback remains

@@ -5,6 +5,7 @@ import handleTrxAmount from "../paymentHandlers/handleTrxAmount.js";
 import { handleHooshAmount } from "../paymentHandlers/payHoosh.js";
 import { handleNowPaymentsAmount } from "../paymentHandlers/payNowPayments.js";
 import supportMessageHandler from "./supportMessageHandler.js";
+import { getSupportDirectButton } from "../messages/supportContact.js";
 import {
   handleApiGigInput,
   handleApiDaysInput,
@@ -236,18 +237,13 @@ async function handleMessage(bot, msg) {
       // ارسال پیام زیبا به کاربر
       const userMessage = `🔔 <b>پیام از پشتیبانی</b>\n\n${messageText}`;
 
+      // The support destination is resolved from SUPPORT_CONTACT through the
+      // canonical helper. When it is not configured the button is omitted
+      // entirely instead of pointing the customer at a hardcoded account.
+      const supportRows = getSupportDirectButton();
       await bot.sendMessage(targetChatId, userMessage, {
         parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "📞 تماس با پشتیبانی",
-                url: "https://t.me/Swift_servicebot",
-              },
-            ],
-          ],
-        },
+        ...(supportRows.length ? { reply_markup: { inline_keyboard: supportRows } } : {}),
       });
 
       // تایید به ادمین

@@ -4,7 +4,7 @@
  * Bot payment flow for HooshPay card-to-card.
  *
  * Flow:
- *   1. User selects "پرداخت آنلاین (HooshPay)"
+ *   1. User selects "پرداخت کارت به کارت (HooshPay)"
  *   2. User enters amount (validated: 10,000–50,000,000 Toman with commas)
  *   3. Invoice created via HooshPay API → stored in MongoDB
  *   4. User sees: amount, fee, payable_amount, card info, payment link
@@ -27,7 +27,7 @@ export async function payHoosh(bot, query, session) {
 
   try {
     await bot.editMessageText(
-      `💳 <b>پرداخت آنلاین – HooshPay</b>\n\n` +
+      `💳 <b>پرداخت کارت به کارت – HooshPay</b>\n\n` +
       `🔹 <b>لطفاً مبلغ مورد نظر را به تومان و با کاما وارد کنید.</b>\n` +
       `مثال: <code>50,000</code> | <code>200,000</code>\n\n` +
       `🔻 <b>محدودیت مبلغ:</b>\n` +

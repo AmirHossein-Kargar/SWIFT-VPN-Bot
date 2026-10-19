@@ -47,7 +47,7 @@ export function nowPaymentsAmountPrompt(selectedAsset = null) {
   const asset = selectedAsset || defaultSelectedAsset();
   const isDefaultTrx = String(asset.payCurrency || "trx").toLowerCase() === "trx";
   const header = isDefaultTrx
-    ? "₮ <b>پرداخت با ترون – NOWPayments</b>\n\n"
+    ? "🪙 <b>پرداخت با ترون – NOWPayments</b>\n\n"
     : `🪙 <b>پرداخت با رمزارز (${asset.ticker} · شبکه ${asset.network}) – NOWPayments</b>\n\n`;
   return header
     + "🔹 <b>لطفاً مبلغ مورد نظر را به تومان وارد کنید.</b>\n"
@@ -69,14 +69,14 @@ export function nowPaymentsConfirmMessage(quote) {
     : "";
 
   if (!Number.isFinite(estimatedVal) || !Number.isFinite(tomanPerCoin)) {
-    return "₮ <b>تأیید افزایش موجودی</b>\n\n"
+    return "🪙 <b>تأیید افزایش موجودی</b>\n\n"
       + `${amount}\n`
       + networkLine
       + "\nمبلغ نهایی در صفحه پرداخت نمایش داده می‌شود.\n"
       + "موجودی فقط پس از تأیید پرداخت، به همین مبلغ تومان شارژ می‌شود.";
   }
   const time = quoteTime(quote.quoteAt);
-  return "₮ <b>تأیید افزایش موجودی</b>\n\n"
+  return "🪙 <b>تأیید افزایش موجودی</b>\n\n"
     + `${amount}\n`
     + networkLine
     + `📊 <b>قیمت هر ${ticker}:</b> <code>${formatTopUpAmount(Math.round(tomanPerCoin))}</code> تومان\n`
@@ -477,7 +477,7 @@ export async function confirmNowPaymentsTopUp(bot, query, session, deps = {}) {
         currencyPrecision: snapshot.currencyPrecision ?? selectedAsset.currencyPrecision,
       }),
       [
-        [{ text: "₮ پرداخت فاکتور", url: invoice.invoiceUrl }],
+        [{ text: "🪙 پرداخت فاکتور", url: invoice.invoiceUrl }],
         [{ text: "🔙 بازگشت به روش‌های پرداخت", callback_data: "back_to_topup" }],
       ],
     );

@@ -15,7 +15,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, dirname, relative } from "node:path";
+import { join, dirname, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -26,6 +26,25 @@ const SKIP = new Set([
 ]);
 
 const SKIP_DIRS = [/^tests\//, /^node_modules\//, /^web\/public\//, /^\.git\//, /^scripts\//];
+
+/**
+ * Normalize a path to POSIX separators.
+ *
+ * `relative()` returns platform separators, so on Windows this walk produced
+ * `tests\unit\…` and `scripts\preflight.js`. Every skip rule below is anchored
+ * on `/`, so on Windows NONE of them matched: the test tree and the preflight
+ * script were pulled into the import sweep (re-running test files as modules
+ * and executing side-effectful entry points). Normalizing first keeps the skip
+ * rules portable and makes them assertable on any platform.
+ */
+export function toPosixPath(value) {
+  return String(value).split(sep).join("/").replace(/\\/g, "/");
+}
+
+/** True when a repo-relative POSIX path is a production module to import. */
+export function isProductionModule(relPath) {
+  return !SKIP.has(relPath) && !SKIP_DIRS.some((pattern) => pattern.test(relPath + "/") || pattern.test(relPath));
+}
 
 function walk(dir, acc = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -39,8 +58,8 @@ function walk(dir, acc = []) {
 
 test("every production module imports cleanly", async () => {
   const files = walk(root)
-    .map((full) => relative(root, full))
-    .filter((relPath) => !SKIP.has(relPath) && !SKIP_DIRS.some((pattern) => pattern.test(relPath + "/") || pattern.test(relPath)));
+    .map((full) => toPosixPath(relative(root, full)))
+    .filter(isProductionModule);
   assert.ok(files.length >= 60, `expected a full module tree, found ${files.length}`);
 
   const failures = [];
@@ -52,4 +71,32 @@ test("every production module imports cleanly", async () => {
     }
   }
   assert.deepEqual(failures, [], `modules failed to load:\n${failures.join("\n")}`);
+});
+
+/**
+ * Regression: the sweep must never include the test tree or entry points,
+ * regardless of the host platform's path separator. Asserted with literal
+ * Windows-style separators so the guard is proven on POSIX hosts too.
+ */
+test("skip rules are portable across Windows and POSIX separators", () => {
+  for (const relPath of [
+    "tests/unit/moduleSmoke.test.js",
+    "tests\\unit\\moduleSmoke.test.js",
+    "scripts/preflight.js",
+    "scripts\\preflight.js",
+    "web/public/app.js",
+    "web\\public\\app.js",
+    "bot.js",
+  ]) {
+    assert.equal(isProductionModule(toPosixPath(relPath)), false, `should skip ${relPath}`);
+  }
+
+  for (const relPath of [
+    "handlers/onMessage.js",
+    "handlers\\onMessage.js",
+    "services/nowpayments/ipnHandler.js",
+    "paymentHandlers/payNowPayments.js",
+  ]) {
+    assert.equal(isProductionModule(toPosixPath(relPath)), true, `should include ${relPath}`);
+  }
 });
