@@ -216,6 +216,7 @@
     { id: "vpns", label: "VPN Services", icon: "globe", section: "Manage" },
     { id: "payments", label: "Payments", icon: "card", section: "Money" },
     { id: "recovery", label: "Recovery", icon: "life", section: "Money" },
+    { id: "custody", label: "Custody & Crypto", icon: "shield", section: "Money" },
     { id: "products", label: "Products", icon: "box", section: "Money" },
     { id: "broadcast", label: "Broadcast", icon: "megaphone", section: "Engage" },
     { id: "referrals", label: "Referrals", icon: "gift", section: "Engage" },
@@ -1598,6 +1599,823 @@
     } catch (error) { $("#sys-health").innerHTML = errorBox(error); }
   }
 
+  // ── Custody & NOWPayments ──────────────────────────────────────────────────
+  const custodyState = {
+    tab: "overview",
+    assets: { search: "", network: "all", filter: "all", page: 1 },
+    conversions: { status: "all", search: "", page: 1 },
+    payouts: { status: "all", currency: "", search: "", page: 1 },
+    transactions: { status: "all", currency: "", search: "", page: 1 },
+    overviewData: null,
+  };
+
+  async function pageCustody() {
+    const tabs = [
+      { id: "overview", label: "A. Overview" },
+      { id: "assets", label: "B. Asset Balances & Catalog" },
+      { id: "conversions", label: "C. Conversions" },
+      { id: "payouts", label: "D. Withdrawals & Payouts" },
+      { id: "transactions", label: "E. Transactions & Reconciliation" },
+    ];
+    $("#content").innerHTML = `
+      <div class="card" style="margin-bottom:16px">
+        <div class="filter-bar">
+          <div class="tabs">
+            ${tabs.map((t) => `<button class="tab ${custodyState.tab === t.id ? "active" : ""}" data-custody-tab="${t.id}">${esc(t.label)}</button>`).join("")}
+          </div>
+          <span class="spacer"></span>
+          <span style="font-size:12px;color:var(--text-faint)">NOWPayments API & Custody Control Center</span>
+        </div>
+      </div>
+      <div id="custody-body">${loading()}</div>`;
+
+    $$("#content [data-custody-tab]").forEach((btn) => {
+      btn.onclick = () => {
+        custodyState.tab = btn.dataset.custodyTab;
+        pageCustody();
+      };
+    });
+
+    if (custodyState.tab === "overview") await renderCustodyOverview();
+    else if (custodyState.tab === "assets") await renderCustodyAssets();
+    else if (custodyState.tab === "conversions") await renderCustodyConversions();
+    else if (custodyState.tab === "payouts") await renderCustodyPayouts();
+    else if (custodyState.tab === "transactions") await renderCustodyTransactions();
+  }
+
+  async function renderCustodyOverview() {
+    const target = $("#custody-body");
+    if (!target) return;
+    target.innerHTML = loading();
+    let data;
+    try {
+      data = (await GET("/custody/overview")).data;
+      custodyState.overviewData = data;
+    } catch (error) {
+      target.innerHTML = errorBox(error);
+      return;
+    }
+
+    const cap = data.capabilities || {};
+    const sum = data.localSummary || {};
+    const capPill = (enabled, labelOn = "Enabled", labelOff = "Disabled") =>
+      `<span class="pill ${enabled ? "green" : "gray"}">${esc(enabled ? labelOn : labelOff)}</span>`;
+
+    target.innerHTML = `
+      <div class="kpi-grid">
+        <div class="kpi">
+          <div class="label">Provider API Health</div>
+          <div class="value">${pill(data.providerHealth?.status || "down")}</div>
+          <div class="foot">${esc(data.providerHealth?.message || "—")} · Synced ${dateFmt(data.lastSyncedAt)}</div>
+        </div>
+        <div class="kpi">
+          <div class="label">Dynamic Asset Catalog</div>
+          <div class="value">${num(data.catalogAssetsCount)} <span class="unit">assets</span></div>
+          <div class="foot">${num(data.catalogGroupsCount)} base cryptocurrencies · ${num(data.totalTrackedAssets)} Custody wallets</div>
+        </div>
+        <div class="kpi">
+          <div class="label">Completed Deposits</div>
+          <div class="value">${money(sum.finishedToman || 0)}</div>
+          <div class="foot">${num(sum.finishedCount || 0)} credited NOWPayments invoices</div>
+        </div>
+        <div class="kpi">
+          <div class="label">Active / Warnings</div>
+          <div class="value">${num(sum.pendingCount || 0)} <span class="unit">pending</span></div>
+          <div class="foot">${num(sum.recoveryRequiredCount || 0)} recovery required · ${num(sum.underpaidCount || 0)} underpaid</div>
+        </div>
+      </div>
+
+      <div class="grid-2" style="margin-top:16px">
+        <div class="card">
+          <div class="card-head">
+            <h3>Custody Balances by Asset</h3>
+            <span class="sub">Distinct assets are never summed together</span>
+            <span class="spacer"></span>
+            <button class="btn sm" id="custody-go-assets">View all assets</button>
+          </div>
+          ${data.balanceError ? `<div class="card-pad"><div class="warn-box">${esc(data.balanceError)}</div></div>` : ""}
+          ${data.balances && data.balances.length ? `
+            <div class="table-wrap"><table class="data">
+              <thead><tr><th>Asset</th><th>Network</th><th class="num">Available Balance</th><th class="num">Pending / Locked</th><th>Actions</th></tr></thead>
+              <tbody>
+                ${data.balances.map((b) => `
+                  <tr>
+                    <td><strong>${esc(b.ticker)}</strong> <span class="mono" style="color:var(--text-faint)">${esc(b.code)}</span></td>
+                    <td><span class="pill blue">${esc(b.network)}</span></td>
+                    <td class="num mono">${esc(b.availableDisplay)} ${esc(b.ticker)}</td>
+                    <td class="num mono">${esc(b.pendingDisplay)} ${esc(b.ticker)}</td>
+                    <td>
+                      <button class="btn sm" data-quick-convert="${esc(b.code)}" ${cap.isOwner && cap.custodyJwtConfigured && b.availableAmount > 0 ? "" : "disabled"}>Convert</button>
+                      <button class="btn sm" data-quick-withdraw="${esc(b.code)}" ${cap.isOwner && cap.custodyJwtConfigured && b.availableAmount > 0 ? "" : "disabled"}>Withdraw</button>
+                    </td>
+                  </tr>`).join("")}
+              </tbody>
+            </table></div>`
+            : `<div class="empty">${icon("shield")} No Custody balances returned for this account yet.</div>`}
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>Capabilities & Security Status</h3>
+            <span class="sub">Server-side configuration & role checks</span>
+          </div>
+          <div class="card-pad">
+            <div class="kv">
+              <dt>API Key (x-api-key)</dt><dd>${capPill(cap.apiConfigured, "Configured", "Missing")}</dd>
+              <dt>IPN HMAC-SHA512</dt><dd>${capPill(cap.ipnConfigured, "Configured", "Missing")}</dd>
+              <dt>Custody JWT Auth</dt><dd>${capPill(cap.custodyJwtConfigured, "Configured", "Not configured")}</dd>
+              <dt>Custody Balance API</dt><dd>${capPill(cap.balanceEnabled, "Active", "Unavailable")}</dd>
+              <dt>Custody Conversions</dt><dd>${capPill(cap.conversionsEnabled, "Active", "Requires JWT / Custody")}</dd>
+              <dt>Mass Payouts / Withdrawals</dt><dd>${capPill(cap.payoutsEnabled, "Active", "Requires JWT / Custody")}</dd>
+              <dt>Current Session Role</dt><dd>${cap.isOwner ? `<span class="pill green">Owner (Full Custody Control)</span>` : `<span class="pill yellow">Admin (Read-Only Custody)</span>`}</dd>
+            </div>
+            ${!cap.custodyJwtConfigured ? `<div class="warn-box" style="margin-top:12px">To enable in-panel Custody conversions and withdrawals, set <span class="mono">NOWPAYMENTS_EMAIL</span> and <span class="mono">NOWPAYMENTS_PASSWORD</span> in server environment variables.</div>` : ""}
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2" style="margin-top:16px">
+        <div class="card">
+          <div class="card-head">
+            <h3>Reconciliation Warnings</h3>
+            <span class="sub">Underpayments, unknown creations & recovery items</span>
+            <span class="spacer"></span>
+            <button class="btn sm" id="custody-go-reconcile">Open Reconciliation</button>
+          </div>
+          ${data.reconciliationWarnings && data.reconciliationWarnings.length ? `
+            <div class="table-wrap"><table class="data">
+              <thead><tr><th>Order ID</th><th>User</th><th>Asset</th><th class="num">Amount</th><th>Status / Reason</th></tr></thead>
+              <tbody>
+                ${data.reconciliationWarnings.map((w) => `
+                  <tr data-payment="nowpayments:${esc(w.orderId)}">
+                    <td class="mono">${esc(w.orderId.slice(0, 18))}…</td>
+                    <td class="mono">${esc(w.userId)}</td>
+                    <td class="mono">${esc((w.payCurrency || "trx").toUpperCase())}</td>
+                    <td class="num">${money(w.amountToman)}</td>
+                    <td>${pill(w.status)} <span style="font-size:11px;color:var(--text-faint)">${esc(w.reason || "")}</span></td>
+                  </tr>`).join("")}
+              </tbody>
+            </table></div>`
+            : `<div class="empty">No active NOWPayments reconciliation warnings.</div>`}
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>Recent Custody Conversions & Withdrawals</h3>
+            <span class="sub">Latest provider Custody activity</span>
+          </div>
+          <div class="card-pad">
+            <div class="section-title" style="margin-bottom:8px">Recent Conversions</div>
+            ${data.recentConversions && data.recentConversions.length ? `
+              <div class="table-wrap"><table class="data">
+                <thead><tr><th>ID</th><th>Pair</th><th class="num">From</th><th class="num">To</th><th>Status</th></tr></thead>
+                <tbody>
+                  ${data.recentConversions.map((c) => `
+                    <tr>
+                      <td class="mono">${esc(String(c.id).slice(0, 12))}</td>
+                      <td class="mono">${esc(c.fromCurrency.toUpperCase())} → ${esc(c.toCurrency.toUpperCase())}</td>
+                      <td class="num mono">${esc(c.fromAmountDisplay)}</td>
+                      <td class="num mono">${esc(c.toAmountDisplay)}</td>
+                      <td>${pill(c.status)}</td>
+                    </tr>`).join("")}
+                </tbody>
+              </table></div>`
+              : `<div style="color:var(--text-faint);font-size:12.5px;margin-bottom:12px">${esc(data.conversionsError || "No recent conversions.")}</div>`}
+
+            <div class="section-title" style="margin:14px 0 8px">Recent Withdrawals / Payouts</div>
+            ${data.recentPayouts && data.recentPayouts.length ? `
+              <div class="table-wrap"><table class="data">
+                <thead><tr><th>ID</th><th>Asset</th><th class="num">Amount</th><th>Address</th><th>Status</th></tr></thead>
+                <tbody>
+                  ${data.recentPayouts.map((p) => `
+                    <tr>
+                      <td class="mono">${esc(String(p.id).slice(0, 12))}</td>
+                      <td>${esc(p.ticker)} <span class="mono" style="color:var(--text-faint)">${esc(p.network)}</span></td>
+                      <td class="num mono">${esc(p.amountDisplay)}</td>
+                      <td class="mono">${esc(String(p.address).slice(0, 14))}…</td>
+                      <td>${pill(p.status)}</td>
+                    </tr>`).join("")}
+                </tbody>
+              </table></div>`
+              : `<div style="color:var(--text-faint);font-size:12.5px">${esc(data.payoutsError || "No recent payouts.")}</div>`}
+          </div>
+        </div>
+      </div>`;
+
+    const goAssets = $("#custody-go-assets");
+    if (goAssets) goAssets.onclick = () => { custodyState.tab = "assets"; pageCustody(); };
+    const goReconcile = $("#custody-go-reconcile");
+    if (goReconcile) goReconcile.onclick = () => { custodyState.tab = "transactions"; pageCustody(); };
+
+    target.querySelectorAll("tr[data-payment]").forEach((row) => {
+      row.onclick = () => showPayment(row.dataset.payment);
+    });
+    target.querySelectorAll("[data-quick-convert]").forEach((btn) => {
+      if (btn.disabled) return;
+      btn.onclick = () => openConversionModal(btn.dataset.quickConvert);
+    });
+    target.querySelectorAll("[data-quick-withdraw]").forEach((btn) => {
+      if (btn.disabled) return;
+      btn.onclick = () => openWithdrawalModal(btn.dataset.quickWithdraw);
+    });
+  }
+
+  async function renderCustodyAssets() {
+    const target = $("#custody-body");
+    if (!target) return;
+    const q = custodyState.assets;
+    target.innerHTML = `
+      <div class="card">
+        <div class="filter-bar">
+          <input id="ca-search" class="input search" placeholder="Search asset code, ticker, name, or network (e.g. usdttrc20, trx, btc)…" value="${esc(q.search)}" />
+          <select id="ca-network" class="select">
+            <option value="all">Network: all</option>
+          </select>
+          <select id="ca-filter" class="select">
+            <option value="all">Filter: all assets</option>
+            <option value="with-balance">With Custody balance</option>
+            <option value="pending">With pending balance</option>
+            <option value="fixed-rate">Fixed-rate supported</option>
+          </select>
+          <button class="btn sm" id="ca-refresh">${icon("refresh")} Refresh catalog</button>
+        </div>
+        <div id="ca-table">${loading()}</div>
+      </div>`;
+    $("#ca-filter").value = q.filter;
+    $("#ca-search").oninput = debounce((e) => { q.search = e.target.value; q.page = 1; loadCustodyAssetsTable(false); }, 300);
+    $("#ca-network").onchange = (e) => { q.network = e.target.value; q.page = 1; loadCustodyAssetsTable(false); };
+    $("#ca-filter").onchange = (e) => { q.filter = e.target.value; q.page = 1; loadCustodyAssetsTable(false); };
+    $("#ca-refresh").onclick = () => loadCustodyAssetsTable(true);
+    await loadCustodyAssetsTable(false);
+  }
+
+  async function loadCustodyAssetsTable(forceRefresh = false) {
+    const target = $("#ca-table");
+    if (!target) return;
+    target.innerHTML = loading();
+    const q = custodyState.assets;
+    const params = new URLSearchParams({
+      search: q.search,
+      network: q.network,
+      filter: q.filter,
+      page: q.page,
+      pageSize: 20,
+      ...(forceRefresh ? { refresh: "true" } : {}),
+    });
+    let data;
+    try {
+      data = (await GET(`/custody/assets?${params}`)).data;
+    } catch (error) {
+      target.innerHTML = errorBox(error);
+      return;
+    }
+
+    const netSelect = $("#ca-network");
+    if (netSelect && Array.isArray(data.networks)) {
+      const current = q.network || "all";
+      netSelect.innerHTML = `<option value="all">Network: all</option>` +
+        data.networks.map((net) => `<option value="${esc(net)}" ${current.toUpperCase() === net ? "selected" : ""}>Network: ${esc(net)}</option>`).join("");
+    }
+
+    if (!data.items.length) {
+      target.innerHTML = `<div class="empty">${icon("shield")} No assets match these filters.</div>` + pagerHtml(data.page, data.pages, data.total, "custodyAssets");
+      bindPagers();
+      return;
+    }
+
+    target.innerHTML = `
+      ${data.balanceError ? `<div class="card-pad"><div class="warn-box">Custody balance note: ${esc(data.balanceError)}</div></div>` : ""}
+      <div class="table-wrap"><table class="data">
+        <thead>
+          <tr>
+            <th>Code</th>
+            <th>Ticker / Name</th>
+            <th>Network</th>
+            <th class="num">Available Balance</th>
+            <th class="num">Pending / Locked</th>
+            <th class="num">Min Amount</th>
+            <th>Capabilities</th>
+            <th>Updated</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${data.items.map((item) => `
+            <tr>
+              <td class="mono">${esc(item.code)}</td>
+              <td><strong>${esc(item.ticker)}</strong> <span style="color:var(--text-faint);font-size:12px">${esc(item.name)}</span></td>
+              <td><span class="pill blue">${esc(item.network)}</span></td>
+              <td class="num mono">${item.availableDisplay != null ? `${esc(item.availableDisplay)} ${esc(item.ticker)}` : `<span style="color:var(--text-faint)">—</span>`}</td>
+              <td class="num mono">${item.pendingDisplay != null ? `${esc(item.pendingDisplay)} ${esc(item.ticker)}` : `<span style="color:var(--text-faint)">—</span>`}</td>
+              <td class="num mono">${item.minAmount != null ? esc(String(item.minAmount)) : "—"}</td>
+              <td>
+                ${item.supportedActions?.acceptPayment ? `<span class="pill green">Checkout</span>` : ""}
+                ${item.fixedRateSupported ? `<span class="pill blue">Fixed-rate</span>` : ""}
+                ${item.extraIdExists ? `<span class="pill yellow">Memo/Tag</span>` : ""}
+              </td>
+              <td>${dateShort(item.lastUpdatedAt)}</td>
+              <td>
+                <button class="btn sm" data-asset-convert="${esc(item.code)}" ${item.supportedActions?.convert ? "" : "disabled"}>Convert</button>
+                <button class="btn sm" data-asset-withdraw="${esc(item.code)}" ${item.supportedActions?.withdraw ? "" : "disabled"}>Withdraw</button>
+              </td>
+            </tr>`).join("")}
+        </tbody>
+      </table></div>
+      ${pagerHtml(data.page, data.pages, data.total, "custodyAssets")}`;
+
+    PAGER_HANDLERS.custodyAssets = (page) => { custodyState.assets.page = page; loadCustodyAssetsTable(false); };
+    bindPagers();
+    target.querySelectorAll("[data-asset-convert]").forEach((btn) => {
+      if (btn.disabled) return;
+      btn.onclick = () => openConversionModal(btn.dataset.assetConvert);
+    });
+    target.querySelectorAll("[data-asset-withdraw]").forEach((btn) => {
+      if (btn.disabled) return;
+      btn.onclick = () => openWithdrawalModal(btn.dataset.assetWithdraw);
+    });
+  }
+
+  async function renderCustodyConversions() {
+    const target = $("#custody-body");
+    if (!target) return;
+    const q = custodyState.conversions;
+    const statuses = ["all", "waiting", "processing", "finished", "failed", "rejected"];
+    target.innerHTML = `
+      <div class="card">
+        <div class="filter-bar">
+          <div class="tabs">
+            ${statuses.map((s) => `<button class="tab ${q.status === s ? "active" : ""}" data-conv-status="${s}">${s === "all" ? "All" : s}</button>`).join("")}
+          </div>
+          <span class="spacer"></span>
+          <button class="btn primary sm" id="btn-new-conversion">🔄 New Custody Conversion</button>
+        </div>
+        <div class="filter-bar">
+          <input id="conv-search" class="input search" placeholder="Search conversion ID, source or destination currency…" value="${esc(q.search)}" />
+        </div>
+        <div id="conv-table">${loading()}</div>
+      </div>`;
+
+    $$("#custody-body [data-conv-status]").forEach((tab) => {
+      tab.onclick = () => { q.status = tab.dataset.convStatus; q.page = 1; renderCustodyConversions(); };
+    });
+    $("#conv-search").oninput = debounce((e) => { q.search = e.target.value; q.page = 1; loadCustodyConversionsTable(); }, 300);
+    $("#btn-new-conversion").onclick = () => openConversionModal("");
+    await loadCustodyConversionsTable();
+  }
+
+  async function loadCustodyConversionsTable() {
+    const target = $("#conv-table");
+    if (!target) return;
+    target.innerHTML = loading();
+    const q = custodyState.conversions;
+    const params = new URLSearchParams({ status: q.status, search: q.search, page: q.page, pageSize: 15 });
+    let data;
+    try {
+      data = (await GET(`/custody/conversions?${params}`)).data;
+    } catch (error) {
+      target.innerHTML = errorBox(error);
+      return;
+    }
+
+    if (data.capabilityDisabled) {
+      target.innerHTML = `<div class="card-pad"><div class="warn-box"><strong>Custody Conversions Status:</strong> ${esc(data.capabilityReason)}</div></div>`;
+      return;
+    }
+    if (!data.items.length) {
+      target.innerHTML = `<div class="empty">No Custody conversions match these filters.</div>` + pagerHtml(data.page, data.pages, data.total, "custodyConv");
+      bindPagers();
+      return;
+    }
+
+    target.innerHTML = `
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>Conversion ID</th><th>From Asset</th><th>To Asset</th><th class="num">From Amount</th><th class="num">To Amount</th><th class="num">Rate</th><th>Created</th><th>Status</th></tr></thead>
+        <tbody>
+          ${data.items.map((c) => `
+            <tr>
+              <td class="mono">${esc(c.id)}</td>
+              <td class="mono">${esc(c.fromCurrency.toUpperCase())}</td>
+              <td class="mono">${esc(c.toCurrency.toUpperCase())}</td>
+              <td class="num mono">${esc(c.fromAmountDisplay)}</td>
+              <td class="num mono">${esc(c.toAmountDisplay)}</td>
+              <td class="num mono">${c.rate != null ? esc(String(c.rate)) : "—"}</td>
+              <td>${dateFmt(c.createdAt)}</td>
+              <td>${pill(c.status)}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table></div>
+      ${pagerHtml(data.page, data.pages, data.total, "custodyConv")}`;
+    PAGER_HANDLERS.custodyConv = (page) => { custodyState.conversions.page = page; loadCustodyConversionsTable(); };
+    bindPagers();
+  }
+
+  function openConversionModal(defaultFrom = "") {
+    openModal({
+      title: "Custody Asset Conversion",
+      bodyHtml: `
+        <div class="warn-box">Conversions execute inside your NOWPayments Custody account. Preview the live estimate before confirming. (Owner only)</div>
+        <div class="field">
+          <label>From Currency Code (e.g. trx, usdttrc20)</label>
+          <input class="input mono" name="fromCurrency" id="conv-from" value="${esc(defaultFrom)}" placeholder="trx" required />
+        </div>
+        <div class="field">
+          <label>To Currency Code (e.g. usdttrc20, btc)</label>
+          <input class="input mono" name="toCurrency" id="conv-to" placeholder="usdttrc20" required />
+        </div>
+        <div class="field">
+          <label>Amount to Convert</label>
+          <input class="input mono" name="amount" id="conv-amt" type="number" step="any" min="0.000001" placeholder="100" required />
+        </div>
+        <div style="margin:10px 0">
+          <button type="button" class="btn sm" id="btn-preview-conv">🔍 Preview Live Estimate</button>
+        </div>
+        <div id="conv-preview-box"></div>
+        ${reasonField("Recorded in the immutable admin audit log.")}`,
+      confirmText: "Confirm & Execute Conversion",
+      onConfirm: async (values) => {
+        try {
+          const result = (await POST("/custody/conversions", {
+            operationId: newOperationId(),
+            fromCurrency: values.fromCurrency,
+            toCurrency: values.toCurrency,
+            amount: Number(values.amount),
+            reason: values.reason,
+          })).data;
+          toast("success", `Conversion submitted (ID: ${result.id || "created"}).`);
+          closeModal();
+          if (custodyState.tab === "conversions") loadCustodyConversionsTable();
+          else if (custodyState.tab === "overview") renderCustodyOverview();
+        } catch (error) {
+          toast("error", error.message);
+        }
+      },
+    });
+
+    const previewBtn = $("#btn-preview-conv");
+    if (previewBtn) {
+      previewBtn.onclick = async () => {
+        const box = $("#conv-preview-box");
+        const fromCurrency = $("#conv-from")?.value.trim();
+        const toCurrency = $("#conv-to")?.value.trim();
+        const amount = $("#conv-amt")?.value.trim();
+        if (!fromCurrency || !toCurrency || !amount) {
+          toast("error", "Enter source currency, destination currency, and amount first.");
+          return;
+        }
+        box.innerHTML = loading();
+        try {
+          const prev = (await POST("/custody/conversions/preview", {
+            fromCurrency,
+            toCurrency,
+            amount: Number(amount),
+          })).data;
+          box.innerHTML = `
+            <div class="card" style="padding:10px;margin:8px 0;background:var(--bg-soft)">
+              <div class="kv">
+                <dt>Pair</dt><dd class="mono">${esc(prev.fromTicker)} (${esc(prev.fromNetwork)}) → ${esc(prev.toTicker)} (${esc(prev.toNetwork)})</dd>
+                <dt>From Amount</dt><dd class="mono">${esc(String(prev.fromAmount))} ${esc(prev.fromTicker)}</dd>
+                <dt>Estimated Output</dt><dd class="mono"><strong>${esc(String(prev.estimatedToAmount))} ${esc(prev.toTicker)}</strong></dd>
+                <dt>Implied Rate</dt><dd class="mono">1 ${esc(prev.fromTicker)} ≈ ${esc(String(prev.impliedRate))} ${esc(prev.toTicker)}</dd>
+                <dt>Available Balance</dt><dd class="mono">${prev.availableBalance != null ? `${esc(String(prev.availableBalance))} ${esc(prev.fromTicker)}` : "—"}</dd>
+              </div>
+            </div>`;
+        } catch (error) {
+          box.innerHTML = `<div class="danger-box">${esc(error.message)}</div>`;
+        }
+      };
+    }
+  }
+
+  async function renderCustodyPayouts() {
+    const target = $("#custody-body");
+    if (!target) return;
+    const q = custodyState.payouts;
+    const statuses = ["all", "creating", "waiting", "processing", "sending", "finished", "failed", "rejected"];
+    target.innerHTML = `
+      <div class="card">
+        <div class="filter-bar">
+          <div class="tabs">
+            ${statuses.map((s) => `<button class="tab ${q.status === s ? "active" : ""}" data-payout-status="${s}">${s === "all" ? "All" : s}</button>`).join("")}
+          </div>
+          <span class="spacer"></span>
+          <button class="btn sm" id="btn-verify-payout-modal">🔐 Verify 2FA Batch</button>
+          <button class="btn primary sm" id="btn-new-payout">📤 New Withdrawal / Payout</button>
+        </div>
+        <div class="filter-bar">
+          <input id="po-search" class="input search" placeholder="Search payout ID, batch ID, address, tx hash, or currency…" value="${esc(q.search)}" />
+        </div>
+        <div id="po-table">${loading()}</div>
+      </div>`;
+
+    $$("#custody-body [data-payout-status]").forEach((tab) => {
+      tab.onclick = () => { q.status = tab.dataset.payoutStatus; q.page = 1; renderCustodyPayouts(); };
+    });
+    $("#po-search").oninput = debounce((e) => { q.search = e.target.value; q.page = 1; loadCustodyPayoutsTable(); }, 300);
+    $("#btn-new-payout").onclick = () => openWithdrawalModal("");
+    $("#btn-verify-payout-modal").onclick = () => openVerifyPayoutModal("");
+    await loadCustodyPayoutsTable();
+  }
+
+  async function loadCustodyPayoutsTable() {
+    const target = $("#po-table");
+    if (!target) return;
+    target.innerHTML = loading();
+    const q = custodyState.payouts;
+    const params = new URLSearchParams({ status: q.status, search: q.search, page: q.page, pageSize: 15 });
+    let data;
+    try {
+      data = (await GET(`/custody/payouts?${params}`)).data;
+    } catch (error) {
+      target.innerHTML = errorBox(error);
+      return;
+    }
+
+    if (data.capabilityDisabled) {
+      target.innerHTML = `<div class="card-pad"><div class="warn-box"><strong>Custody Payouts Status:</strong> ${esc(data.capabilityReason)}</div></div>`;
+      return;
+    }
+    if (!data.items.length) {
+      target.innerHTML = `<div class="empty">No Custody withdrawals match these filters.</div>` + pagerHtml(data.page, data.pages, data.total, "custodyPayouts");
+      bindPagers();
+      return;
+    }
+
+    target.innerHTML = `
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>Payout / Batch ID</th><th>Asset & Network</th><th class="num">Amount</th><th class="num">Fee</th><th>Destination Address</th><th>Tx Hash</th><th>Created</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody>
+          ${data.items.map((p) => `
+            <tr>
+              <td class="mono">${esc(p.id)}${p.batchWithdrawalId ? `<div style="font-size:11px;color:var(--text-faint)">batch: ${esc(p.batchWithdrawalId)}</div>` : ""}</td>
+              <td><strong>${esc(p.ticker)}</strong> <span class="pill blue">${esc(p.network)}</span></td>
+              <td class="num mono">${esc(p.amountDisplay)}</td>
+              <td class="num mono">${p.fee != null ? esc(String(p.fee)) : "—"}</td>
+              <td class="mono">${esc(p.address)}${p.extraId ? `<div style="font-size:11px;color:var(--text-faint)">memo: ${esc(p.extraId)}</div>` : ""}</td>
+              <td class="mono">${p.hash ? esc(String(p.hash).slice(0, 14)) + "…" : "—"}</td>
+              <td>${dateFmt(p.createdAt)}</td>
+              <td>${pill(p.status)}</td>
+              <td>
+                ${p.batchWithdrawalId && (p.status === "creating" || p.status === "waiting")
+                  ? `<button class="btn sm" data-verify-batch="${esc(p.batchWithdrawalId)}">Verify 2FA</button>`
+                  : "—"}
+              </td>
+            </tr>`).join("")}
+        </tbody>
+      </table></div>
+      ${pagerHtml(data.page, data.pages, data.total, "custodyPayouts")}`;
+    PAGER_HANDLERS.custodyPayouts = (page) => { custodyState.payouts.page = page; loadCustodyPayoutsTable(); };
+    bindPagers();
+    target.querySelectorAll("[data-verify-batch]").forEach((btn) => {
+      btn.onclick = () => openVerifyPayoutModal(btn.dataset.verifyBatch);
+    });
+  }
+
+  function openWithdrawalModal(defaultCurrency = "") {
+    openModal({
+      title: "Custody Withdrawal / Payout",
+      bodyHtml: `
+        <div class="danger-box">Blockchain withdrawals are irreversible once verified. Validate the destination address and network fee before submitting. (Owner only)</div>
+        <div class="field">
+          <label>Currency Code (e.g. trx, usdttrc20, btc)</label>
+          <input class="input mono" name="currency" id="po-currency" value="${esc(defaultCurrency)}" placeholder="trx" required />
+        </div>
+        <div class="field">
+          <label>Destination Wallet Address</label>
+          <input class="input mono" name="address" id="po-address" placeholder="Destination address on the selected network" required />
+        </div>
+        <div class="field">
+          <label>Extra ID / Memo / Destination Tag (if required by network)</label>
+          <input class="input mono" name="extraId" id="po-extra" placeholder="Optional" />
+        </div>
+        <div class="field">
+          <label>Withdrawal Amount</label>
+          <input class="input mono" name="amount" id="po-amount" type="number" step="any" min="0.000001" placeholder="50" required />
+        </div>
+        <div style="margin:10px 0">
+          <button type="button" class="btn sm" id="btn-check-payout">✔ Validate Address & Estimate Fee</button>
+        </div>
+        <div id="po-check-box"></div>
+        ${reasonField("Required audit reason for this withdrawal.")}`,
+      confirmText: "Submit Withdrawal",
+      danger: true,
+      onConfirm: async (values) => {
+        try {
+          const result = (await POST("/custody/payouts", {
+            operationId: newOperationId(),
+            currency: values.currency,
+            address: values.address,
+            extraId: values.extraId || null,
+            amount: Number(values.amount),
+            reason: values.reason,
+          })).data;
+          toast("success", `Withdrawal created (ID: ${result.id || "submitted"}).`);
+          closeModal();
+          if (result.batchWithdrawalId) {
+            openVerifyPayoutModal(result.batchWithdrawalId);
+          } else if (custodyState.tab === "payouts") {
+            loadCustodyPayoutsTable();
+          }
+        } catch (error) {
+          toast("error", error.message);
+        }
+      },
+    });
+
+    const checkBtn = $("#btn-check-payout");
+    if (checkBtn) {
+      checkBtn.onclick = async () => {
+        const box = $("#po-check-box");
+        const currency = $("#po-currency")?.value.trim();
+        const address = $("#po-address")?.value.trim();
+        const extraId = $("#po-extra")?.value.trim();
+        const amount = $("#po-amount")?.value.trim();
+        if (!currency || !address || !amount) {
+          toast("error", "Enter currency, address, and amount first.");
+          return;
+        }
+        box.innerHTML = loading();
+        try {
+          const [addrRes, feeRes] = await Promise.all([
+            POST("/custody/payouts/validate-address", { currency, address, extraId: extraId || null }),
+            GET(`/custody/payouts/fee?currency=${encodeURIComponent(currency)}&amount=${encodeURIComponent(amount)}`),
+          ]);
+          const v = addrRes.data;
+          const f = feeRes.data;
+          box.innerHTML = `
+            <div class="card" style="padding:10px;margin:8px 0;background:var(--bg-soft)">
+              <div class="kv">
+                <dt>Address Validation</dt><dd><span class="pill green">Valid (${esc(v.ticker)} on ${esc(v.network)})</span></dd>
+                <dt>Destination</dt><dd class="mono">${esc(v.address)}</dd>
+                <dt>Amount</dt><dd class="mono">${esc(String(f.amount))} ${esc(f.ticker)}</dd>
+                <dt>Estimated Network Fee</dt><dd class="mono">${f.fee != null ? `${esc(String(f.fee))} ${esc(f.ticker)}` : "—"}</dd>
+                <dt>Min Withdrawal</dt><dd class="mono">${f.minAmount != null ? `${esc(String(f.minAmount))} ${esc(f.ticker)}` : "—"}</dd>
+              </div>
+            </div>`;
+        } catch (error) {
+          box.innerHTML = `<div class="danger-box">${esc(error.message)}</div>`;
+        }
+      };
+    }
+  }
+
+  function openVerifyPayoutModal(defaultBatchId = "") {
+    openModal({
+      title: "Verify Batch Withdrawal (2FA)",
+      bodyHtml: `
+        <div class="warn-box">Enter the 2FA or email verification code issued for this NOWPayments batch withdrawal. (Owner only)</div>
+        <div class="field">
+          <label>Batch Withdrawal ID</label>
+          <input class="input mono" name="batchId" value="${esc(defaultBatchId)}" placeholder="Batch withdrawal ID" required />
+        </div>
+        <div class="field">
+          <label>Verification Code (2FA / Email)</label>
+          <input class="input mono" name="verificationCode" placeholder="123456" required />
+        </div>
+        ${reasonField("Audit note for payout verification.")}`,
+      confirmText: "Verify Payout",
+      onConfirm: async (values) => {
+        try {
+          await POST(`/custody/payouts/${encodeURIComponent(values.batchId.trim())}/verify`, {
+            operationId: newOperationId(),
+            verificationCode: values.verificationCode.trim(),
+            reason: values.reason,
+          });
+          toast("success", "Batch payout verified.");
+          closeModal();
+          if (custodyState.tab === "payouts") loadCustodyPayoutsTable();
+        } catch (error) {
+          toast("error", error.message);
+        }
+      },
+    });
+  }
+
+  async function renderCustodyTransactions() {
+    const target = $("#custody-body");
+    if (!target) return;
+    const q = custodyState.transactions;
+    const statuses = ["all", "pending", "waiting", "confirming", "partially_paid", "finished", "failed", "expired", "refunded", "recovery-required", "underpaid", "overpaid"];
+    target.innerHTML = `
+      <div class="card">
+        <div class="filter-bar">
+          <div class="tabs">
+            ${statuses.map((s) => `<button class="tab ${q.status === s ? "active" : ""}" data-tx-status="${s}">${s === "all" ? "All" : s.replace("_", " ")}</button>`).join("")}
+          </div>
+          <span class="spacer"></span>
+          <button class="btn primary sm" id="btn-run-reconcile">${icon("refresh")} Run Read-Only Reconciliation</button>
+        </div>
+        <div class="filter-bar">
+          <input id="tx-search" class="input search" placeholder="Search order ID, invoice ID, payment ID, Telegram ID, or currency…" value="${esc(q.search)}" />
+        </div>
+        <div id="reconcile-results"></div>
+        <div id="tx-table">${loading()}</div>
+      </div>`;
+
+    $$("#custody-body [data-tx-status]").forEach((tab) => {
+      tab.onclick = () => { q.status = tab.dataset.txStatus; q.page = 1; renderCustodyTransactions(); };
+    });
+    $("#tx-search").oninput = debounce((e) => { q.search = e.target.value; q.page = 1; loadCustodyTransactionsTable(); }, 300);
+    $("#btn-run-reconcile").onclick = () => runCustodyReconciliation();
+    await loadCustodyTransactionsTable();
+  }
+
+  async function runCustodyReconciliation() {
+    const box = $("#reconcile-results");
+    if (!box) return;
+    box.innerHTML = `<div class="card-pad">${loading()}</div>`;
+    try {
+      const report = (await POST("/custody/reconcile", { limit: 20 })).data;
+      const discrepancies = (report.findings || []).filter((f) => f.classification !== "in_sync");
+      box.innerHTML = `
+        <div class="card-pad" style="border-bottom:1px solid var(--border)">
+          <div class="section-title">Read-Only Reconciliation Report (${dateFmt(report.checkedAt)})</div>
+          <div style="font-size:12.5px;color:var(--text-dim);margin:6px 0 10px">
+            Checked ${num(report.checkedCount)} recent invoices against live NOWPayments status · Found <strong>${num(report.discrepancyCount)}</strong> discrepancy item(s). User balances were not modified during this read-only check.
+          </div>
+          ${discrepancies.length ? `
+            <div class="table-wrap"><table class="data">
+              <thead><tr><th>Order ID</th><th>Payment ID</th><th>Local Status</th><th>Provider Status</th><th>Classification</th><th>Detail</th><th>Action</th></tr></thead>
+              <tbody>
+                ${discrepancies.map((d) => `
+                  <tr>
+                    <td class="mono">${esc(d.orderId)}</td>
+                    <td class="mono">${esc(d.paymentId || "—")}</td>
+                    <td>${pill(d.localStatus)}</td>
+                    <td>${d.providerStatus ? pill(d.providerStatus) : "—"}</td>
+                    <td><span class="pill ${d.severity === "critical" ? "red" : "yellow"}">${esc(d.classification)}</span></td>
+                    <td style="font-size:12px">${esc(d.detail)}</td>
+                    <td><button class="btn sm" data-inspect-payment="${esc(d.correctiveActionKey)}">Inspect & Resolve</button></td>
+                  </tr>`).join("")}
+              </tbody>
+            </table></div>`
+            : `<div class="pill green">All checked records are in sync with NOWPayments.</div>`}
+        </div>`;
+      box.querySelectorAll("[data-inspect-payment]").forEach((btn) => {
+        btn.onclick = () => showPayment(btn.dataset.inspectPayment);
+      });
+    } catch (error) {
+      box.innerHTML = `<div class="card-pad">${errorBox(error)}</div>`;
+    }
+  }
+
+  async function loadCustodyTransactionsTable() {
+    const target = $("#tx-table");
+    if (!target) return;
+    target.innerHTML = loading();
+    const q = custodyState.transactions;
+    const params = new URLSearchParams({ status: q.status, search: q.search, page: q.page, pageSize: 15 });
+    let data;
+    try {
+      data = (await GET(`/custody/transactions?${params}`)).data;
+    } catch (error) {
+      target.innerHTML = errorBox(error);
+      return;
+    }
+    if (!data.items.length) {
+      target.innerHTML = `<div class="empty">No NOWPayments transactions match these filters.</div>` + pagerHtml(data.page, data.pages, data.total, "custodyTx");
+      bindPagers();
+      return;
+    }
+    target.innerHTML = `
+      <div class="table-wrap"><table class="data">
+        <thead>
+          <tr>
+            <th>Order ID</th>
+            <th>Invoice / Payment ID</th>
+            <th>User</th>
+            <th>Asset / Network</th>
+            <th class="num">Amount (Toman)</th>
+            <th class="num">USD Price</th>
+            <th class="num">Pay / Paid Crypto</th>
+            <th>Credited</th>
+            <th>Created</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${data.items.map((tx) => `
+            <tr data-payment="${esc(tx.key)}">
+              <td class="mono">${esc(tx.orderId.slice(0, 18))}…</td>
+              <td class="mono">${esc(tx.invoiceId || "—")} / ${esc(tx.paymentId || "—")}</td>
+              <td class="mono">${esc(tx.userId)}</td>
+              <td><strong>${esc(tx.ticker)}</strong> <span class="pill blue">${esc(tx.network)}</span></td>
+              <td class="num">${money(tx.amountToman)}</td>
+              <td class="num mono">$${tx.priceAmountUsd != null ? esc(String(tx.priceAmountUsd)) : "—"}</td>
+              <td class="num mono">${tx.actuallyPaid != null ? esc(String(tx.actuallyPaid)) : "0"} / ${tx.payAmount != null ? esc(String(tx.payAmount)) : (tx.estimatedPayAmount != null ? `~${esc(String(tx.estimatedPayAmount))}` : "—")} ${esc(tx.ticker)}</td>
+              <td>${tx.balanceCredited ? `<span class="pill green">Yes</span>` : `<span class="pill gray">No</span>`}</td>
+              <td>${dateShort(tx.createdAt)}</td>
+              <td>${pill(tx.status)}${tx.recoveryStatus === "required" ? ` <span class="pill red">recovery</span>` : ""}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table></div>
+      ${pagerHtml(data.page, data.pages, data.total, "custodyTx")}`;
+    PAGER_HANDLERS.custodyTx = (page) => { custodyState.transactions.page = page; loadCustodyTransactionsTable(); };
+    bindPagers();
+    target.querySelectorAll("tr[data-payment]").forEach((row) => {
+      row.onclick = () => showPayment(row.dataset.payment);
+    });
+  }
+
   // ── Routing ────────────────────────────────────────────────────────────────
   const PAGES = {
     dashboard: { title: "Dashboard", render: pageDashboard },
@@ -1606,6 +2424,7 @@
     vpns: { title: "VPN Services", render: pageVpns },
     payments: { title: "Payments", render: pagePayments },
     recovery: { title: "Payment Recovery", render: pageRecovery },
+    custody: { title: "NOWPayments & Custody", render: pageCustody },
     products: { title: "Products", render: pageProducts },
     broadcast: { title: "Broadcast — ارسال پیام همگانی", render: pageBroadcast },
     referrals: { title: "Referrals", render: pageReferrals },

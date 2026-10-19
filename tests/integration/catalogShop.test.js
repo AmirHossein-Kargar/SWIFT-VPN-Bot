@@ -48,16 +48,16 @@ function lastKeyboard(bot) {
 }
 
 describe("customer plan menu is server-configured", () => {
-  skip("renders only the four durations in the customer selling-plan configuration", async () => {
+  skip("renders only the four subscription durations (30, 90, 180, 365 days)", async () => {
     await AdminProduct.create([
       { productId: "admin45", name: "Admin 45 day product", durationDays: 45, trafficGb: 20, priceToman: 1, costToman: 0, enabled: true, displayOrder: 0 },
-      { productId: "admin180", name: "Admin 180 day product", durationDays: 180, trafficGb: 20, priceToman: 1, costToman: 0, enabled: true, displayOrder: 1 },
+      { productId: "admin60", name: "Admin 60 day product", durationDays: 60, trafficGb: 20, priceToman: 1, costToman: 0, enabled: true, displayOrder: 1 },
     ]);
     const bot = makeBotStub();
     await handleBuyService(bot, CHAT);
     const keyboard = lastKeyboard(bot);
-    for (const days of [1, 7, 15, 30]) assert.match(keyboard, new RegExp(`duration_${days}`));
-    assert.doesNotMatch(keyboard, /duration_45|duration_180/);
+    for (const days of [30, 90, 180, 365]) assert.match(keyboard, new RegExp(`duration_${days}`));
+    assert.doesNotMatch(keyboard, /duration_45|duration_60/);
   });
 
   skip("duration and plan selection ignore AdminProduct changes and show central customer prices", async () => {

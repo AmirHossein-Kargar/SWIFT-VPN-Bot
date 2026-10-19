@@ -1,6 +1,10 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { makeFakeWalletModels } from "../helpers/fakeWalletModels.js";
+import { makeBotStub } from "../helpers/db.js";
+import handleBuyService from "../../services/buyService/buyService.js";
+import handleCallbackQuery from "../../handlers/handleCallbackQuery.js";
+import { getCustomerPlans, getCustomerPlanById, getInternalPlanCatalog } from "../../services/plans.js";
 import { telegramPurchaseId } from "../../services/buyService/orderService.js";
 import { purchasePlan, PurchaseServiceError } from "../../services/buyService/purchaseService.js";
 import WalletPurchase, { isAllowedWalletPurchaseTransition } from "../../models/WalletPurchase.js";
@@ -200,6 +204,179 @@ describe("purchaseService.purchasePlan", () => {
       () => purchasePlan("7011", "test", options),
       (error) => error.code === "PURCHASE_ID_CONFLICT",
     );
+  });
+
+  test("preserves selected subscription duration (30, 90, 180, 365 days) through order, ledger, and VPN provisioning", async () => {
+    const fixedNow = new Date("2026-10-18T12:00:00.000Z");
+    for (const durationDays of [30, 90, 180, 365]) {
+      const plansForDuration = getCustomerPlans({ durationDays });
+      const selectedPlan = plansForDuration.find((p) => p.gig === 50);
+      assert.ok(selectedPlan, `expected 50 GB plan for ${durationDays} days`);
+      assert.equal(selectedPlan.days, durationDays);
+
+      const userId = `800${durationDays}`;
+      const purchaseId = `unit-dur-${durationDays}`;
+      const models = makeFakeWalletModels([{ telegramId: userId, balance: 1_000_000 }]);
+      let provisionedArgs = null;
+
+      const result = await purchasePlan(userId, selectedPlan.id, serviceOptions(models, {
+        purchaseId,
+        now: () => fixedNow,
+        createService: async (...args) => {
+          provisionedArgs = args;
+          return validProviderResponse({ username: `vpn_${durationDays}d` });
+        },
+      }));
+
+      assert.equal(result.status, "completed");
+      assert.equal(result.plan.days, durationDays, `${durationDays}-day plan must retain duration`);
+      assert.equal(result.plan.gig, 50);
+      assert.equal(result.plan.price, selectedPlan.price);
+      assert.deepEqual(provisionedArgs, [50, durationDays, 0], `WizardXray must receive exact duration=${durationDays}`);
+
+      const purchase = models.purchases.get(purchaseId);
+      assert.equal(purchase.days, durationDays);
+      assert.equal(purchase.gig, 50);
+      assert.equal(purchase.amount, selectedPlan.price);
+      assert.equal(purchase.planId, selectedPlan.id);
+
+      const elapsedDays = Math.round((purchase.expiresAt.getTime() - purchase.provisionedAt.getTime()) / 86_400_000);
+      assert.equal(elapsedDays, durationDays);
+
+      const user = models.users.get(userId);
+      assert.equal(user.balance, 1_000_000 - selectedPlan.price);
+      assert.equal(user.services.length, 1);
+      assert.equal(user.services[0].expiresAt.getTime(), purchase.expiresAt.getTime());
+      assert.equal(user.services[0].trafficGb, 50);
+      assert.equal(user.services[0].productId, selectedPlan.id);
+    }
+  });
+});
+
+describe("Telegram subscription duration selection UI and navigation", () => {
+  function makeQuery(data, chatId = 99001, messageId = 42) {
+    return {
+      id: `cb_${Math.random().toString(36).slice(2)}`,
+      from: { id: chatId },
+      message: { chat: { id: chatId, type: "private" }, message_id: messageId },
+      data,
+    };
+  }
+
+  test("Buy Service displays the four Persian duration buttons (30, 90, 180, 365 days) and Back button", async () => {
+    const bot = makeBotStub();
+    await handleBuyService(bot, 99001);
+
+    assert.equal(bot.sent.length, 1);
+    const msg = bot.sent[0];
+    assert.equal(msg.kind, "message");
+    assert.match(msg.text, /مدت زمان اشتراک/);
+
+    const rows = msg.opts.reply_markup.inline_keyboard;
+    assert.equal(rows.length, 5);
+    assert.deepEqual(
+      rows.slice(0, 4).map((row) => [row[0].text, row[0].callback_data]),
+      [
+        ["🗓️ یک‌ماهه", "duration_30"],
+        ["🗓️ سه‌ماهه", "duration_90"],
+        ["🗓️ شش‌ماهه", "duration_180"],
+        ["🗓️ یک‌ساله", "duration_365"],
+      ],
+    );
+    assert.deepEqual(rows[4], [{ text: "🔙 بازگشت", callback_data: "buy_service_back_to_main" }]);
+    for (const row of rows) {
+      for (const btn of row) {
+        assert.ok(Buffer.byteLength(btn.callback_data, "utf8") <= 64);
+      }
+    }
+  });
+
+  test("selecting each of the four durations displays compatible plans, selling prices, confirmation, and never leaks cost or profit", async () => {
+    for (const durationDays of [30, 90, 180, 365]) {
+      const bot = makeBotStub();
+      await handleCallbackQuery(bot, makeQuery(`duration_${durationDays}`));
+
+      const editMsg = bot.sent.find((e) => e.kind === "edit");
+      assert.ok(editMsg, `duration_${durationDays} must edit message with plans`);
+      assert.match(editMsg.text, /پلن‌های اختصاصی SWIFT VPN/);
+      assert.match(editMsg.text, new RegExp(`${durationDays} روز`));
+
+      const rows = editMsg.opts.reply_markup.inline_keyboard;
+      const expectedPlans = getCustomerPlans({ durationDays });
+      const internalPlans = getInternalPlanCatalog({ durationDays });
+      assert.equal(rows.length, expectedPlans.length + 1);
+
+      expectedPlans.forEach((plan, idx) => {
+        const internalPlan = internalPlans[idx];
+        const btn = rows[idx][0];
+        assert.equal(btn.callback_data, `plan_${plan.id}`);
+        assert.ok(Buffer.byteLength(btn.callback_data, "utf8") <= 64);
+        assert.equal(btn.text, `🔹 ${plan.gig} GB | ${plan.price.toLocaleString("en-US")} تومان`);
+        assert.match(editMsg.text, new RegExp(`${plan.gig} گیگابایت — ${plan.price.toLocaleString("en-US")} تومان`));
+
+        // Strict customer-facing rule: internal purchaseCost and profit must NEVER appear for this plan
+        const costFormatted = internalPlan.purchaseCost.toLocaleString("en-US");
+        const profitFormatted = internalPlan.profit.toLocaleString("en-US");
+        const planLine = editMsg.text.split("\n").find((line) => line.includes(`${plan.gig} گیگابایت`)) || "";
+        assert.equal(planLine.includes(costFormatted), false, `plan line must not expose purchaseCost ${costFormatted}`);
+        assert.equal(planLine.includes(profitFormatted), false, `plan line must not expose profit ${profitFormatted}`);
+        assert.equal(btn.text.includes(costFormatted), false);
+        assert.equal(btn.text.includes(profitFormatted), false);
+        assert.doesNotMatch(editMsg.text, /سود|قیمت خرید|purchaseCost|profit|margin/i);
+      });
+
+      const backBtn = rows[rows.length - 1][0];
+      assert.deepEqual(backBtn, { text: "🔙 بازگشت", callback_data: "buy_service_back" });
+
+      // Select one of the plans and verify confirmation screen preserves duration and price without leaking cost/profit
+      const chosenPlan = expectedPlans.find((p) => p.gig === 100);
+      const chosenInternal = internalPlans.find((p) => p.gig === 100);
+      const confirmBot = makeBotStub();
+      await handleCallbackQuery(confirmBot, makeQuery(`plan_${chosenPlan.id}`));
+      const confirmEdit = confirmBot.sent.find((e) => e.kind === "edit");
+      assert.ok(confirmEdit);
+      assert.match(confirmEdit.text, new RegExp(`${durationDays} روز`));
+      assert.match(confirmEdit.text, new RegExp(`${chosenPlan.gig} گیگ`));
+      assert.match(confirmEdit.text, new RegExp(`${chosenPlan.price.toLocaleString("en-US")} تومان`));
+      assert.equal(confirmEdit.text.includes(chosenInternal.purchaseCost.toLocaleString("en-US")), false);
+      assert.equal(confirmEdit.text.includes(chosenInternal.profit.toLocaleString("en-US")), false);
+
+      const confirmRows = confirmEdit.opts.reply_markup.inline_keyboard;
+      assert.equal(confirmRows[0][0].callback_data, `confirm_order_${chosenPlan.id}`);
+      assert.ok(Buffer.byteLength(confirmRows[0][0].callback_data, "utf8") <= 64);
+      assert.deepEqual(confirmRows[1][0], { text: "🔙 بازگشت", callback_data: "buy_service_back" });
+    }
+
+    // Verify back navigation returns to the 4-duration menu
+    const backBot = makeBotStub();
+    await handleCallbackQuery(backBot, makeQuery("buy_service_back"));
+    const durationMenuMsg = backBot.sent.find((e) => e.kind === "message");
+    assert.ok(durationMenuMsg);
+    const durationCallbacks = durationMenuMsg.opts.reply_markup.inline_keyboard.map((r) => r[0].callback_data);
+    assert.deepEqual(durationCallbacks, [
+      "duration_30",
+      "duration_90",
+      "duration_180",
+      "duration_365",
+      "buy_service_back_to_main",
+    ]);
+
+    // Verify invalid callbacks are rejected safely
+    for (const invalidDuration of ["duration_abc", "duration_0", "duration_-5", "duration_0x1e", "duration_30;drop"]) {
+      const invalidBot = makeBotStub();
+      await handleCallbackQuery(invalidBot, makeQuery(invalidDuration));
+      assert.ok(invalidBot.sent.some((e) => /مدت زمان نامعتبر/.test(String(e.opts?.text || e.text || ""))));
+    }
+    for (const unsupportedDuration of ["duration_45", "duration_60"]) {
+      const unsupportedBot = makeBotStub();
+      await handleCallbackQuery(unsupportedBot, makeQuery(unsupportedDuration));
+      assert.ok(unsupportedBot.sent.some((e) => /پلن فعالی برای این مدت زمان موجود نیست/.test(String(e.text || ""))));
+    }
+    for (const invalidPlan of ["plan_unknown", "plan_s90_10", "plan_mini_90"]) {
+      const invalidPlanBot = makeBotStub();
+      await handleCallbackQuery(invalidPlanBot, makeQuery(invalidPlan));
+      assert.ok(invalidPlanBot.sent.some((e) => /این پلن در حال حاضر فعال نیست/.test(String(e.text || ""))));
+    }
   });
 });
 

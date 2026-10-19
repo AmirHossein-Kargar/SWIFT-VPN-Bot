@@ -1,20 +1,31 @@
-import { NowPaymentsFlowError, centsToPriceAmount, readNowPaymentsConfig, tomanToFiatCents } from "../nowpayments/money.js";
-import { createNowPaymentsRequest } from "../nowpayments/nowpaymentsClient.js";
+import {
+  NowPaymentsFlowError,
+  centsToPriceAmount,
+  compareDecimalAmounts,
+  formatCryptoAmount,
+  normalizePayCurrency,
+  readNowPaymentsConfig,
+  tomanToFiatCents,
+} from "../nowpayments/money.js";
+import { buildQueryPath, createNowPaymentsRequest } from "../nowpayments/nowpaymentsClient.js";
+import { fetchNowPaymentsCatalog, validateCatalogSelection } from "../nowpayments/catalog.js";
+import { getCustomerPlanByDurationAndVolume, getCustomerPlanById } from "../plans.js";
 import { getUsdtTomanQuote, gheymatCacheTtlMs, gheymatMaxAgeMs } from "./gheymatClient.js";
 import { logQuoteFailure } from "./quoteLog.js";
 
 const estimateCache = new Map();
 let estimatePending = new Map();
 
-function formatTrx(value) {
+function formatTrx(value, precision = 6) {
   const number = Number(value);
   if (!Number.isFinite(number) || number <= 0) return null;
-  const text = number.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+  const decimals = Number.isInteger(precision) && precision >= 0 && precision <= 12 ? precision : 6;
+  const text = number.toFixed(decimals).replace(/0+$/, "").replace(/\.$/, "");
   return text === "0" ? null : text;
 }
 
-export function formatTrxAmount(value) {
-  return formatTrx(value);
+export function formatTrxAmount(value, precision = 6) {
+  return formatTrx(value, precision);
 }
 
 function parseEstimate(body, { amount, currencyFrom, currencyTo }) {
@@ -29,20 +40,35 @@ function parseEstimate(body, { amount, currencyFrom, currencyTo }) {
   if (!Number.isFinite(amountFrom) || Math.abs(amountFrom - Number(amount)) > tolerance) {
     return { ok: false, reason: "amount_from" };
   }
-  return { ok: true, trx: estimated };
+  return { ok: true, amount: estimated };
 }
 
-async function estimatedTrx({ amount, currencyFrom, request, cacheKey, ttlMs, nowMs }) {
+function parseMinAmount(body, expectedPayCurrency) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const currencyFrom = String(body.currency_from || "").trim().toLowerCase();
+  if (expectedPayCurrency && currencyFrom && currencyFrom !== expectedPayCurrency) return null;
+  const minAmount = Number(body.min_amount);
+  if (!Number.isFinite(minAmount) || minAmount <= 0) return null;
+  const fiatEquivalent = body.fiat_equivalent != null ? Number(body.fiat_equivalent) : null;
+  return {
+    minCryptoAmount: Number(minAmount.toFixed(8)),
+    minFiatEquivalent: Number.isFinite(fiatEquivalent) && fiatEquivalent > 0
+      ? Number(fiatEquivalent.toFixed(4))
+      : null,
+  };
+}
+
+async function estimatedCrypto({ amount, currencyFrom, currencyTo, request, cacheKey, ttlMs, nowMs }) {
   const cached = estimateCache.get(cacheKey);
   if (cached && cached.expiresAt > nowMs) return cached.amount;
   if (estimatePending.has(cacheKey)) return estimatePending.get(cacheKey);
   const pending = (async () => {
-    const path = `/estimate?amount=${encodeURIComponent(amount)}&currency_from=${encodeURIComponent(currencyFrom)}&currency_to=trx`;
+    const path = `/estimate?amount=${encodeURIComponent(amount)}&currency_from=${encodeURIComponent(currencyFrom)}&currency_to=${encodeURIComponent(currencyTo)}`;
     let response;
     try {
       response = await request({ method: "GET", path });
     } catch (error) {
-      logQuoteFailure("nowpayments_estimate", error, { currencyFrom, currencyTo: "trx" });
+      logQuoteFailure("nowpayments_estimate", error, { currencyFrom, currencyTo });
       return null;
     }
     if (!response || response.status !== 200) {
@@ -51,10 +77,10 @@ async function estimatedTrx({ amount, currencyFrom, request, cacheKey, ttlMs, no
         status: response?.status,
         providerCode: response?.providerCode,
         message: response?.providerMessage,
-      }, { currencyFrom, currencyTo: "trx" });
+      }, { currencyFrom, currencyTo });
       return null;
     }
-    const parsed = parseEstimate(response.data, { amount, currencyFrom, currencyTo: "trx" });
+    const parsed = parseEstimate(response.data, { amount, currencyFrom, currencyTo });
     if (!parsed.ok) {
       logQuoteFailure("nowpayments_estimate_parse", {
         code: parsed.reason,
@@ -63,8 +89,8 @@ async function estimatedTrx({ amount, currencyFrom, request, cacheKey, ttlMs, no
       });
       return null;
     }
-    estimateCache.set(cacheKey, { amount: parsed.trx, expiresAt: Date.now() + ttlMs });
-    return parsed.trx;
+    estimateCache.set(cacheKey, { amount: parsed.amount, expiresAt: Date.now() + ttlMs });
+    return parsed.amount;
   })().finally(() => {
     estimatePending.delete(cacheKey);
   });
@@ -81,13 +107,22 @@ function configPresence(env) {
 }
 
 /**
- * Toman top-up quote.
- * Gheymat supplies USDT/IRT. NOWPayments GET /v1/estimate is optional and only
- * supplies a pre-invoice TRX estimate. The hosted POST /v1/invoice determines
- * the payable amount, so a failed estimate must not block confirmation.
+ * Toman top-up / plan quote.
+ * Gheymat supplies USDT/IRT (Toman). NOWPayments GET /v1/estimate supplies the
+ * crypto estimate for the selected asset/network (`payCurrency`, default `trx`).
+ * When `enforceMinAmount` or `requireEstimate` is enabled, minimum amounts and
+ * live estimates are strictly enforced.
  */
 export async function quoteTronTopUp({
   amountToman,
+  payCurrency: requestedPayCurrency = null,
+  ticker: requestedTicker = null,
+  network: requestedNetwork = null,
+  currencyPrecision = 6,
+  planId = null,
+  enforceMinAmount = false,
+  requireEstimate = false,
+  catalogMinAmount = null,
   env = process.env,
   now = new Date(),
   usdtQuote = getUsdtTomanQuote,
@@ -105,9 +140,23 @@ export async function quoteTronTopUp({
     throw new NowPaymentsFlowError("not_configured");
   }
   if (!Number.isSafeInteger(amountToman) || amountToman <= 0) throw new NowPaymentsFlowError("invalid_amount");
+
+  const targetPayCurrency = requestedPayCurrency
+    ? normalizePayCurrency(requestedPayCurrency)
+    : config.payCurrency;
+  if (!targetPayCurrency) {
+    throw new NowPaymentsFlowError("currency_unavailable");
+  }
+  const targetTicker = String(requestedTicker || targetPayCurrency).trim().toUpperCase();
+  const targetNetwork = String(requestedNetwork || targetTicker).trim().toUpperCase();
+  const targetPrecision = Number.isInteger(currencyPrecision) && currencyPrecision >= 0 && currencyPrecision <= 12
+    ? currencyPrecision
+    : 6;
+
+  const nowDate = now instanceof Date ? now : new Date(typeof now === "function" ? now() : Number(now));
   let fiat;
   try {
-    fiat = await usdtQuote({ env, now });
+    fiat = await usdtQuote({ env, now: nowDate });
   } catch (error) {
     logQuoteFailure("gheymat_usdt_irt", error);
     throw new NowPaymentsFlowError("rate_unavailable");
@@ -122,34 +171,205 @@ export async function quoteTronTopUp({
     apiKey: config.apiKey,
     baseURL: config.baseURL,
   });
-  const estimated = await estimatedTrx({
+
+  let minAmountInfo = null;
+  if (enforceMinAmount) {
+    let minRes;
+    try {
+      minRes = await call({
+        method: "GET",
+        path: buildQueryPath("/min-amount", {
+          currency_from: targetPayCurrency,
+          currency_to: targetPayCurrency,
+          fiat_equivalent: config.priceCurrency,
+          is_fixed_rate: config.isFixedRate,
+          is_fee_paid_by_user: config.isFeePaidByUser,
+        }),
+      });
+    } catch (error) {
+      logQuoteFailure("nowpayments_min_amount", error, { payCurrency: targetPayCurrency });
+      throw new NowPaymentsFlowError("estimate_unavailable");
+    }
+    if (!minRes || minRes.status !== 200) {
+      throw new NowPaymentsFlowError("estimate_unavailable");
+    }
+    minAmountInfo = parseMinAmount(minRes.data, targetPayCurrency);
+    if (!minAmountInfo) {
+      throw new NowPaymentsFlowError("estimate_unavailable");
+    }
+    if (minAmountInfo.minFiatEquivalent != null && priceAmount + 1e-6 < minAmountInfo.minFiatEquivalent) {
+      throw new NowPaymentsFlowError("below_min_amount");
+    }
+  } else if (Number.isFinite(Number(catalogMinAmount)) && Number(catalogMinAmount) > 0) {
+    minAmountInfo = {
+      minCryptoAmount: Number(Number(catalogMinAmount).toFixed(8)),
+      minFiatEquivalent: null,
+    };
+  }
+
+  const estimated = await estimatedCrypto({
     amount: priceAmount,
     currencyFrom: config.priceCurrency,
+    currencyTo: targetPayCurrency,
     request: call,
-    cacheKey: `${config.priceCurrency}:${fiat.tomanPerUsdt}:${priceAmount}`,
+    cacheKey: `${config.priceCurrency}:${targetPayCurrency}:${fiat.tomanPerUsdt}:${priceAmount}`,
     ttlMs: gheymatCacheTtlMs(env),
-    nowMs: now.getTime(),
+    nowMs: nowDate.getTime(),
   });
-  const tomanPerTrx = estimated ? amountToman / estimated : null;
+
+  if (requireEstimate && estimated == null) {
+    throw new NowPaymentsFlowError("estimate_unavailable");
+  }
+
+  if (minAmountInfo?.minCryptoAmount != null && estimated != null) {
+    const cmp = compareDecimalAmounts(estimated, minAmountInfo.minCryptoAmount);
+    if (cmp !== null && cmp < 0) {
+      throw new NowPaymentsFlowError("below_min_amount");
+    }
+  }
+
+  const tomanPerCrypto = estimated ? amountToman / estimated : null;
+  const confirmedAt = nowDate.toISOString();
+  const maxAgeMs = gheymatMaxAgeMs(env);
+  const quoteExpiresAt = new Date(nowDate.getTime() + gheymatCacheTtlMs(env)).toISOString();
+
+  const quoteSnapshot = Object.freeze({
+    planId: planId ? String(planId) : null,
+    amountToman,
+    gheymatQuote: Object.freeze({
+      value: fiat.tomanPerUsdt,
+      unit: fiat.unit || "toman",
+      source: "gheymat",
+      quoteAt: fiat.createdAt,
+    }),
+    priceCurrency: config.priceCurrency,
+    priceAmountCents,
+    finalPriceAmount: priceAmount,
+    selectedAsset: Object.freeze({
+      payCurrency: targetPayCurrency,
+      ticker: targetTicker,
+      network: targetNetwork,
+      currencyPrecision: targetPrecision,
+    }),
+    estimate: estimated != null
+      ? Object.freeze({
+          estimatedAmount: estimated,
+          estimatedDisplay: formatCryptoAmount(estimated, targetPrecision),
+          estimateAt: confirmedAt,
+        })
+      : null,
+    minAmount: minAmountInfo ? Object.freeze({ ...minAmountInfo }) : null,
+    feePolicy: Object.freeze({
+      isFixedRate: Boolean(config.isFixedRate),
+      isFeePaidByUser: Boolean(config.isFeePaidByUser),
+    }),
+    quoteAt: fiat.createdAt,
+    confirmedAt,
+    quoteExpiresAt,
+  });
+
   return {
     amountToman,
+    planId: planId ? String(planId) : null,
     tomanPerUsdt: fiat.tomanPerUsdt,
     priceAmountCents,
+    priceAmountUsd: priceAmount,
     priceCurrency: config.priceCurrency,
+    payCurrency: targetPayCurrency,
+    ticker: targetTicker,
+    network: targetNetwork,
+    currencyPrecision: targetPrecision,
+    estimatedAmount: estimated,
+    estimatedCryptoDisplay: estimated != null ? formatCryptoAmount(estimated, targetPrecision) : null,
     estimatedTrx: estimated,
-    tomanPerTrx: Number.isFinite(tomanPerTrx) && tomanPerTrx > 0 ? tomanPerTrx : null,
+    tomanPerCrypto: Number.isFinite(tomanPerCrypto) && tomanPerCrypto > 0 ? tomanPerCrypto : null,
+    tomanPerTrx: Number.isFinite(tomanPerCrypto) && tomanPerCrypto > 0 ? tomanPerCrypto : null,
     estimateAvailable: estimated != null,
+    minAmount: minAmountInfo,
+    feePolicy: {
+      isFixedRate: Boolean(config.isFixedRate),
+      isFeePaidByUser: Boolean(config.isFeePaidByUser),
+    },
     quoteAt: fiat.createdAt,
-    confirmedAt: now.toISOString(),
+    confirmedAt,
+    quoteExpiresAt,
     source: "gheymat",
-    maxAgeMs: gheymatMaxAgeMs(env),
+    maxAgeMs,
+    quoteSnapshot,
   };
+}
+
+/**
+ * Quote a dynamic cryptocurrency payment for either a wallet top-up or a VPN plan,
+ * validating the selected currency & network against the live NOWPayments catalog
+ * and enforcing NOWPayments minimum payment amounts and live estimates.
+ */
+export async function quoteCryptoPayment({
+  amountToman = null,
+  planSelection = null,
+  payCurrency = null,
+  ticker = null,
+  network = null,
+  catalog: providedCatalog = null,
+  enforceMinAmount = true,
+  requireEstimate = true,
+  env = process.env,
+  now = new Date(),
+  usdtQuote = getUsdtTomanQuote,
+  request,
+} = {}) {
+  let resolvedAmountToman = amountToman;
+  let resolvedPlanId = null;
+
+  if (planSelection) {
+    const plan = typeof planSelection === "string"
+      ? getCustomerPlanById(planSelection)
+      : getCustomerPlanById(planSelection.planId || planSelection.id)
+        || getCustomerPlanByDurationAndVolume(
+          Number(planSelection.durationDays ?? planSelection.days),
+          Number(planSelection.gig ?? planSelection.trafficGb),
+        );
+    if (!plan) {
+      throw new NowPaymentsFlowError("invalid_plan");
+    }
+    resolvedAmountToman = plan.sellingPrice ?? plan.price;
+    resolvedPlanId = plan.id;
+  }
+
+  const nowDate = now instanceof Date ? now : new Date(typeof now === "function" ? now() : Number(now));
+  const catalog = providedCatalog || await fetchNowPaymentsCatalog({
+    env,
+    request,
+    now: () => nowDate.getTime(),
+  });
+
+  const asset = validateCatalogSelection(catalog, {
+    payCurrency: payCurrency || (!ticker ? readNowPaymentsConfig(env)?.payCurrency : null),
+    ticker,
+    network,
+  });
+
+  return quoteTronTopUp({
+    amountToman: resolvedAmountToman,
+    payCurrency: asset.code,
+    ticker: asset.ticker,
+    network: asset.network,
+    currencyPrecision: asset.networkPrecision ?? 6,
+    planId: resolvedPlanId,
+    enforceMinAmount,
+    requireEstimate,
+    catalogMinAmount: asset.minAmount,
+    env,
+    now: nowDate,
+    usdtQuote,
+    request,
+  });
 }
 
 export function quoteSnapshotIsFresh(snapshot, now = new Date(), env = process.env) {
   const quoteAt = Date.parse(snapshot?.quoteAt);
   const confirmedAt = Date.parse(snapshot?.confirmedAt);
-  const nowMs = now.getTime();
+  const nowMs = (now instanceof Date ? now : new Date(now)).getTime();
   if (!Number.isFinite(quoteAt) || !Number.isFinite(confirmedAt)) return false;
   if (quoteAt > nowMs + 5 * 60_000 || nowMs - quoteAt > gheymatMaxAgeMs(env)) return false;
   if (nowMs - confirmedAt > gheymatCacheTtlMs(env)) return false;

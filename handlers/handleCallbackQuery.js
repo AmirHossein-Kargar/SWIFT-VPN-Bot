@@ -26,7 +26,7 @@ import keyboard from "../keyboards/mainKeyboard.js";
 import { CHOOSE_OPTION_MESSAGE } from "../messages/staticMessages.js";
 import promptForReceipt from "../paymentHandlers/promptForReceipt.js";
 import { getActiveProducts, getCustomerPlans, getCustomerPlanById } from "../services/plans.js";
-import handleBuyService from "../services/buyService/buyService.js";
+import handleBuyService, { buildDurationPlansMessage } from "../services/buyService/buyService.js";
 import generatePlanButtons from "../keyboards/generatePlanButtons.js";
 import confirmOrder from "../services/buyService/confirmOrder.js";
 import orderService from "../services/buyService/orderService.js";
@@ -42,7 +42,13 @@ import deactivateServiceButton from "../services/manageServices/deactiveServiceB
 import handleProfile from "./message/handleProfile.js";
 import { sendTrxWallet } from "../paymentHandlers/handleTrxAmount.js";
 import { payHoosh } from "../paymentHandlers/payHoosh.js";
-import { confirmNowPaymentsTopUp, payNowPayments } from "../paymentHandlers/payNowPayments.js";
+import {
+  confirmNowPaymentsTopUp,
+  handleNowPaymentsCurrencyMenu,
+  handleNowPaymentsSelectAsset,
+  handleNowPaymentsSelectNetwork,
+  payNowPayments,
+} from "../paymentHandlers/payNowPayments.js";
 import { verifyHooshPayment } from "../services/hooshpay/verifyHooshPayment.js";
 import { confirmBankPayment } from "../services/payments/confirmBankPayment.js";
 import { sumAmount, sumUserBalances } from "../services/admin/collectionStats.js";
@@ -360,6 +366,10 @@ const handleCallbackQuery = async (bot, query) => {
       await payNowPayments(bot, query, session);
       break;
 
+    case "np_select_currency":
+      await handleNowPaymentsCurrencyMenu(bot, query, session);
+      break;
+
     case "np_create":
       await confirmNowPaymentsTopUp(bot, query, session);
       break;
@@ -417,12 +427,12 @@ const handleCallbackQuery = async (bot, query) => {
     // they read the authoritative Admin Panel product catalog.)
 
     case "buy_service_back_to_main":
-      await bot.deleteMessage(chatId, messageId);
+      await bot.deleteMessage(chatId, messageId).catch(() => {});
       await bot.sendMessage(chatId, CHOOSE_OPTION_MESSAGE);
       break;
 
     case "buy_service_back":
-      await bot.deleteMessage(chatId, messageId);
+      await bot.deleteMessage(chatId, messageId).catch(() => {});
       await handleBuyService(bot, chatId);
       break;
 
@@ -658,11 +668,27 @@ const handleCallbackQuery = async (bot, query) => {
   }
 
   // ── Dynamic callback handlers (startsWith) ─────────────────────────────────
+  if (data.startsWith("np_asset:")) {
+    const ticker = data.slice("np_asset:".length);
+    await handleNowPaymentsSelectAsset(bot, query, ticker, session);
+    return;
+  }
+
+  if (data.startsWith("np_net:")) {
+    const payCurrency = data.slice("np_net:".length);
+    await handleNowPaymentsSelectNetwork(bot, query, payCurrency, session);
+    return;
+  }
 
   // Customer selling plans and prices are resolved from the fixed server-side
   // catalog. AdminProduct edits never change the customer checkout price.
   if (data.startsWith("duration_")) {
-    const days = Number(data.slice("duration_".length));
+    const rawDays = data.slice("duration_".length);
+    if (!/^[1-9]\d{0,3}$/.test(rawDays)) {
+      await bot.answerCallbackQuery(query.id, { text: "⚠️ مدت زمان نامعتبر است.", show_alert: true });
+      return;
+    }
+    const days = Number(rawDays);
     if (!Number.isSafeInteger(days) || days < 1 || days > 3650) {
       await bot.answerCallbackQuery(query.id, { text: "⚠️ مدت زمان نامعتبر است.", show_alert: true });
       return;
@@ -676,9 +702,10 @@ const handleCallbackQuery = async (bot, query) => {
       });
       return;
     }
-    await bot.editMessageText(`💡 لطفاً یکی از پلن‌های ${days} روزه را انتخاب کنید:`, {
+    await bot.editMessageText(buildDurationPlansMessage(days, products), {
       chat_id: chatId,
       message_id: messageId,
+      parse_mode: "HTML",
       ...generatePlanButtons(products),
     });
     return;

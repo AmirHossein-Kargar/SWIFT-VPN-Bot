@@ -1,13 +1,112 @@
 import AdminProduct from "../models/AdminProduct.js";
 
+export const SUBSCRIPTION_DURATION_OPTIONS = Object.freeze([
+  { days: 30, months: 1, title: "یک‌ماهه", label: "🗓️ یک‌ماهه" },
+  { days: 90, months: 3, title: "سه‌ماهه", label: "🗓️ سه‌ماهه" },
+  { days: 180, months: 6, title: "شش‌ماهه", label: "🗓️ شش‌ماهه" },
+  { days: 365, months: 12, title: "یک‌ساله", label: "🗓️ یک‌ساله" },
+].map((option) => Object.freeze(option)));
+
+export const SUBSCRIPTION_DURATIONS = Object.freeze(
+  SUBSCRIPTION_DURATION_OPTIONS.map((option) => option.days),
+);
+
+const DURATION_OPTION_BY_DAYS = new Map(
+  SUBSCRIPTION_DURATION_OPTIONS.map((option) => [option.days, option]),
+);
+
 /**
- * Customer-facing selling plans.
- *
- * This is the only source of customer price, duration, and traffic values.
- * The AdminProduct collection remains a separate management/analytics catalog;
- * it is deliberately never consulted by the customer purchase flow.
+ * Integer-safe profit calculation: profit = sellingPrice - purchaseCost.
  */
-export const customerPlans = Object.freeze([
+export function calculatePlanProfit(sellingPrice, purchaseCost) {
+  if (!Number.isSafeInteger(sellingPrice) || !Number.isSafeInteger(purchaseCost)) {
+    throw new TypeError("sellingPrice and purchaseCost must be safe integers");
+  }
+  return sellingPrice - purchaseCost;
+}
+
+const RAW_SUBSCRIPTION_CATALOG = [
+  // 30-Day Plans (یک‌ماهه)
+  { days: 30, gig: 10, purchaseCost: 13_000, sellingPrice: 20_000 },
+  { days: 30, gig: 30, purchaseCost: 33_000, sellingPrice: 50_000 },
+  { days: 30, gig: 50, purchaseCost: 53_000, sellingPrice: 80_000 },
+  { days: 30, gig: 100, purchaseCost: 103_000, sellingPrice: 155_000 },
+  { days: 30, gig: 200, purchaseCost: 203_000, sellingPrice: 305_000 },
+  { days: 30, gig: 300, purchaseCost: 303_000, sellingPrice: 455_000 },
+  { days: 30, gig: 500, purchaseCost: 503_000, sellingPrice: 755_000 },
+
+  // 90-Day Plans (سه‌ماهه)
+  { days: 90, gig: 30, purchaseCost: 39_000, sellingPrice: 59_000 },
+  { days: 90, gig: 50, purchaseCost: 59_000, sellingPrice: 89_000 },
+  { days: 90, gig: 100, purchaseCost: 109_000, sellingPrice: 164_000 },
+  { days: 90, gig: 200, purchaseCost: 209_000, sellingPrice: 314_000 },
+  { days: 90, gig: 300, purchaseCost: 309_000, sellingPrice: 464_000 },
+  { days: 90, gig: 500, purchaseCost: 509_000, sellingPrice: 764_000 },
+
+  // 180-Day Plans (شش‌ماهه)
+  { days: 180, gig: 30, purchaseCost: 48_000, sellingPrice: 72_000 },
+  { days: 180, gig: 50, purchaseCost: 68_000, sellingPrice: 102_000 },
+  { days: 180, gig: 100, purchaseCost: 118_000, sellingPrice: 177_000 },
+  { days: 180, gig: 200, purchaseCost: 218_000, sellingPrice: 327_000 },
+  { days: 180, gig: 300, purchaseCost: 318_000, sellingPrice: 477_000 },
+  { days: 180, gig: 500, purchaseCost: 518_000, sellingPrice: 777_000 },
+
+  // 365-Day Plans (یک‌ساله)
+  { days: 365, gig: 30, purchaseCost: 66_500, sellingPrice: 100_000 },
+  { days: 365, gig: 50, purchaseCost: 86_500, sellingPrice: 130_000 },
+  { days: 365, gig: 100, purchaseCost: 136_500, sellingPrice: 205_000 },
+  { days: 365, gig: 200, purchaseCost: 236_500, sellingPrice: 355_000 },
+  { days: 365, gig: 300, purchaseCost: 336_500, sellingPrice: 505_000 },
+  { days: 365, gig: 500, purchaseCost: 536_500, sellingPrice: 805_000 },
+];
+
+/**
+ * Authoritative internal pricing catalog containing purchaseCost, sellingPrice, and profit.
+ * Internal fields (purchaseCost, profit) must NEVER be exposed in customer-facing responses.
+ */
+const internalPlanCatalog = Object.freeze(
+  RAW_SUBSCRIPTION_CATALOG.map(({ days, gig, purchaseCost, sellingPrice }) => {
+    const durationMeta = DURATION_OPTION_BY_DAYS.get(days);
+    const durationLabel = durationMeta ? durationMeta.title : `${days} روزه`;
+    const profit = calculatePlanProfit(sellingPrice, purchaseCost);
+    return Object.freeze({
+      id: `s${days}_${gig}`,
+      name: `${gig} گیگابایت — ${durationLabel}`,
+      days,
+      durationLabel,
+      gig,
+      purchaseCost,
+      sellingPrice,
+      price: sellingPrice,
+      profit,
+    });
+  }),
+);
+
+function toCustomerPlan(plan) {
+  if (!plan) return null;
+  return {
+    id: plan.id,
+    name: plan.name,
+    days: plan.days,
+    ...(plan.durationLabel ? { durationLabel: plan.durationLabel } : {}),
+    gig: plan.gig,
+    price: plan.price,
+  };
+}
+
+/**
+ * Customer-facing selling plans (strictly sanitized — no purchaseCost or profit fields).
+ */
+export const customerPlans = Object.freeze(
+  internalPlanCatalog.map((plan) => Object.freeze(toCustomerPlan(plan))),
+);
+
+/**
+ * Legacy customer plan identifiers retained for backward compatibility with
+ * historical orders, invoices, and existing unit/integration tests.
+ */
+export const legacyCustomerPlans = Object.freeze([
   { id: "test", name: "Test", days: 1, gig: 1, price: 1_000 },
   { id: "mini", name: "Mini", days: 7, gig: 5, price: 25_000 },
   { id: "basic", name: "Basic", days: 15, gig: 10, price: 45_000 },
@@ -20,25 +119,82 @@ export const customerPlans = Object.freeze([
   { id: "max_plus", name: "Max+", days: 30, gig: 200, price: 499_000 },
 ].map((plan) => Object.freeze(plan)));
 
-const customerPlanById = new Map(customerPlans.map((plan) => [plan.id, plan]));
+const internalPlanById = new Map(internalPlanCatalog.map((plan) => [plan.id, plan]));
+const internalPlanByDurationAndGig = new Map(
+  internalPlanCatalog.map((plan) => [`${plan.days}:${plan.gig}`, plan]),
+);
+const legacyPlanById = new Map(legacyCustomerPlans.map((plan) => [plan.id, plan]));
 
-/** Return copies so callers cannot mutate the server-side selling catalog. */
+/** Return customer-safe copies (never includes purchaseCost or profit). */
 export function getCustomerPlans({ durationDays } = {}) {
-  const plans = Number.isSafeInteger(durationDays)
-    ? customerPlans.filter((plan) => plan.days === durationDays)
-    : customerPlans;
-  return plans.map((plan) => ({ ...plan }));
+  if (!Number.isSafeInteger(durationDays)) {
+    return customerPlans.map((plan) => ({ ...plan }));
+  }
+  const matching = customerPlans.filter((plan) => plan.days === durationDays);
+  if (matching.length > 0) {
+    return matching.map((plan) => ({ ...plan }));
+  }
+  return legacyCustomerPlans
+    .filter((plan) => plan.days === durationDays)
+    .map((plan) => ({ ...plan }));
 }
 
-/** Resolve only a known customer plan; all customer-supplied terms are ignored. */
+/** Resolve only a known customer plan; returns only customer-safe fields. */
 export function getCustomerPlanById(planId) {
   if (typeof planId !== "string" || !/^[a-z][a-z0-9_]{0,31}$/.test(planId)) return null;
-  const plan = customerPlanById.get(planId);
+  const activePlan = internalPlanById.get(planId);
+  if (activePlan) {
+    return toCustomerPlan(activePlan);
+  }
+  const legacyPlan = legacyPlanById.get(planId);
+  if (legacyPlan) {
+    return { ...legacyPlan };
+  }
+  return null;
+}
+
+/** Resolve a customer-safe plan by (durationDays, gig). */
+export function getCustomerPlanByDurationAndVolume(durationDays, gig) {
+  if (!Number.isSafeInteger(durationDays) || !Number.isSafeInteger(gig)) return null;
+  const plan = internalPlanByDurationAndGig.get(`${durationDays}:${gig}`);
+  return plan ? toCustomerPlan(plan) : null;
+}
+
+/** Backend/admin-only helpers returning internal purchaseCost, sellingPrice, and profit. */
+export function getInternalPlanCatalog({ durationDays } = {}) {
+  const list = Number.isSafeInteger(durationDays)
+    ? internalPlanCatalog.filter((plan) => plan.days === durationDays)
+    : internalPlanCatalog;
+  return list.map((plan) => ({ ...plan }));
+}
+
+export function getInternalPlanById(planId) {
+  if (typeof planId !== "string" || !/^[a-z][a-z0-9_]{0,31}$/.test(planId)) return null;
+  const plan = internalPlanById.get(planId);
+  return plan ? { ...plan } : null;
+}
+
+export function getInternalPlanByDurationAndVolume(durationDays, gig) {
+  if (!Number.isSafeInteger(durationDays) || !Number.isSafeInteger(gig)) return null;
+  const plan = internalPlanByDurationAndGig.get(`${durationDays}:${gig}`);
   return plan ? { ...plan } : null;
 }
 
 export function getCustomerDurations() {
-  return [...new Set(customerPlans.map((plan) => plan.days))].sort((a, b) => a - b);
+  return [...SUBSCRIPTION_DURATIONS];
+}
+
+export function getSubscriptionDurations() {
+  return [...SUBSCRIPTION_DURATIONS];
+}
+
+export function getSubscriptionDurationOptions() {
+  return SUBSCRIPTION_DURATION_OPTIONS.map((option) => ({ ...option }));
+}
+
+export function getDurationOptionByDays(days) {
+  const option = DURATION_OPTION_BY_DAYS.get(Number(days));
+  return option ? { ...option } : null;
 }
 
 export const plans30 = [

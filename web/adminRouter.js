@@ -9,6 +9,20 @@ import { listVpns, getVpnDetail, performVpnAction } from "../services/admin/vpns
 import { listProducts, createProduct, updateProduct, duplicateProduct, reorderProducts } from "../services/admin/products.js";
 import { listPayments, getPaymentDetail, retryPayment, markPaymentRecoveryRequired, resolvePaymentRecovery, confirmBankInvoice, rejectBankInvoice } from "../services/admin/payments.js";
 import { getRecoveryQueue, retrySafeRecoveryItems } from "../services/admin/recovery.js";
+import {
+  getCustodyOverview,
+  getCustodyAssets,
+  getCustodyConversions,
+  previewCustodyConversion,
+  executeCustodyConversion,
+  getCustodyPayouts,
+  validateCustodyPayoutAddress,
+  estimateCustodyPayoutFee,
+  createCustodyPayout,
+  verifyCustodyPayout,
+  getCustodyTransactions,
+  reconcileNowPaymentsRecords,
+} from "../services/admin/custody.js";
 import { previewBroadcast, createBroadcast, getBroadcastStatus, requestBroadcastCancel, listBroadcasts } from "../services/admin/broadcast.js";
 import { getAnalytics } from "../services/admin/analytics.js";
 import { getSystemHealth } from "../services/admin/monitoring.js";
@@ -335,6 +349,123 @@ router.post("/recovery/retry-safe", requireBody(), async (req, res, next) => {
       ipAddress: clientIp(req),
     });
     res.json({ ok: true, data: result });
+  } catch (error) { next(error); }
+});
+
+// NOWPayments & Custody
+router.get("/custody/overview", async (req, res, next) => {
+  try { res.json({ ok: true, data: await getCustodyOverview({ actorId: req.adminActorId }) }); }
+  catch (error) { next(error); }
+});
+
+router.get("/custody/assets", async (req, res, next) => {
+  try { res.json({ ok: true, data: await getCustodyAssets({ actorId: req.adminActorId, query: req.query }) }); }
+  catch (error) { next(error); }
+});
+
+router.get("/custody/conversions", async (req, res, next) => {
+  try { res.json({ ok: true, data: await getCustodyConversions({ actorId: req.adminActorId, query: req.query }) }); }
+  catch (error) { next(error); }
+});
+
+router.post("/custody/conversions/preview", requireBody(), async (req, res, next) => {
+  try {
+    const data = await previewCustodyConversion({
+      actorId: req.adminActorId,
+      fromCurrency: req.body.fromCurrency,
+      toCurrency: req.body.toCurrency,
+      amount: req.body.amount,
+    });
+    res.json({ ok: true, data });
+  } catch (error) { next(error); }
+});
+
+router.post("/custody/conversions", requireBody(), async (req, res, next) => {
+  try {
+    const data = await executeCustodyConversion({
+      actorId: req.adminActorId,
+      operationId: parseOperationId(req.body),
+      fromCurrency: req.body.fromCurrency,
+      toCurrency: req.body.toCurrency,
+      amount: req.body.amount,
+      reason: req.body.reason,
+      ipAddress: clientIp(req),
+    });
+    res.json({ ok: true, data });
+  } catch (error) { next(error); }
+});
+
+router.get("/custody/payouts", async (req, res, next) => {
+  try { res.json({ ok: true, data: await getCustodyPayouts({ actorId: req.adminActorId, query: req.query }) }); }
+  catch (error) { next(error); }
+});
+
+router.post("/custody/payouts/validate-address", requireBody(), async (req, res, next) => {
+  try {
+    const data = await validateCustodyPayoutAddress({
+      actorId: req.adminActorId,
+      currency: req.body.currency,
+      address: req.body.address,
+      extraId: req.body.extraId,
+    });
+    res.json({ ok: true, data });
+  } catch (error) { next(error); }
+});
+
+router.get("/custody/payouts/fee", async (req, res, next) => {
+  try {
+    const data = await estimateCustodyPayoutFee({
+      actorId: req.adminActorId,
+      currency: req.query.currency,
+      amount: req.query.amount,
+    });
+    res.json({ ok: true, data });
+  } catch (error) { next(error); }
+});
+
+router.post("/custody/payouts", requireBody(), async (req, res, next) => {
+  try {
+    const data = await createCustodyPayout({
+      actorId: req.adminActorId,
+      operationId: parseOperationId(req.body),
+      currency: req.body.currency,
+      address: req.body.address,
+      amount: req.body.amount,
+      extraId: req.body.extraId,
+      reason: req.body.reason,
+      ipAddress: clientIp(req),
+    });
+    res.json({ ok: true, data });
+  } catch (error) { next(error); }
+});
+
+router.post("/custody/payouts/:batchId/verify", requireBody(), async (req, res, next) => {
+  try {
+    const data = await verifyCustodyPayout({
+      actorId: req.adminActorId,
+      operationId: parseOperationId(req.body),
+      batchWithdrawalId: req.params.batchId,
+      verificationCode: req.body.verificationCode,
+      reason: req.body.reason,
+      ipAddress: clientIp(req),
+    });
+    res.json({ ok: true, data });
+  } catch (error) { next(error); }
+});
+
+router.get("/custody/transactions", async (req, res, next) => {
+  try { res.json({ ok: true, data: await getCustodyTransactions({ actorId: req.adminActorId, query: req.query }) }); }
+  catch (error) { next(error); }
+});
+
+router.post("/custody/reconcile", requireBody(), async (req, res, next) => {
+  try {
+    const data = await reconcileNowPaymentsRecords({
+      actorId: req.adminActorId,
+      orderId: req.body?.orderId || null,
+      limit: req.body?.limit || 20,
+    });
+    res.json({ ok: true, data });
   } catch (error) { next(error); }
 });
 
