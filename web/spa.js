@@ -14,6 +14,22 @@ const OPTIONS = {
   redirect: false,
 };
 
+// Scripts only from this origin (no inline handlers). Inline styles are allowed
+// because the SPA sets style attributes on generated markup; Google Fonts are
+// the only third-party origin.
+export const ADMIN_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data:",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+
 let staticMiddleware = null;
 
 function ensureStatic() {
@@ -50,6 +66,8 @@ export function serveAdminSpa(req, res, next) {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Referrer-Policy", "same-origin");
     res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Content-Security-Policy", ADMIN_CSP);
+    res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
     res.sendFile(path.join(webRoot, "index.html"), (sendError) => {
       if (sendError) next();
     });

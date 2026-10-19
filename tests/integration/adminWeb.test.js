@@ -107,7 +107,7 @@ describe("web admin authentication", () => {
   test("login codes from non-allowlisted accounts are refused", async () => {
     resetAdminRateLimitsForTests();
     const result = await call("POST", "/api/admin/auth/request-code", { body: { telegramId: "666666" } });
-    assert.equal(result.status, 403);
+    assert.equal(result.status, 200, "no admin-enumeration oracle");
   });
 });
 

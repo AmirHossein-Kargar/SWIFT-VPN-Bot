@@ -29,9 +29,11 @@ import { getSystemHealth } from "../services/admin/monitoring.js";
 import { listAuditLogs } from "../services/admin/audit.js";
 import { listAdmins, addAdmin, removeAdmin } from "../services/admin/adminRegistry.js";
 import { default as botInstance } from "../config/botInstance.js";
-import { attachAdminSession, requireAdminSession, requireCsrfToken, rateLimitMiddleware, clientIp, sessionCookieOptions, adminApiErrorHandler } from "./adminMiddleware.js";
+import { attachAdminSession, requireAdminSession, requireCsrfToken, requireSameOrigin, adminApiHeaders, rateLimitMiddleware, clientIp, sessionCookieOptions, adminApiErrorHandler } from "./adminMiddleware.js";
 
 const router = express.Router();
+router.use(adminApiHeaders);
+router.use(requireSameOrigin);
 router.use(attachAdminSession);
 
 function parseOperationId(body = {}) {
@@ -62,11 +64,22 @@ const requireBody = () => express.json({ limit: "128kb" });
 // ── Authentication ───────────────────────────────────────────────────────────
 router.post("/auth/request-code", rateLimitMiddleware({ limit: 5 }), requireBody(), async (req, res, next) => {
   try {
-    const telegramId = String(req.body?.telegramId ?? "");
+    const rawId = req.body?.telegramId;
+    // Only a string or number: arrays/objects must not be coerced into an ID.
+    const telegramId = typeof rawId === "string" || typeof rawId === "number" ? String(rawId) : "";
     if (!/^[1-9]\d{0,19}$/.test(telegramId)) throw new AdminServiceError("Enter the numeric Telegram ID of an allowlisted admin.", { status: 400, code: "invalid_user_id" });
-    const { code, expiresInSeconds } = await issueAdminLoginCode(telegramId);
-    const sent = await sendLoginCodeViaBot(telegramId, code, expiresInSeconds);
-    res.json({ ok: true, delivered: Boolean(sent), expiresInSeconds });
+    // Same response whether or not the ID is an admin (or is rate limited), so
+    // this endpoint cannot be used to discover which Telegram IDs are admins.
+    // Delivery is not awaited so response time does not reveal it either.
+    let expiresInSeconds = 300;
+    try {
+      const issued = await issueAdminLoginCode(telegramId);
+      expiresInSeconds = issued.expiresInSeconds;
+      sendLoginCodeViaBot(telegramId, issued.code, issued.expiresInSeconds).catch(() => {});
+    } catch (error) {
+      if (!["FORBIDDEN", "LOGIN_CODE_RATE_LIMITED"].includes(error?.code)) throw error;
+    }
+    res.json({ ok: true, expiresInSeconds });
   } catch (error) { next(error); }
 });
 
@@ -139,7 +152,9 @@ router.get("/auth/session", (req, res) => {
 // ── Everything below requires an admin session + CSRF for mutations ─────────
 router.use(requireAdminSession);
 router.use(requireCsrfToken);
-router.use(rateLimitMiddleware({ limit: 300 }));
+router.use(rateLimitMiddleware({ limit: 300, scope: "admin-api" }));
+// Mutations are rarer and riskier than reads: a much lower per-admin ceiling.
+router.use(rateLimitMiddleware({ limit: 60, scope: "admin-mutations", methods: ["POST", "PUT", "PATCH", "DELETE"] }));
 
 // Admin management (owner-only mutations, audited; owner is resolved from env)
 router.get("/admins", async (req, res, next) => {
