@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
-const read = (file) => readFileSync(new URL(`../../web/public/${file}`, import.meta.url), "utf8");
+const read = (file) => readFileSync(new URL(`../../web/public/${file}`, import.meta.url), "utf8").split("\r\n").join("\n");
 
 function load(file, sandbox = {}) {
   const context = { module: { exports: {} }, self: undefined, ...sandbox };
