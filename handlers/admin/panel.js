@@ -10,12 +10,14 @@
  * database-backed admin registry); group chats additionally require the
  * configured GROUP_ID (utils/auth.js policy).
  */
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { getSession, setSession, clearSession } from "../../config/sessionStore.js";
 import { isAdmin, isAdminUser } from "../../utils/auth.js";
 import { AdminServiceError } from "../../services/admin/authorization.js";
+import { createThrottle } from "../../services/admin/throttle.js";
 import { getDashboardMetrics } from "../../services/admin/dashboard.js";
-import { listUsers, getUserDetail, changeUserBalance, setUserBlocked } from "../../services/admin/users.js";
+import { listUsers, getUserDetail, changeUserBalance, setUserBlocked, resetTestServiceEligibility } from "../../services/admin/users.js";
 import { listVpns, getVpnDetail, performVpnAction } from "../../services/admin/vpns.js";
 import { listPayments, getPaymentDetail, retryPayment, resolvePaymentRecovery } from "../../services/admin/payments.js";
 import { getRecoveryQueue, retrySafeRecoveryItems } from "../../services/admin/recovery.js";
@@ -44,6 +46,26 @@ const when = (value) => (value ? new Date(value).toLocaleString("fa-IR", { year:
 const HOME_BTN = { text: "🏠 خانه", callback_data: "adm:home" };
 const BACK_BTN = { text: "⬅️ بازگشت", callback_data: "adm:home" };
 const REFRESH_BTN = { text: "🔄 بروزرسانی", callback_data: "adm:refresh" };
+
+// The acting admin comes only from trusted Telegram update metadata and is kept
+// in an AsyncLocalStorage context. A plain property on the shared bot object
+// would be overwritten by a concurrent admin's update (wrong audit actor).
+const actorContext = new AsyncLocalStorage();
+
+function ensureActorAccessor(bot) {
+  if (!bot || bot.__adminActorAccessor) return;
+  Object.defineProperty(bot, "__adminActorId", { configurable: true, get: () => actorContext.getStore()?.actorId, set() {} });
+  Object.defineProperty(bot, "__adminActorAccessor", { value: true, configurable: true });
+}
+
+/** Admin session key: shared chats get one private conversation per admin. */
+function sk(chatId) {
+  const context = actorContext.getStore();
+  return context && context.chatType !== "private" ? chatId + ":" + context.actorId : chatId;
+}
+
+const callbackThrottle = createThrottle({ limit: 30, windowMs: 10_000 });
+const confirmThrottle = createThrottle({ limit: 8, windowMs: 60_000 });
 
 function authorized(query) {
   const chatId = query?.message?.chat?.id;
@@ -110,15 +132,41 @@ async function screenDashboard(bot, chatId, messageId) {
 }
 
 async function screenUserSearch(bot, chatId, messageId) {
-  await setSession(chatId, { step: "admin_panel_user_search" });
+  await setSession(sk(chatId), { step: "admin_panel_user_search" });
   await editOrSend(bot, chatId, messageId,
-    "👥 <b>مدیریت کاربران</b>\n\n<b>شناسه عددی تلگرام</b> یا <b>@یوزرنیم</b> کاربر مورد نظر را ارسال کنید.",
-    { inline_keyboard: [[BACK_BTN]] });
+    "👥 <b>مدیریت کاربران</b>\n\n<b>شناسه عددی تلگرام</b>، <b>@یوزرنیم</b> یا بخشی از <b>نام</b> کاربر را ارسال کنید، یا فهرست کاربران را مرور کنید.",
+    { inline_keyboard: [[{ text: "📋 فهرست همه کاربران", callback_data: "adm:ul:1" }], [BACK_BTN]] });
+}
+
+/** Paginated directory (or search result list); IDs live in the session, not in callback_data. */
+async function screenUserList(bot, chatId, messageId, page = 1, search = "") {
+  const data = await listUsers({ actorId: bot.__adminActorId, query: { search, page, pageSize: PAGE_SIZE } });
+  const keys = data.items.map((user) => String(user.telegramId));
+  await setSession(sk(chatId), { step: null, adminUserKeys: keys, adminUserListPage: data.page, adminUserSearch: search });
+  const rows = data.items.map((user, index) => [{
+    text: "👤 " + (user.name || (user.username ? "@" + user.username : user.telegramId)).slice(0, 28) + " · " + user.telegramId,
+    callback_data: "adm:uo:" + index,
+  }]);
+  const suffix = search ? ":s" : "";
+  const pager = [];
+  if (data.page > 1) pager.push({ text: "⬅️ قبلی", callback_data: "adm:ul:" + (data.page - 1) + suffix });
+  pager.push({ text: data.page + "/" + Math.max(1, data.pages), callback_data: "adm:x" });
+  if (data.page < data.pages) pager.push({ text: "بعدی ➡️", callback_data: "adm:ul:" + (data.page + 1) + suffix });
+  const header = search
+    ? "🔎 <b>نتایج جستجو</b> برای <code>" + esc(search) + "</code>"
+    : "📋 <b>فهرست کاربران</b>";
+  await editOrSend(bot, chatId, messageId,
+    header + "\n\nتعداد: <b>" + num(data.total) + "</b>" + (data.items.length ? "" : "\n\n❌ کاربری یافت نشد."),
+    { inline_keyboard: [...rows, pager, [{ text: "🔎 جستجو", callback_data: "adm:us" }, BACK_BTN]] });
 }
 
 async function showUserProfile(bot, chatId, messageId, telegramId) {
   const data = await getUserDetail({ actorId: bot.__adminActorId, telegramId });
   const user = data.user;
+  const testService = data.testService || {};
+  const testLine = testService.inFlight
+    ? "در حال ساخت / بررسی دستی"
+    : testService.eligible ? "قابل دریافت" : "دریافت شده";
   const text =
     `👤 <b>پروفایل کاربر</b>\n\n` +
     `🆔 شناسه: <code>${esc(user.telegramId)}</code>\n` +
@@ -130,8 +178,17 @@ async function showUserProfile(bot, chatId, messageId, telegramId) {
     `🌐 VPN های فعال: <b>${num(data.activeVpns)}</b> (منقضی: ${num(data.expiredVpns)})\n` +
     `✅ پرداخت‌ها: ${num(data.payments.length)} مورد\n` +
     `🎁 معرفی‌ها: ${num(data.referral.referralCount)}\n` +
-    `🚫 وضعیت: ${user.isBanned ? "مسدود" : "فعال"}`;
-  await setSession(chatId, { step: null, adminPanelUser: String(user.telegramId) });
+    `🚫 وضعیت: ${user.isBanned ? "مسدود" : "فعال"}` +
+    `\n🧪 سرویس تست: <b>${testLine}</b>`;
+  const previous = (await getSession(sk(chatId))) || {};
+  await setSession(sk(chatId), {
+    step: null,
+    adminPanelUser: String(user.telegramId),
+    adminUserKeys: previous.adminUserKeys,
+    adminUserListPage: previous.adminUserListPage,
+    adminUserSearch: previous.adminUserSearch,
+  });
+  
   await editOrSend(bot, chatId, messageId, text, {
     inline_keyboard: [
       [{ text: "🌐 سرویس‌ها", callback_data: "adm:usvpns" }, { text: "💳 پرداخت‌ها", callback_data: "adm:uspay" }],
@@ -139,6 +196,10 @@ async function showUserProfile(bot, chatId, messageId, telegramId) {
       user.isBanned
         ? [{ text: "🔓 رفع مسدودی", callback_data: "adm:blk:no" }]
         : [{ text: "🚫 مسدودسازی", callback_data: "adm:blk:yes" }],
+      ...((data.testService && !data.testService.eligible && !data.testService.inFlight)
+        ? [[{ text: "🧪 فعال‌سازی مجدد سرویس تست", callback_data: "adm:tsr" }]]
+        : []),
+      [{ text: "📋 فهرست کاربران", callback_data: "adm:ul:" + (previous.adminUserListPage || 1) + (previous.adminUserSearch ? ":s" : "") }],
       [REFRESH_BTN, BACK_BTN],
     ],
   });
@@ -166,7 +227,7 @@ async function screenUserVpns(bot, chatId, messageId, session) {
     });
   }
   const keys = data.items.map((item) => item.clientId);
-  await setSession(chatId, { step: null, adminPanelUser: telegramId, adminVpnKeys: keys });
+  await setSession(sk(chatId), { step: null, adminPanelUser: telegramId, adminVpnKeys: keys });
   const lines = data.items.slice(0, 8).map((vpn, index) =>
     `${index + 1}. <code>${esc(vpn.clientId)}</code> · ${vpn.status === "active" ? "🟢" : vpn.status === "expired" ? "🟡" : "🔴"} ${esc(vpn.status)} · انقضا ${when(vpn.expiresAt)}`);
   const keyboard = {
@@ -182,7 +243,7 @@ async function screenUserVpns(bot, chatId, messageId, session) {
 async function screenPayments(bot, chatId, messageId, status, page) {
   const data = await listPayments({ actorId: bot.__adminActorId, query: { status, page, pageSize: PAGE_SIZE } });
   const keys = data.items.map((item) => item.key);
-  await setSession(chatId, { step: null, adminPayKeys: keys, adminPayStatus: status, adminPayPage: data.page });
+  await setSession(sk(chatId), { step: null, adminPayKeys: keys, adminPayStatus: status, adminPayPage: data.page });
   const statusTabs = PAY_STATUSES.map((entry) => ({
     text: `${entry.id === status ? "•" : ""}${entry.label}`,
     callback_data: `adm:pay:${entry.id}:1`,
@@ -210,7 +271,7 @@ async function screenPaymentDetail(bot, chatId, messageId, session, rowIndex) {
   const key = session?.adminPayKeys?.[Number(rowIndex)];
   if (!key) return screenPayments(bot, chatId, messageId, session?.adminPayStatus || "recovery-required", 1);
   const data = await getPaymentDetail({ actorId: bot.__adminActorId, key });
-  await setSession(chatId, { ...session, adminPayDetail: key });
+  await setSession(sk(chatId), { ...session, adminPayDetail: key });
   const text =
     `💳 <b>جزئیات پرداخت</b>\n\n` +
     `🧾 شناسه: <code>${esc(data.id)}</code>\n` +
@@ -234,7 +295,7 @@ async function screenPaymentDetail(bot, chatId, messageId, session, rowIndex) {
 }
 
 async function screenVpnSearch(bot, chatId, messageId) {
-  await setSession(chatId, { step: "admin_panel_vpn_search" });
+  await setSession(sk(chatId), { step: "admin_panel_vpn_search" });
   await editOrSend(bot, chatId, messageId,
     "🌐 <b>سرویس‌های VPN</b>\n\n<b>شناسه سرویس/کلاینت</b> یا <b>شناسه تلگرام کاربر</b> را برای جستجو ارسال کنید.",
     { inline_keyboard: [[BACK_BTN]] });
@@ -270,7 +331,7 @@ async function screenProducts(bot, chatId, messageId, page = 1) {
   const pages = Math.max(1, Math.ceil(products.length / pageSize));
   const safePage = Math.min(Math.max(1, page), pages);
   const slice = products.slice((safePage - 1) * pageSize, safePage * pageSize);
-  await setSession(chatId, { step: null, adminProductIds: products.map((product) => product.id) });
+  await setSession(sk(chatId), { step: null, adminProductIds: products.map((product) => product.id) });
   const text =
     `📦 <b>محصولات</b> (صفحه ${safePage}/${pages})\n\n` +
     (slice.length
@@ -370,7 +431,7 @@ async function screenSystem(bot, chatId, messageId) {
 }
 
 async function screenBroadcast(bot, chatId, messageId) {
-  await setSession(chatId, { step: "admin_panel_broadcast_message" });
+  await setSession(sk(chatId), { step: "admin_panel_broadcast_message" });
   await editOrSend(bot, chatId, messageId,
     "📢 <b>ارسال پیام همگانی</b>\n\nمتن پیام را ارسال کنید. در مرحله بعد مخاطبان را انتخاب و تأیید خواهید کرد.",
     { inline_keyboard: [[BACK_BTN]] });
@@ -407,7 +468,12 @@ export async function handleAdminPanelCommand(bot, msg) {
   await bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: mainMenuKeyboard() });
 }
 
-export async function handleAdminCallback(bot, query) {
+export function handleAdminCallback(bot, query) {
+  ensureActorAccessor(bot);
+  return actorContext.run({ actorId: String(query?.from?.id), chatType: query?.message?.chat?.type }, () => handleAdminCallbackInner(bot, query));
+}
+
+async function handleAdminCallbackInner(bot, query) {
   const data = query?.data || "";
   if (!data.startsWith("adm:")) return false;
   const chatId = query.message.chat.id;
@@ -415,17 +481,20 @@ export async function handleAdminCallback(bot, query) {
   const userId = query.from.id;
 
   if (!authorized(query)) { await deny(bot, query); return true; }
-  bot.__adminActorId = String(userId);
+  if (!callbackThrottle.check(userId)) {
+    await bot.answerCallbackQuery(query.id, { text: "⏳ لطفاً کمی آهسته‌تر عمل کنید.", show_alert: false }).catch(() => {});
+    return true;
+  }
 
   const [, action, arg1, arg2] = data.split(":");
-  const session = await getSession(chatId);
+  const session = await getSession(sk(chatId));
   let handled = true;
 
   try {
     switch (action) {
       case "home":
-        await clearSession(chatId).catch(() => {});
-        await setSession(chatId, { step: null });
+        await clearSession(sk(chatId)).catch(() => {});
+        await setSession(sk(chatId), { step: null });
         await editOrSend(bot, chatId, messageId, mainMenuText(), mainMenuKeyboard());
         break;
       case "refresh":
@@ -437,6 +506,36 @@ export async function handleAdminCallback(bot, query) {
       case "us":
         await screenUserSearch(bot, chatId, messageId);
         break;
+      case "ul": {
+        const page = /^[0-9]{1,6}$/.test(String(arg1 || "")) ? Number(arg1) : 1;
+        await screenUserList(bot, chatId, messageId, page, arg2 === "s" && session?.adminUserSearch ? session.adminUserSearch : "");
+        break;
+      }
+      case "uo": {
+        const index = /^[0-9]{1,2}$/.test(String(arg1 || "")) ? Number(arg1) : -1;
+        const target = Array.isArray(session?.adminUserKeys) ? session.adminUserKeys[index] : undefined;
+        if (!target) { await screenUserList(bot, chatId, messageId, 1, ""); break; }
+        await showUserProfile(bot, chatId, messageId, target);
+        break;
+      }
+      case "tsr": {
+        const target = session?.adminPanelUser;
+        if (!target) { await screenUserSearch(bot, chatId, messageId); break; }
+        await confirmAndRun(bot, query, chatId, messageId,
+          "🧪 <b>فعال‌سازی مجدد سرویس تست</b>\n\nکاربر: <code>" + esc(target) + "</code>\n\nفقط امکان دریافت یک سرویس تست دیگر برای این کاربر باز می‌شود؛ سرویس جدیدی ساخته <b>نمی‌شود</b>.",
+          async () => {
+            const result = await resetTestServiceEligibility({
+              actorId: userId,
+              operationId: randomUUID(),
+              telegramId: target,
+              reason: "Telegram admin panel: restore test-service eligibility",
+            });
+            return result.alreadyEligible
+              ? "ℹ️ این کاربر از قبل مجاز به دریافت سرویس تست بود."
+              : "✅ کاربر <code>" + esc(target) + "</code> دوباره می‌تواند یک سرویس تست دریافت کند.";
+          });
+        break;
+      }
       case "usback":
         await showUserProfile(bot, chatId, messageId, session?.adminPanelUser);
         break;
@@ -447,13 +546,13 @@ export async function handleAdminCallback(bot, query) {
         await screenUserVpns(bot, chatId, messageId, session);
         break;
       case "bal":
-        await setSession(chatId, { ...session, step: `admin_panel_balance:${arg1}`, adminPanelUser: session?.adminPanelUser });
+        await setSession(sk(chatId), { ...session, step: `admin_panel_balance:${arg1}`, adminPanelUser: session?.adminPanelUser });
         await editOrSend(bot, chatId, messageId,
           `💰 <b>${arg1 === "add" ? "افزایش" : "کاهش"} موجودی</b>\n\nکاربر: <code>${esc(session?.adminPanelUser || "؟")}</code>\n\nمبلغ را به تومان ارسال کنید.`,
           { inline_keyboard: [[{ text: "⬅️ انصراف", callback_data: "adm:usback" }]] });
         break;
       case "blk":
-        await setSession(chatId, { ...session, step: `admin_panel_block:${arg1}`, adminPanelUser: session?.adminPanelUser });
+        await setSession(sk(chatId), { ...session, step: `admin_panel_block:${arg1}`, adminPanelUser: session?.adminPanelUser });
         await editOrSend(bot, chatId, messageId,
           `${arg1 === "yes" ? "🚫 <b>مسدودسازی کاربر</b> — دلیل را ارسال کنید" : "🔓 <b>رفع مسدودی</b> — توضیح ارسال کنید (اختیاری)"}\n\nکاربر: <code>${esc(session?.adminPanelUser || "؟")}</code>`,
           { inline_keyboard: [[{ text: "⬅️ انصراف", callback_data: "adm:usback" }]] });
@@ -475,7 +574,7 @@ export async function handleAdminCallback(bot, query) {
         handled = true;
         break;
       case "payresolve":
-        await setSession(chatId, { ...session, step: `admin_panel_resolve:${arg1}` });
+        await setSession(sk(chatId), { ...session, step: `admin_panel_resolve:${arg1}` });
         await editOrSend(bot, chatId, messageId,
           "✅ <b>تعیین تکلیف دستی</b>\n\nتوضیح کوتاهی درباره نحوه تسویه این پرداخت ارسال کنید. این عمل فقط ثبت وضعیت است و مبلغی جابه‌جا نمی‌کند.",
           { inline_keyboard: [[{ text: "⬅️ انصراف", callback_data: `adm:payv:${arg1}` }]] });
@@ -544,7 +643,7 @@ export async function handleAdminCallback(bot, query) {
         await bot.answerCallbackQuery(query.id, { text: "🚀 در حال ارسال..." }).catch(() => {});
         const operationId = randomUUID();
         const result = await createBroadcast({ actorId: userId, operationId, message, audience: arg1 });
-        await setSession(chatId, { step: null });
+        await setSession(sk(chatId), { step: null });
         await editOrSend(bot, chatId, messageId,
           `🚀 <b>ارسال همگانی آغاز شد</b>\n\nمخاطبان: <b>${esc(broadcastAudienceLabel(arg1))}</b>\nتعداد گیرندگان: <b>${num(result.broadcast?.total ?? 0)}</b>\n\nپیشرفت ارسال را از پنل وب دنبال کنید.`, { inline_keyboard: [[HOME_BTN]] });
         setTimeout(async () => {
@@ -586,7 +685,7 @@ export async function handleAdminCallback(bot, query) {
           await bot.answerCallbackQuery(query.id, { text: "⛔️ فقط مالک اصلی می‌تواند مدیر اضافه کند.", show_alert: true }).catch(() => {});
           break;
         }
-        await setSession(chatId, { step: "admin_panel_add_admin" });
+        await setSession(sk(chatId), { step: "admin_panel_add_admin" });
         await editOrSend(bot, chatId, messageId,
           "➕ <b>افزودن مدیر</b>\n\n<b>شناسه عددی تلگرام</b> کاربر را ارسال کنید.\n\nℹ️ کاربر پس از افزودن، به همه بخش‌های پنل دسترسی خواهد داشت (به جز مدیریت مدیران).",
           { inline_keyboard: [[{ text: "⬅️ انصراف", callback_data: "adm:admins" }]] });
@@ -651,11 +750,11 @@ async function renderRefresh(bot, query, chatId, messageId, session) {
 }
 
 async function confirmAndRun(bot, query, chatId, messageId, confirmText, run) {
-  const confirmKey = `adm:y:${Math.floor(Math.random() * 1e6)}`;
-  pendingConfirms.set(confirmKey, { run, chatId, messageId });
+  const confirmKey = "adm:y:" + randomBytes(9).toString("base64url");
+  pendingConfirms.set(confirmKey, { run, chatId, messageId, actorId: String(query.from.id) });
   setTimeout(() => pendingConfirms.delete(confirmKey), 120_000).unref?.();
   await editOrSend(bot, chatId, messageId,
-    `⚠️ <b>نیاز به تأیید</b>\n\n${confirmText}`,
+    "⚠️ <b>نیاز به تأیید</b>\n\n" + confirmText,
     { inline_keyboard: [
       [{ text: "✅ تأیید", callback_data: confirmKey }, { text: "❌ انصراف", callback_data: "adm:x" }],
     ] });
@@ -663,11 +762,25 @@ async function confirmAndRun(bot, query, chatId, messageId, confirmText, run) {
 
 const pendingConfirms = new Map();
 
-export async function handleAdminConfirm(bot, query) {
+export function handleAdminConfirm(bot, query) {
+  ensureActorAccessor(bot);
+  return actorContext.run({ actorId: String(query?.from?.id), chatType: query?.message?.chat?.type }, () => handleAdminConfirmInner(bot, query));
+}
+
+async function handleAdminConfirmInner(bot, query) {
   const data = query?.data || "";
   if (!data.startsWith("adm:y:")) return false;
   if (!authorized(query)) { await deny(bot, query); return true; }
+  if (!confirmThrottle.check(query.from.id)) {
+    await bot.answerCallbackQuery(query.id, { text: "⏳ تعداد تأییدها زیاد است؛ کمی بعد دوباره تلاش کنید.", show_alert: true }).catch(() => {});
+    return true;
+  }
   const pending = pendingConfirms.get(data);
+  // A confirmation is only valid for the admin, chat and message that created it.
+  if (pending && (pending.actorId !== String(query.from.id) || pending.chatId !== query.message?.chat?.id || pending.messageId !== query.message?.message_id)) {
+    await bot.answerCallbackQuery(query.id, { text: "این تأیید متعلق به مدیر دیگری است.", show_alert: true }).catch(() => {});
+    return true;
+  }
   pendingConfirms.delete(data);
   if (!pending) {
     await bot.answerCallbackQuery(query.id, { text: "این تأیید منقضی شده است. دوباره تلاش کنید.", show_alert: true }).catch(() => {});
@@ -697,32 +810,38 @@ export async function handleAdminPanelCallbacks(bot, query) {
 
 // ── Text-input steps (called from onMessage) ─────────────────────────────────
 
-export async function handleAdminPanelStep(bot, msg) {
+export function handleAdminPanelStep(bot, msg) {
+  ensureActorAccessor(bot);
+  return actorContext.run({ actorId: String(msg?.from?.id), chatType: msg?.chat?.type }, () => handleAdminPanelStepInner(bot, msg));
+}
+
+async function handleAdminPanelStepInner(bot, msg) {
   const chatId = msg.chat.id;
   const userId = msg.from?.id;
   const chatType = msg.chat?.type;
-  const session = await getSession(chatId);
+  const session = await getSession(sk(chatId));
   const step = session?.step;
   if (!step || !String(step).startsWith("admin_panel_")) return false;
 
   const allowed = chatType === "private" ? isAdminUser(userId) : isAdmin(chatId, userId);
   if (!allowed) return false;
-  bot.__adminActorId = String(userId);
 
   const text = String(msg.text || "").trim();
-  const finish = async (clear = true) => { if (clear) await setSession(chatId, { step: null }); };
+  const finish = async (clear = true) => { if (clear) await setSession(sk(chatId), { step: null }); };
 
   try {
     if (step === "admin_panel_user_search") {
       const found = await listUsers({ actorId: userId, query: { search: text, pageSize: 5 } });
       if (!found.items.length) {
-        await bot.sendMessage(chatId, `❌ کاربری برای <code>${esc(text)}</code> یافت نشد.`, { parse_mode: "HTML" });
+        await bot.sendMessage(chatId, "❌ کاربری برای <code>" + esc(text) + "</code> یافت نشد.", { parse_mode: "HTML" });
         return true;
       }
-      const user = found.items[0];
       const sent = await bot.sendMessage(chatId, "…", { parse_mode: "HTML" });
-      await showUserProfile(bot, chatId, sent.message_id, user.telegramId);
-      await finish();
+      if (found.items.length === 1) {
+        await showUserProfile(bot, chatId, sent.message_id, found.items[0].telegramId);
+      } else {
+        await screenUserList(bot, chatId, sent.message_id, 1, text.slice(0, 100));
+      }
       return true;
     }
 
@@ -732,7 +851,7 @@ export async function handleAdminPanelStep(bot, msg) {
         await bot.sendMessage(chatId, `❌ سرویسی برای <code>${esc(text)}</code> یافت نشد.`, { parse_mode: "HTML" });
         return true;
       }
-      await setSession(chatId, { step: null, adminVpnKeys: data.items.map((item) => item.clientId) });
+      await setSession(sk(chatId), { step: null, adminVpnKeys: data.items.map((item) => item.clientId) });
       const sent = await bot.sendMessage(chatId, "…", { parse_mode: "HTML" });
       await screenVpnDetail(bot, chatId, sent.message_id, { adminVpnKeys: data.items.map((item) => item.clientId) }, 0);
       await finish(false);
@@ -775,7 +894,7 @@ export async function handleAdminPanelStep(bot, msg) {
         await bot.sendMessage(chatId, "❌ متن پیام باید بین ۱ تا ۴۰۹۶ نویسه باشد.");
         return true;
       }
-      await setSession(chatId, { step: null, adminPanelBroadcastMessage: text });
+      await setSession(sk(chatId), { step: null, adminPanelBroadcastMessage: text });
       const sent = await bot.sendMessage(chatId, "…", { parse_mode: "HTML" });
       await editOrSend(bot, chatId, sent.message_id,
         `📢 <b>پیش‌نمایش پیام همگانی</b>\n\n——\n${esc(text.slice(0, 1200))}\n——\n\nمخاطبان را انتخاب کنید:`,

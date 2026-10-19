@@ -4,7 +4,7 @@ import { ADMIN_SESSION_COOKIE, issueAdminLoginCode, consumeAdminLoginCode, creat
 import { AdminServiceError } from "../services/admin/authorization.js";
 import { runAuditedAction } from "../services/admin/audit.js";
 import { getDashboardMetrics } from "../services/admin/dashboard.js";
-import { listUsers, getUserDetail, changeUserBalance, setUserBlocked, getReferralOverview } from "../services/admin/users.js";
+import { listUsers, getUserDetail, changeUserBalance, setUserBlocked, getReferralOverview, resetTestServiceEligibility } from "../services/admin/users.js";
 import { listVpns, getVpnDetail, performVpnAction } from "../services/admin/vpns.js";
 import { listProducts, createProduct, updateProduct, duplicateProduct, reorderProducts } from "../services/admin/products.js";
 import { listPayments, getPaymentDetail, retryPayment, markPaymentRecoveryRequired, resolvePaymentRecovery, confirmBankInvoice, rejectBankInvoice } from "../services/admin/payments.js";
@@ -242,6 +242,19 @@ router.post("/users/:telegramId/unblock", requireBody(), async (req, res, next) 
       operationId: parseOperationId(req.body),
       telegramId: req.params.telegramId,
       blocked: false,
+      ipAddress: clientIp(req),
+    });
+    res.json({ ok: true, data: result });
+  } catch (error) { next(error); }
+});
+
+router.post("/users/:telegramId/test-eligibility", requireBody(), async (req, res, next) => {
+  try {
+    const result = await resetTestServiceEligibility({
+      actorId: req.adminActorId,
+      operationId: parseOperationId(req.body),
+      telegramId: req.params.telegramId,
+      reason: req.body.reason,
       ipAddress: clientIp(req),
     });
     res.json({ ok: true, data: result });
