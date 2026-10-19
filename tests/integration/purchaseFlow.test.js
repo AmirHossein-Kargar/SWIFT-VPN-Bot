@@ -334,4 +334,28 @@ describe("customer wallet purchase flow", () => {
     assert.equal((await User.findOne({ telegramId: "4012" })).services.length, 1);
     assert.equal(await WalletPurchase.countDocuments({ purchaseId: result.purchaseId, status: "completed" }), 1);
   });
+
+  skipIfNoDb("provisions 30, 90, 180, and 365-day subscriptions with matching duration in WizardXray and database", async () => {
+    const { getCustomerPlans } = await import("../../services/plans.js");
+    wizardMode = "ok";
+    for (const days of [30, 90, 180, 365]) {
+      wizardCalls.length = 0;
+      const plan = getCustomerPlans({ durationDays: days })[0];
+      const uid = `410${days}`;
+      await seedUser(uid, plan.price + 10_000);
+      const bot = makeBotStub();
+
+      const result = await orderService(bot, uid, uid, plan.id, { purchaseId: purchaseId(uid, `dur_${days}`) });
+      assert.equal(result.status, "completed");
+
+      const params = new URLSearchParams(wizardCalls[0].body);
+      assert.equal(params.get("day"), String(days));
+      assert.equal(params.get("gig"), String(plan.gig));
+
+      const purchase = await WalletPurchase.findOne({ purchaseId: result.purchaseId });
+      assert.equal(purchase.days, days);
+      assert.equal(purchase.gig, plan.gig);
+      assert.equal(purchase.amount, plan.price);
+    }
+  });
 });

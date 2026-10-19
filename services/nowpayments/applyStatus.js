@@ -148,6 +148,23 @@ export async function applyNowPaymentsUpdate({
   const paymentId = idText(payload.payment_id);
   const invoiceId = idText(payload.invoice_id);
   const providerPayAmount = finitePositive(payload.pay_amount);
+  const numericActuallyPaid = Number.isFinite(Number(payload.actually_paid)) && Number(payload.actually_paid) >= 0
+    ? Number(payload.actually_paid)
+    : null;
+  const overpaidAmount = providerPayAmount != null && numericActuallyPaid != null && numericActuallyPaid > providerPayAmount + 1e-8
+    ? Number((numericActuallyPaid - providerPayAmount).toFixed(8))
+    : null;
+  const underpaidAmount = providerPayAmount != null && numericActuallyPaid != null && numericActuallyPaid + 1e-8 < providerPayAmount
+    ? Number((providerPayAmount - numericActuallyPaid).toFixed(8))
+    : null;
+  const outcomeAmount = finitePositive(payload.outcome_amount);
+  const outcomeCurrency = typeof payload.outcome_currency === "string" && payload.outcome_currency.trim()
+    ? payload.outcome_currency.trim().toLowerCase()
+    : null;
+  const payAddress = typeof payload.pay_address === "string" && payload.pay_address.trim()
+    ? payload.pay_address.trim()
+    : null;
+
   const immutableBindings = [
     { $or: [{ paymentId: null }, { paymentId: "" }, { paymentId }] },
     { $or: [{ invoiceId: null }, { invoiceId: "" }, { invoiceId }] },
@@ -163,9 +180,12 @@ export async function applyNowPaymentsUpdate({
           paymentId,
           invoiceId,
           ...(providerPayAmount != null ? { payAmount: providerPayAmount } : {}),
-          ...(Number.isFinite(Number(payload.actually_paid)) && Number(payload.actually_paid) >= 0
-            ? { actuallyPaid: Number(payload.actually_paid) }
-            : {}),
+          ...(numericActuallyPaid != null ? { actuallyPaid: numericActuallyPaid } : {}),
+          ...(overpaidAmount != null ? { overpaidAmount } : {}),
+          ...(underpaidAmount != null ? { underpaidAmount } : {}),
+          ...(outcomeAmount != null ? { outcomeAmount } : {}),
+          ...(outcomeCurrency ? { outcomeCurrency } : {}),
+          ...(payAddress ? { payAddress } : {}),
           updatedAt: now(),
         },
       },
@@ -260,7 +280,16 @@ export async function applyNowPaymentsUpdate({
     const nextStatus = nextProgressStatus(invoice.status, status);
     await invoiceModel.updateOne(
       { orderId, balanceCredited: false, status: { $in: LOCALLY_SETTLEABLE } },
-      { $set: { status: nextStatus, providerStatus: status, updatedAt: now() } },
+      {
+        $set: {
+          status: nextStatus,
+          providerStatus: status,
+          ...(status === "partially_paid"
+            ? { recoveryStatus: "required", recoveryReason: "partially_paid_underpayment" }
+            : {}),
+          updatedAt: now(),
+        },
+      },
     );
     return { outcome: status, credited: false };
   }

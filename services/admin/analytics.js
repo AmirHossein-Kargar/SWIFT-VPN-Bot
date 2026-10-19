@@ -5,6 +5,7 @@ import NowPaymentsInvoice from "../../models/NowPaymentsInvoice.js";
 import CryptoInvoice from "../../models/CryptoInvoice.js";
 import bankInvoice from "../../models/invoice.js";
 import AdminProduct from "../../models/AdminProduct.js";
+import { getInternalPlanById } from "../plans.js";
 import { assertAdminUser } from "./authorization.js";
 import { revenueForPeriod, knownVpnCounts } from "./dashboard.js";
 
@@ -107,8 +108,14 @@ export async function getAnalytics({ actorId, granularity = "monthly", now = new
   ]);
 
   const marginByProduct = popularProducts.map((item) => {
+    const internalPlan = getInternalPlanById(item.productId);
     const product = catalog.find((candidate) => candidate.productId === item.productId);
-    const cost = product ? Number(product.costToman || 0) * item.count : null;
+    const unitCost = internalPlan
+      ? internalPlan.purchaseCost
+      : product
+        ? Number(product.costToman || 0)
+        : null;
+    const cost = unitCost != null ? unitCost * item.count : null;
     return {
       ...item,
       revenue: Number(item.revenue || 0),
