@@ -41,10 +41,18 @@ export function adminRateLimit({ key, limit, windowMs = WINDOW_MS }) {
   return { allowed: true, remaining: limit - existing.count, retryAfterSeconds: Math.ceil(windowMs / 1000) };
 }
 
-export function rateLimitMiddleware({ limit, windowMs } = {}) {
+/**
+ * Limiter keyed by the route PATTERN (never the concrete URL, so varying an id
+ * in the path cannot mint a fresh bucket) and by the authenticated admin when
+ * there is one, otherwise by client IP.
+ */
+export function rateLimitMiddleware({ limit, windowMs, scope = "route", methods = null } = {}) {
   const resolvedLimit = Number.isInteger(limit) && limit > 0 ? limit : 240;
   return (req, res, next) => {
-    const result = adminRateLimit({ key: `${req.baseUrl}${req.path}:${clientIp(req)}`, limit: resolvedLimit, windowMs });
+    if (methods && !methods.includes(req.method)) return next();
+    const subject = req.adminActorId ? `admin:${req.adminActorId}` : `ip:${clientIp(req)}`;
+    const place = scope === "route" ? `${req.baseUrl}${req.route?.path ?? ""}` : scope;
+    const result = adminRateLimit({ key: `${place}:${req.method === "GET" ? "r" : "w"}:${subject}`, limit: resolvedLimit, windowMs });
     if (!result.allowed) {
       res.set("Retry-After", String(result.retryAfterSeconds));
       return res.status(429).json({ ok: false, error: "rate_limited", retry_after_seconds: result.retryAfterSeconds });
@@ -133,6 +141,35 @@ export function requireCsrfToken(req, res, next) {
   if (!headerToken || !safeEqual(headerToken, req.adminSession.csrfToken)) {
     return res.status(403).json({ ok: false, error: "csrf_token_invalid" });
   }
+  next();
+}
+
+/** Admin API responses are private and must never be cached or sniffed. */
+export function adminApiHeaders(_req, res, next) {
+  res.set("Cache-Control", "no-store");
+  res.set("Pragma", "no-cache");
+  res.set("X-Content-Type-Options", "nosniff");
+  res.set("Referrer-Policy", "no-referrer");
+  next();
+}
+
+/**
+ * Rejects state-changing requests whose Origin header names another site.
+ * This complements (never replaces) the session cookie and CSRF token; a
+ * missing Origin (non-browser client) is left to those controls.
+ */
+export function requireSameOrigin(req, res, next) {
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return next();
+  const origin = req.get("origin");
+  if (!origin) return next();
+  let host;
+  try { host = new URL(origin).host.toLowerCase(); } catch { host = null; }
+  const allowed = new Set([String(req.get("host") || "").toLowerCase()]);
+  try {
+    const configured = process.env.WEBHOOK_BASE_URL?.trim();
+    if (configured) allowed.add(new URL(configured).host.toLowerCase());
+  } catch { /* ignore a malformed base URL */ }
+  if (!host || !allowed.has(host)) return res.status(403).json({ ok: false, error: "origin_not_allowed" });
   next();
 }
 

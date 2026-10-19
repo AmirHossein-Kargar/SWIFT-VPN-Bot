@@ -25,13 +25,16 @@ import {
 } from "../services/admin/custody.js";
 import { previewBroadcast, createBroadcast, getBroadcastStatus, requestBroadcastCancel, listBroadcasts } from "../services/admin/broadcast.js";
 import { getAnalytics } from "../services/admin/analytics.js";
+import { getAnalyticsReport, reportToCsv } from "../services/admin/analyticsReport.js";
 import { getSystemHealth } from "../services/admin/monitoring.js";
 import { listAuditLogs } from "../services/admin/audit.js";
 import { listAdmins, addAdmin, removeAdmin } from "../services/admin/adminRegistry.js";
 import { default as botInstance } from "../config/botInstance.js";
-import { attachAdminSession, requireAdminSession, requireCsrfToken, rateLimitMiddleware, clientIp, sessionCookieOptions, adminApiErrorHandler } from "./adminMiddleware.js";
+import { attachAdminSession, requireAdminSession, requireCsrfToken, requireSameOrigin, adminApiHeaders, rateLimitMiddleware, clientIp, sessionCookieOptions, adminApiErrorHandler } from "./adminMiddleware.js";
 
 const router = express.Router();
+router.use(adminApiHeaders);
+router.use(requireSameOrigin);
 router.use(attachAdminSession);
 
 function parseOperationId(body = {}) {
@@ -62,11 +65,22 @@ const requireBody = () => express.json({ limit: "128kb" });
 // ── Authentication ───────────────────────────────────────────────────────────
 router.post("/auth/request-code", rateLimitMiddleware({ limit: 5 }), requireBody(), async (req, res, next) => {
   try {
-    const telegramId = String(req.body?.telegramId ?? "");
+    const rawId = req.body?.telegramId;
+    // Only a string or number: arrays/objects must not be coerced into an ID.
+    const telegramId = typeof rawId === "string" || typeof rawId === "number" ? String(rawId) : "";
     if (!/^[1-9]\d{0,19}$/.test(telegramId)) throw new AdminServiceError("Enter the numeric Telegram ID of an allowlisted admin.", { status: 400, code: "invalid_user_id" });
-    const { code, expiresInSeconds } = await issueAdminLoginCode(telegramId);
-    const sent = await sendLoginCodeViaBot(telegramId, code, expiresInSeconds);
-    res.json({ ok: true, delivered: Boolean(sent), expiresInSeconds });
+    // Same response whether or not the ID is an admin (or is rate limited), so
+    // this endpoint cannot be used to discover which Telegram IDs are admins.
+    // Delivery is not awaited so response time does not reveal it either.
+    let expiresInSeconds = 300;
+    try {
+      const issued = await issueAdminLoginCode(telegramId);
+      expiresInSeconds = issued.expiresInSeconds;
+      sendLoginCodeViaBot(telegramId, issued.code, issued.expiresInSeconds).catch(() => {});
+    } catch (error) {
+      if (!["FORBIDDEN", "LOGIN_CODE_RATE_LIMITED"].includes(error?.code)) throw error;
+    }
+    res.json({ ok: true, expiresInSeconds });
   } catch (error) { next(error); }
 });
 
@@ -139,7 +153,9 @@ router.get("/auth/session", (req, res) => {
 // ── Everything below requires an admin session + CSRF for mutations ─────────
 router.use(requireAdminSession);
 router.use(requireCsrfToken);
-router.use(rateLimitMiddleware({ limit: 300 }));
+router.use(rateLimitMiddleware({ limit: 300, scope: "admin-api" }));
+// Mutations are rarer and riskier than reads: a much lower per-admin ceiling.
+router.use(rateLimitMiddleware({ limit: 60, scope: "admin-mutations", methods: ["POST", "PUT", "PATCH", "DELETE"] }));
 
 // Admin management (owner-only mutations, audited; owner is resolved from env)
 router.get("/admins", async (req, res, next) => {
@@ -553,6 +569,35 @@ router.get("/broadcasts", async (req, res, next) => {
 });
 
 // Analytics
+router.get("/analytics/report", async (req, res, next) => {
+  try {
+    const data = await getAnalyticsReport({ actorId: req.adminActorId, query: req.query, refresh: req.query.refresh === "1" });
+    res.json({ ok: true, data });
+  } catch (error) { next(error); }
+});
+
+// CSV export: admin session + CSRF-free GET, but strictly rate limited and audited.
+router.get("/analytics/export.csv", rateLimitMiddleware({ limit: 10 }), async (req, res, next) => {
+  try {
+    // A cross-site page must not be able to trigger an export (and its audit record).
+    if (req.get("sec-fetch-site") === "cross-site") return res.status(403).json({ ok: false, error: "origin_not_allowed" });
+    const data = await getAnalyticsReport({ actorId: req.adminActorId, query: req.query });
+    await runAuditedAction({
+      actorTelegramId: req.adminActorId,
+      operationId: newOperationId().replace(/-/g, ""),
+      action: "ANALYTICS_EXPORTED",
+      targetType: "analytics",
+      targetId: String(req.query.range || "30d").slice(0, 20),
+      ipAddress: clientIp(req),
+      metadata: { range: data.range.key, from: data.range.from, to: data.range.to },
+      execute: async () => ({ ok: true, auditSummary: { rows: data.kpis.length } }),
+    });
+    res.set("Content-Type", "text/csv; charset=utf-8");
+    res.set("Content-Disposition", `attachment; filename="swift-analytics-${data.range.key}.csv"`);
+    res.send(reportToCsv(data));
+  } catch (error) { next(error); }
+});
+
 router.get("/analytics", async (req, res, next) => {
   try { res.json({ ok: true, data: await getAnalytics({ actorId: req.adminActorId, granularity: req.query.granularity }) }); }
   catch (error) { next(error); }

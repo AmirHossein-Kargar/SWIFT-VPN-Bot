@@ -17,6 +17,7 @@ import { recordWebhookOutcome } from "./services/admin/monitoring.js";
 import adminRouter from "./web/adminRouter.js";
 import { serveAdminSpa, notFoundHandler } from "./web/spa.js";
 import { handleNowPaymentsIpn } from "./services/nowpayments/ipnHandler.js";
+import { findTombstone, recordLateEvent } from "./services/payments/invoiceCleanup.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -155,6 +156,22 @@ export async function handleHooshWebhook(req, res) {
     return res.status(503).json({ ok: false, error: "temporarily_unavailable", request_id: reqId });
   }
   if (!invoice) {
+    // A cancelled/failed invoice removed by the 24h cleanup: acknowledge so the
+    // provider stops retrying, record the late event, and never credit.
+    try {
+      const tombstone = await findTombstone({ provider: "hooshpay", orderId, uid });
+      if (tombstone) {
+        await recordLateEvent({ tombstone, status });
+        log("warn", "Webhook for an invoice removed by cleanup; ignored", { reqId, orderId: tombstone.orderId, status });
+        if (status === "paid") {
+          await alertAdmin(`⚠️ پرداخت دیرهنگام برای فاکتور پاک‌شده دریافت شد. Order: <code>${tombstone.orderId}</code>. بررسی دستی لازم است.`);
+        }
+        return res.status(200).json({ ok: true, received: true, ignored: "invoice_removed", request_id: reqId });
+      }
+    } catch (error) {
+      log("error", "Tombstone lookup failed", { reqId, ...safeErrorFields(error) });
+      return res.status(503).json({ ok: false, error: "temporarily_unavailable", request_id: reqId });
+    }
     log("warn", "Signed webhook references an unknown invoice", { reqId, uid, orderId });
     return res.status(404).json({ ok: false, error: "invoice_not_found", request_id: reqId });
   }

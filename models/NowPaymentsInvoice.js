@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { applyTerminalStatusStamp } from "./terminalStamp.js";
 
 const ipnLogSchema = new mongoose.Schema({
   receivedAt: { type: Date, default: Date.now },
@@ -112,6 +113,9 @@ nowPaymentsInvoiceSchema.index(
   { userId: 1, createdAt: -1 },
   { name: "idx_nowpayments_user_recent" },
 );
+
+// First-entry timestamp for `failed`, used by the 24h invoice cleanup.
+applyTerminalStatusStamp(nowPaymentsInvoiceSchema, ["failed"]);
 
 const NowPaymentsInvoice = mongoose.models.NowPaymentsInvoice
   || mongoose.model("NowPaymentsInvoice", nowPaymentsInvoiceSchema);

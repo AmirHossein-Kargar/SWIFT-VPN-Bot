@@ -5,6 +5,7 @@ import { setBotInstance } from "./config/botInstance.js";
 import app, { PORT, setRuntimeReadiness } from "./server.js";
 import { startHooshpayRecoveryCron, stopHooshpayRecoveryCron } from "./services/hooshpay/hooshpayRecoveryCron.js";
 import { startNowPaymentsRecoveryCron, stopNowPaymentsRecoveryCron } from "./services/nowpayments/recovery.js";
+import { startInvoiceCleanupCron, stopInvoiceCleanupCron } from "./services/payments/invoiceCleanup.js";
 import mongoose from "mongoose";
 import { connectRedis, closeRedis } from "./config/redisClient.js";
 import { seedDefaultProducts } from "./services/plans.js";
@@ -199,6 +200,7 @@ export default async function startBot() {
     startHooshpayRecoveryCron(bot);
     console.log("\x1b[32m%s\x1b[0m", "✔ HooshPay Recovery Cron Started");
     startNowPaymentsRecoveryCron();
+    startInvoiceCleanupCron();
     console.log("\x1b[32m%s\x1b[0m", "✔ NOWPayments Recovery Cron Started");
   } catch (error) {
     console.error(
@@ -237,6 +239,7 @@ export default async function startBot() {
     try {
       stopHooshpayRecoveryCron();
       stopNowPaymentsRecoveryCron();
+      stopInvoiceCleanupCron();
       console.log("\x1b[32m%s\x1b[0m", "✔ HooshPay cron stopped");
     } catch (e) {
       console.error("⚠️  HooshPay cron stop error:", e?.name || "Error");

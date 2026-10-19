@@ -729,3 +729,35 @@ and no destructive migration is run.
 - `expired VPNs` counts tracked orders; services registered before this
   release without a linked purchase show as *unknown expiry* until looked up
   individually.
+
+### 12.6 Dashboard theming, languages and responsive layout
+
+- **Theme:** light/dark via CSS design tokens (`web/public/styles.css`). `theme-init.js`
+  runs in `<head>` before first paint (saved choice → system preference), so there is no flash.
+  Choice is stored in `localStorage` (`swift.theme`). Motion is disabled for `prefers-reduced-motion`.
+- **Languages:** فارسی (RTL) and English (LTR), switchable at any time (`swift.lang`). English text is the
+  message key; Persian lives in `web/public/i18n-fa.js`. Missing keys fall back to English.
+  Money is always the **stored Toman** value (`format.js`: `۵۰٬۰۰۰ تومان` / `50,000 Toman`; nothing is
+  converted or divided by 10). Dates use the Jalali calendar in Persian mode, Gregorian in English, always in
+  `Asia/Tehran`. IDs, hashes and API values are never reformatted.
+- **Mobile:** drawer navigation below 900 px, tables become labelled cards below 720 px, dialogs become
+  bottom sheets, ≥44 px touch targets on touch devices. Run `npm run test:e2e` (needs Chrome; set `CHROME_PATH`).
+- **Strict CSP:** scripts only from `'self'`; no inline scripts or handlers.
+
+### 12.7 Automatic cleanup of cancelled / failed invoices
+
+- **Rule:** an invoice that is `cancelled`/`failed` (HooshPay) or `failed` (NOWPayments) is removed **24 hours after
+  it first entered that state** (`terminalStatusAt`, set once by a schema plugin on every write path and never reset;
+  legacy rows start their clock the first time the job sees them).
+- **Never removed:** pending/creating, paid/finished, partially paid, refunded/reversed, expired, creation_failed,
+  anything credited/fulfilled, flagged for manual recovery, or (NOWPayments) with funds actually received.
+- **What is deleted / kept:** the invoice document is deleted (so it disappears from the admin Payments view).
+  A `PaymentTombstone` (provider, orderId, uid/invoiceId/paymentId, user, amount in Toman, final status, timestamps)
+  is written **before** the delete and kept. Wallet idempotency ledgers on `User`, purchase records and the admin
+  audit log are not touched.
+- **Late webhooks:** a signed notification for a removed invoice is acknowledged (200), recorded on the tombstone
+  and **never credits** (HooshPay also alerts admins if it says `paid`).
+- **Scheduling:** `startInvoiceCleanupCron()` runs hourly from `startBot.js` (first run 60 s after start), bounded
+  to 25 batches × 200 per run, guarded by the Redis lease `lock:invoice-cleanup` so concurrent instances cannot
+  overlap; deletes are conditional so a row credited meanwhile survives. Dry run:
+  `runInvoiceCleanupBatches({ dryRun: true })`.
