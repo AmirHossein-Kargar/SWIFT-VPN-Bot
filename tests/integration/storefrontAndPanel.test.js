@@ -8,6 +8,7 @@
  */
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
+import http from "node:http";
 import mongoose from "mongoose";
 import { makeFakeRedis } from "../helpers/fakeRedis.js";
 
@@ -25,6 +26,7 @@ const { customerPlans } = await import("../../services/plans.js");
 const { parseStartPayload, planFromStartPayload } = await import("../../handlers/message/handleStartPayload.js");
 const { keyboardFor, MOCK_TEST_BUTTON } = await import("../../keyboards/mainKeyboard.js");
 const { resetMockRunnerForTests } = await import("../../services/mockTests/runner.js");
+const { STATIC_OPTIONS } = await import("../../web/spa.js");
 
 const fakeRedis = makeFakeRedis();
 auth.setAdminSessionRedisForTests(fakeRedis);
@@ -96,6 +98,91 @@ describe("routing", () => {
     assert.notEqual(webhook.status, 404, "HooshPay webhook route still mounted");
     const ipn = await call("POST", "/api/nowpayments/ipn", { body: {} });
     assert.notEqual(ipn.status, 404, "NOWPayments IPN route still mounted");
+  });
+});
+
+/** Raw request so the path reaches Express exactly as sent (fetch normalizes "//" and "..") */
+function rawGet(path) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: "127.0.0.1", port: server.address().port, path, method: "GET" }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => { body += chunk; });
+      res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, text: body }));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+function assertNotFramable(headers, label) {
+  const get = (name) => (typeof headers.get === "function" ? headers.get(name) : headers[name]);
+  assert.equal(get("x-frame-options"), "DENY", `${label}: X-Frame-Options`);
+  assert.match(get("content-security-policy") || "", /frame-ancestors 'none'/, `${label}: CSP frame-ancestors`);
+  assert.equal(get("x-content-type-options"), "nosniff", `${label}: nosniff`);
+}
+
+describe("HTML security headers (clickjacking and caching)", () => {
+  test("the admin sign-in shell is never framable or publicly cached, by any URL", async () => {
+    for (const path of ["/panel", "/admin", "/panel/x", "/index.html"]) {
+      const page = await call("GET", path);
+      assert.equal(page.status, 200, path);
+      assert.match(page.text, /SWIFT Admin/, path);
+      assertNotFramable(page.headers, path);
+      assert.equal(page.headers.get("cache-control"), "no-store", `${path}: cache`);
+      assert.match(page.headers.get("x-robots-tag") || "", /noindex/, path);
+    }
+  });
+
+  test("path variants of /index.html cannot bypass the shell headers", async () => {
+    for (const path of ["//index.html", "/x/../index.html", "/./index.html", "/INDEX.HTML", "/index.html."]) {
+      const page = await rawGet(path);
+      if (page.status !== 200) continue; // case/trailing-dot variants only resolve on case-insensitive file systems
+      assert.match(page.text, /SWIFT Admin/, path);
+      assertNotFramable(page.headers, path);
+      assert.equal(page.headers["cache-control"], "no-store", `${path}: cache`);
+    }
+    const plain = await rawGet("//index.html");
+    assert.equal(plain.status, 200, "//index.html resolves (and is protected)");
+  });
+
+  test("the storefront is not framable but stays cacheable, whether reached as / or /store.html", async () => {
+    for (const path of ["/", "/store.html"]) {
+      const page = await call("GET", path);
+      assert.equal(page.status, 200, path);
+      assert.match(page.text, /<html lang="fa" dir="rtl"/, path);
+      assert.match(page.text, /rel="canonical"/, `${path}: canonical injected`);
+      assertNotFramable(page.headers, path);
+      assert.equal(page.headers.get("cache-control"), "public, max-age=300", path);
+    }
+  });
+
+  test("the 404 page is not framable whether reached by an unknown path or by file name", async () => {
+    for (const path of ["/nope", "/404.html"]) {
+      const page = await call("GET", path);
+      assert.equal(page.status, 404, path);
+      assertNotFramable(page.headers, path);
+      assert.equal(page.headers.get("cache-control"), "no-store", path);
+    }
+  });
+
+  test("public static assets keep their long-lived public cache", async () => {
+    for (const path of ["/app.js", "/styles.css", "/store/store.js", "/store/store.css", "/favicon.svg"]) {
+      const asset = await call("GET", path);
+      assert.equal(asset.status, 200, path);
+      assert.equal(asset.headers.get("cache-control"), "public, max-age=3600", path);
+    }
+  });
+
+  test("any HTML file served by the static middleware gets the safety-net headers", () => {
+    const headers = {};
+    const res = { setHeader: (name, value) => { headers[name.toLowerCase()] = value; } };
+    STATIC_OPTIONS.setHeaders(res, "/srv/web/public/new-page.html");
+    assertNotFramable(headers, "static .html");
+    assert.equal(headers["cache-control"], "no-store");
+    const assetHeaders = {};
+    STATIC_OPTIONS.setHeaders({ setHeader: (name, value) => { assetHeaders[name] = value; } }, "/srv/web/public/app.js");
+    assert.deepEqual(assetHeaders, {}, "non-HTML assets are untouched");
   });
 });
 

@@ -5,13 +5,26 @@ import express from "express";
 
 const webRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "public");
 
-const OPTIONS = {
+// Matches .html/.htm, tolerating trailing dots/spaces that Windows file
+// systems ignore when resolving a path.
+const HTML_FILE = /\.html?[.\s]*$/i;
+
+export const STATIC_OPTIONS = {
   dotfiles: "ignore",
   extensions: [],
   fallthrough: true,
   index: false,
   maxAge: "1h",
   redirect: false,
+  // Safety net: the HTML shells are routed to their own handlers below, but
+  // any HTML that still reaches the static middleware must never be framable
+  // or publicly cached. Scripts, styles and images keep the 1h public cache.
+  setHeaders(res, filePath) {
+    if (!HTML_FILE.test(filePath)) return;
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Robots-Tag", "noindex, nofollow");
+    securityHeaders(res, ADMIN_CSP);
+  },
 };
 
 // Scripts only from this origin (no inline handlers). Inline styles are allowed
@@ -48,11 +61,14 @@ export const STORE_CSP = [
 /** Admin application entry points. Everything else is the storefront or 404. */
 const ADMIN_PAGE = /^\/(?:panel|admin)(?:\/.*)?$/;
 
+/** HTML files in web/public and the route whose headers they must carry. */
+const HTML_SHELLS = Object.freeze({ "index.html": "admin", "store.html": "store", "404.html": "notFound" });
+
 let staticMiddleware = null;
 
 function ensureStatic() {
   if (staticMiddleware) return staticMiddleware;
-  staticMiddleware = express.static(webRoot, OPTIONS);
+  staticMiddleware = express.static(webRoot, STATIC_OPTIONS);
   return staticMiddleware;
 }
 
@@ -78,6 +94,12 @@ export function serveAdminSpa(req, res, next) {
 
   fs.stat(candidate, (statError, stats) => {
     if (!statError && stats.isFile()) {
+      // HTML shells requested by file name get exactly the headers of their
+      // canonical route (/index.html is the admin sign-in page).
+      const shell = HTML_SHELLS[relative.replace(/\\/g, "/").replace(/[.\s]+$/, "").toLowerCase()];
+      if (shell === "admin") return sendAdminShell(res, next);
+      if (shell === "store") return serveStorefront(req, res, next);
+      if (shell === "notFound") return notFoundHandler(req, res);
       return ensureStatic()(req, res, next);
     }
     // The admin app lives at /panel (and the legacy /admin); it routes by hash.
