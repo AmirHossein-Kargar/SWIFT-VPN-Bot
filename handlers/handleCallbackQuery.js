@@ -944,21 +944,28 @@ const handleCallbackQuery = async (bot, query) => {
   }
 
   if (data.startsWith("back_to_profile")) {
-    await bot.deleteMessage(chatId, messageId);
-    await handleProfile(bot, chatId, userId);
+    // Edit this screen back into the profile instead of delete+resend — the
+    // only caller of this callback (the discount-disabled notice) is always
+    // a text message, so editing it is safe.
+    await handleProfile(bot, chatId, userId, { messageId });
     return;
   }
 
   // Profile quick actions
   if (data === "topup_from_profile") {
-    await bot.deleteMessage(chatId, messageId).catch(() => {});
-    await showPaymentMethods(bot, chatId);
+    // Edit the profile screen in place when possible instead of
+    // delete+resend; showPaymentMethods itself handles the safe fallback
+    // and keeps session.messageId in sync. Deliberately NOT routed through
+    // services/messaging/* — see the comment in showPaymentMethods.js.
+    await showPaymentMethods(bot, chatId, { messageId });
     return;
   }
 
   if (data === "my_services_from_profile") {
-    await bot.deleteMessage(chatId, messageId).catch(() => {});
-    await sendServiceSelectionMenu(bot, chatId, userId);
+    // Edit the profile screen in place instead of delete+resend — safe
+    // because it is always a text message (the same invariant relied on
+    // for back_to_profile).
+    await sendServiceSelectionMenu(bot, chatId, userId, { messageId });
     return;
   }
 

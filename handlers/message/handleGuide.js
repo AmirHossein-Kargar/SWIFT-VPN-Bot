@@ -1,4 +1,5 @@
 // * This function handles the "guide" section of the bot
+import { renderInterface } from "../../services/messaging/messageManager.js";
 
 export const guideButtons = {
   reply_markup: {
@@ -21,7 +22,7 @@ export const guideButtons = {
   },
 };
 
-const handleGuide = (bot, chatId) => {
+const handleGuide = async (bot, chatId) => {
   // * Main message shown to the user
   const guideMessage = `📕 به بخش راهنمای ربات خوش آمدید
 
@@ -29,8 +30,13 @@ const handleGuide = (bot, chatId) => {
 🔗 نحوه اتصال به سرویس‌ها را از طریق لینک‌های زیر مطالعه بفرمایید:
 (برنامه مورد نیاز + آموزش قدم به قدم)`;
 
-  // * Send the message and the inline keyboard to the user
-  bot.sendMessage(chatId, guideMessage, guideButtons);
+  // Guide has no callback_data of its own (every button below is a plain
+  // URL, handled client-side by Telegram) and no "back" entry point, so
+  // there is no message id to trust from the current update. It only edits
+  // the chat's existing tracked interface message when one is known safe —
+  // i.e. it was itself put there by renderInterface — and otherwise sends
+  // fresh, exactly as before.
+  await renderInterface(bot, { chatId, text: guideMessage, options: guideButtons });
 };
 
 export default handleGuide;
