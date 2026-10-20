@@ -69,19 +69,31 @@ function parseCookies(header) {
     if (index < 1) continue;
     const name = part.slice(0, index).trim();
     const value = part.slice(index + 1).trim();
-    if (name) cookies[name] = decodeURIComponent(value);
+    // Browsers send the most specific path first; keep it so a stale cookie on
+    // a broader path can never shadow the current session.
+    if (!name || Object.hasOwn(cookies, name)) continue;
+    try { cookies[name] = decodeURIComponent(value); } catch { /* malformed escape: ignore cookie */ }
   }
   return cookies;
 }
+
+/** The session cookie is only ever needed by the admin API. */
+export const SESSION_COOKIE_PATH = "/api/admin";
+/** Path used by releases before the storefront shared this origin. */
+export const LEGACY_SESSION_COOKIE_PATH = "/";
 
 export function sessionCookieOptions(maxAgeSeconds) {
   return {
     httpOnly: true,
     secure: true,
     sameSite: "lax",
-    path: "/",
+    path: SESSION_COOKIE_PATH,
     maxAge: maxAgeSeconds * 1000,
   };
+}
+
+export function clearSessionCookieOptions(path = SESSION_COOKIE_PATH) {
+  return { httpOnly: true, secure: true, sameSite: "lax", path };
 }
 
 export function attachAdminSession(req, _res, next) {

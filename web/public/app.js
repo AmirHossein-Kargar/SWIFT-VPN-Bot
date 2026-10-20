@@ -14,6 +14,11 @@
     actorId: null,
     route: "dashboard",
     caches: {},
+    renderSeq: 0,
+    rendering: false,
+    quiet: false,
+    lastLoadedAt: null,
+    lastLoadFailed: false,
   };
 
   // ── Utilities ──────────────────────────────────────────────────────────────
@@ -63,10 +68,14 @@
       options.headers["content-type"] = "application/json";
       options.body = JSON.stringify(body);
     }
+    const renderSeq = state.renderSeq;
     const response = await fetch(`/api/admin${path}`, options);
     let data = null;
     try { data = await response.json(); } catch { /* no body */ }
-    if (response.status === 401) { showLogin(); throw new Error(data?.message || "Session expired — sign in again."); }
+    const authCall = path.startsWith("/auth/");
+    // A read issued for an older page render must not overwrite newer content.
+    if (method === "GET" && !authCall && renderSeq !== state.renderSeq) return new Promise(() => {});
+    if (response.status === 401 && !authCall) { showLogin(); throw Object.assign(new Error(data?.message || "Session expired — sign in again."), { status: 401 }); }
     if (!response.ok || data?.ok === false) {
       const error = new Error(data?.message || data?.error || `Request failed (${response.status})`);
       error.code = data?.error;
@@ -284,6 +293,7 @@
     { id: "audit", label: "Audit Log", icon: "scroll", section: "System" },
     { id: "admins", label: "Admins", icon: "shield", section: "System" },
     { id: "system", label: "System", icon: "wrench", section: "System" },
+    { id: "mock", label: "Mock Tests", icon: "check", section: "System" },
   ];
 
   function renderNav() {
@@ -378,7 +388,7 @@
 
   // ── Dashboard ──────────────────────────────────────────────────────────────
   async function pageDashboard() {
-    $("#content").innerHTML = loading();
+    if (!state.quiet) $("#content").innerHTML = loading();
     let data;
     try { data = (await GET("/dashboard")).data; }
     catch (error) { $("#content").innerHTML = errorBox(error); return; }
@@ -2604,6 +2614,155 @@
     });
   }
 
+  // ── Mock tests ─────────────────────────────────────────────────────────────
+  // Results come from the isolated harness (in-memory data, simulated
+  // providers); the server refuses runs unless MOCK_TESTS_ENABLED=true.
+  const mockStatusClass = (status) => String(status || "NOT RUN").replace(/\s+/g, "-");
+  const mockBadge = (status) => `<span class="mock-status ${esc(mockStatusClass(status))}" data-no-i18n>${esc(status || "NOT RUN")}</span>`;
+  let mockRunning = false;
+
+  async function pageMockTests() {
+    $("#content").innerHTML = `
+      <div class="card card-pad mock-banner" style="margin-bottom:16px">${icon("shield")}
+        <div>
+          <strong>Isolated test harness</strong>
+          <div style="color:var(--text-dim);font-size:13px;margin-top:4px;line-height:1.7">Scenarios run the real purchase, payment and test-service logic against in-memory data and simulated providers. No payment, wallet credit, blockchain transfer or VPN service is created, and results are kept apart from revenue, balances and transaction history.</div>
+        </div>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-head">
+          <h3>Scenarios</h3><span class="sub" id="mock-enabled"></span>
+          <span class="spacer"></span>
+          <button class="btn primary sm" id="mock-run-all" type="button" disabled>${icon("refresh")} Run all scenarios</button>
+        </div>
+        <div class="card-pad" id="mock-scenarios">${loading()}</div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Run history</h3><span class="sub">Most recent runs</span></div>
+        <div id="mock-history">${loading()}</div>
+      </div>`;
+    await loadMockTests();
+  }
+
+  async function loadMockTests() {
+    if (!$("#mock-scenarios")) return;
+    let data;
+    try { data = (await GET("/mock-tests?limit=10")).data; }
+    catch (error) { $("#mock-scenarios").innerHTML = errorBox(error); $("#mock-history").innerHTML = ""; return; }
+    if (!$("#mock-scenarios")) return;
+    const latest = data.items[0];
+    const lastById = new Map((latest?.scenarios || []).map((scenario) => [scenario.id, scenario]));
+    const canRun = data.enabled && !data.running && !mockRunning;
+    $("#mock-enabled").textContent = data.enabled ? t("Enabled on this server") : t("Disabled on this server (MOCK_TESTS_ENABLED)");
+    const runAll = $("#mock-run-all");
+    runAll.disabled = !canRun;
+    runAll.onclick = () => runMock("all");
+    $("#mock-scenarios").innerHTML = `<div class="mock-scenarios">${data.scenarios.map((scenario) => {
+      const last = lastById.get(scenario.id);
+      const title = lang() === "fa" ? scenario.titleFa : scenario.title;
+      const counts = last?.counts?.total
+        ? t("{passed}/{total} assertions passed", { passed: num(last.counts.passed), total: num(last.counts.total - last.counts.skipped) })
+          + (last.counts.skipped ? ` · ${t("{n} skipped", { n: num(last.counts.skipped) })}` : "")
+        : t("Not run yet");
+      return `<div class="mock-scenario">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:center"><h4 data-no-i18n>${esc(title)}</h4>${mockBadge(last?.status)}</div>
+          <div class="meta">${esc(counts)}</div>
+          ${last?.explanation && last.status !== "PASS" ? `<div class="meta" style="color:var(--on-red)" data-no-i18n>${esc(last.explanation)}</div>` : ""}
+          <button class="btn sm" type="button" data-mock-run="${esc(scenario.id)}" ${canRun ? "" : "disabled"}>${icon("refresh")} Run</button>
+        </div>`;
+    }).join("")}</div>`;
+    $$("[data-mock-run]").forEach((button) => { button.onclick = () => runMock(button.dataset.mockRun); });
+
+    if (!data.items.length) {
+      $("#mock-history").innerHTML = `<div class="empty">${icon("inbox")} No mock-test runs yet.</div>`;
+      return;
+    }
+    $("#mock-history").innerHTML = `
+      ${data.source === "memory" ? `<div class="card-pad" style="padding-bottom:0"><div class="warn-box">${icon("alert")} Report history is unavailable from the database; showing runs kept in memory since the last restart.</div></div>` : ""}
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>Run</th><th>Started</th><th>Admin</th><th>Source</th><th>Result</th><th class="num">Passed</th><th class="num">Failed</th><th class="num">Blocked</th></tr></thead>
+        <tbody>${data.items.map((run) => `
+          <tr data-mock-report="${esc(run.runId)}" tabindex="0" style="cursor:pointer">
+            <td class="mono">${esc(run.runId)}</td>
+            <td>${dateFmt(run.startedAt)}</td>
+            <td class="mono">${esc(run.actorTelegramId)}</td>
+            <td>${esc(run.trigger)}</td>
+            <td>${mockBadge(run.summary?.overall)}</td>
+            <td class="num">${num(run.summary?.PASS || 0)}</td>
+            <td class="num">${num(run.summary?.FAIL || 0)}</td>
+            <td class="num">${num(run.summary?.BLOCKED || 0)}</td>
+          </tr>`).join("")}</tbody>
+      </table></div>`;
+    $$("[data-mock-report]").forEach((row) => {
+      row.onclick = () => showMockReport(row.dataset.mockReport);
+      row.onkeydown = (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); showMockReport(row.dataset.mockReport); } };
+    });
+  }
+
+  async function runMock(target) {
+    if (mockRunning) return;
+    mockRunning = true;
+    $$("#content [data-mock-run], #mock-run-all").forEach((button) => { button.disabled = true; });
+    const runAll = $("#mock-run-all");
+    if (runAll && target === "all") runAll.innerHTML = `<span class="btn-spinner" aria-hidden="true"></span> ${esc(t("Running…"))}`;
+    try {
+      const report = (await POST("/mock-tests/run", { scenarios: target === "all" ? "all" : [target] })).data;
+      toast(report.summary.overall === "PASS" ? "success" : "error", t("Mock run finished: {result}", { result: report.summary.overall }));
+      showMockReportData(report);
+    } catch (error) {
+      apiErrorToast(error);
+    } finally {
+      mockRunning = false;
+      if (state.route === "mock") {
+        if ($("#mock-run-all")) $("#mock-run-all").innerHTML = `${icon("refresh")} ${esc(t("Run all scenarios"))}`;
+        loadMockTests();
+      }
+    }
+  }
+
+  async function showMockReport(runId) {
+    openDrawer(t("Mock-test report"), runId, loading());
+    try { showMockReportData((await GET(`/mock-tests/${encodeURIComponent(runId)}`)).data); }
+    catch (error) { openDrawer(t("Mock-test report"), runId, errorBox(error)); }
+  }
+
+  function showMockReportData(report) {
+    const mark = { pass: "✓", fail: "✗", skipped: "↷" };
+    const scenarios = (report.scenarios || []).map((scenario) => {
+      const title = lang() === "fa" ? scenario.titleFa : scenario.title;
+      const assertions = scenario.assertions || [];
+      return `
+        <div class="card card-pad" style="margin-top:12px">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap">
+            <strong data-no-i18n>${esc(title)}</strong>${mockBadge(scenario.status)}
+          </div>
+          <div style="color:var(--text-faint);font-size:12px;margin-top:6px">
+            ${scenario.startedAt ? `${esc(dateFmt(scenario.startedAt))} → ${esc(dateFmt(scenario.completedAt))} · ${esc(num(scenario.durationMs || 0))} ms` : esc(t("Not executed"))}
+          </div>
+          ${scenario.explanation ? `<div class="${scenario.status === "PASS" ? "" : "danger-box"}" style="margin-top:10px" data-no-i18n>${esc(scenario.explanation)}</div>` : ""}
+          ${scenario.error ? `<div class="mono" style="margin-top:8px;color:var(--on-red)">${esc(scenario.error)}</div>` : ""}
+          ${(scenario.isolationViolations || []).length ? `<div class="danger-box" style="margin-top:8px" data-no-i18n>Isolation violations: ${esc(scenario.isolationViolations.join(", "))}</div>` : ""}
+          ${(scenario.notes || []).map((note) => `<div style="margin-top:8px;color:var(--text-dim);font-size:12.5px" data-no-i18n>${esc(note)}</div>`).join("")}
+          ${assertions.length ? `<ul class="assert-list" style="margin-top:10px" data-no-i18n>${assertions.map((entry) => `
+            <li class="${esc(entry.status)}"><span class="mark" aria-label="${esc(entry.status)}">${mark[entry.status] || "•"}</span>
+              <span>${esc(entry.name)}${entry.detail ? `<span class="detail">${esc(entry.detail)}</span>` : ""}</span></li>`).join("")}</ul>` : ""}
+        </div>`;
+    }).join("");
+    const s = report.summary || {};
+    openDrawer(t("Mock-test report"), report.runId, `
+      <div class="kv">
+        <dt>Run</dt><dd class="mono">${esc(report.runId)}</dd>
+        <dt>Environment</dt><dd>${esc(t("Isolated — in-memory data, simulated providers"))}</dd>
+        <dt>Admin</dt><dd class="mono">${esc(report.actorTelegramId)}</dd>
+        <dt>Source</dt><dd>${esc(report.trigger)}</dd>
+        <dt>Started</dt><dd>${esc(dateFmt(report.startedAt))}</dd>
+        <dt>Completed</dt><dd>${esc(dateFmt(report.completedAt))}</dd>
+        <dt>Result</dt><dd>${mockBadge(s.overall)} <span style="color:var(--text-faint);font-size:12px">${esc(t("{pass} passed · {fail} failed · {blocked} blocked · {notRun} not run", { pass: num(s.PASS || 0), fail: num(s.FAIL || 0), blocked: num(s.BLOCKED || 0), notRun: num(s["NOT RUN"] || 0) }))}</span></dd>
+      </div>
+      ${report.enabled === false ? `<div class="warn-box" style="margin-top:12px">${icon("alert")} Mock testing is disabled on this server, so no scenario was executed.</div>` : ""}
+      ${scenarios}`);
+  }
+
   // ── Routing ────────────────────────────────────────────────────────────────
   const PAGES = {
     dashboard: { title: "Dashboard", render: pageDashboard },
@@ -2619,70 +2778,266 @@
     audit: { title: "Audit Log", render: pageAudit },
     admins: { title: "Admins", render: pageAdmins },
     system: { title: "System", render: pageSystem },
+    mock: { title: "Mock Tests", render: pageMockTests },
   };
 
-  async function renderRoute(refresh = false) {
+  async function renderRoute(refresh = false, { quiet = false } = {}) {
+    const seq = ++state.renderSeq;
     const route = (location.hash.replace(/^#\//, "") || "dashboard").split("?")[0];
+    const sameRoute = state.route === (PAGES[route] ? route : "dashboard");
     state.route = PAGES[route] ? route : "dashboard";
     const page = PAGES[state.route];
     $("#page-title").textContent = page.title;
     renderNav();
     clearInterval(broadcastTimer);
-    await page.render(refresh);
+    const scrollY = quiet && sameRoute ? window.scrollY : null;
+    state.quiet = quiet && sameRoute;
+    state.rendering = true;
+    updateRefreshStatus();
+    try {
+      await page.render(refresh);
+    } finally {
+      if (seq === state.renderSeq) {
+        state.quiet = false;
+        state.rendering = false;
+        state.lastLoadedAt = Date.now();
+        state.lastLoadFailed = Boolean($("#content [data-retry]"));
+        updateRefreshStatus();
+        if (scrollY != null) window.scrollTo({ top: scrollY });
+      }
+    }
     refreshRecoveryBadge().catch(() => {});
   }
 
   window.addEventListener("hashchange", () => renderRoute());
 
+  // ── Data freshness & auto-refresh ──────────────────────────────────────────
+  // Every page render gets a sequence number; GET responses that arrive after a
+  // newer render started are dropped (see api()), so a slow, older response can
+  // never overwrite newer data. Auto-refresh polls only overview-type pages,
+  // only while the tab is visible and nothing is open or being edited.
+  const AUTO_REFRESH_MS = 60_000;
+  const AUTO_ROUTES = new Set(["dashboard", "recovery", "payments", "mock", "system"]);
+  let autoTimer = null;
+
+  function autoRefreshOn() {
+    try { return localStorage.getItem("swift.autoRefresh") === "1"; } catch { return false; }
+  }
+
+  function relativeAge(ms) {
+    const minutes = Math.floor(ms / 60_000);
+    if (minutes < 1) return t("just now");
+    return t("{n} min ago", { n: num(minutes) });
+  }
+
+  function updateRefreshStatus() {
+    const el = $("#refresh-status");
+    if (!el) return;
+    el.classList.remove("stale", "failed", "loading");
+    if (state.rendering) {
+      el.classList.add("loading");
+      el.innerHTML = `<span class="dot"></span><span>${esc(t("Loading…"))}</span>`;
+      return;
+    }
+    if (!state.lastLoadedAt) { el.innerHTML = ""; return; }
+    const age = Date.now() - state.lastLoadedAt;
+    const staleAfter = autoRefreshOn() && AUTO_ROUTES.has(state.route) ? AUTO_REFRESH_MS * 2 : 5 * 60_000;
+    if (state.lastLoadFailed) el.classList.add("failed");
+    else if (age > staleAfter) el.classList.add("stale");
+    const label = state.lastLoadFailed
+      ? t("Refresh failed")
+      : age > staleAfter ? t("Stale · updated {age}", { age: relativeAge(age) }) : t("Updated {age}", { age: relativeAge(age) });
+    el.innerHTML = `<span class="dot"></span><span>${esc(label)}</span>`;
+    el.title = `${t("Last loaded")}: ${dateFmt(new Date(state.lastLoadedAt))}`;
+  }
+  setInterval(updateRefreshStatus, 15_000);
+
+  function syncAutoButton() {
+    const button = $("#btn-auto");
+    if (button) button.setAttribute("aria-pressed", String(autoRefreshOn()));
+  }
+
+  function scheduleAutoRefresh() {
+    clearInterval(autoTimer);
+    syncAutoButton();
+    if (!autoRefreshOn()) return;
+    autoTimer = setInterval(() => {
+      const busy = document.hidden || state.rendering || !AUTO_ROUTES.has(state.route)
+        || !$("#app").classList.contains("ready")
+        || $("#drawer").classList.contains("open") || $("#modal-backdrop").classList.contains("show")
+        || (document.activeElement && document.activeElement.matches("input, textarea, select"));
+      if (!busy) renderRoute(true, { quiet: true });
+    }, AUTO_REFRESH_MS);
+  }
+
+  $("#btn-auto").onclick = () => {
+    const next = !autoRefreshOn();
+    try { localStorage.setItem("swift.autoRefresh", next ? "1" : "0"); } catch { /* storage blocked */ }
+    toast("success", next ? t("Auto-refresh on (every 60 seconds).") : t("Auto-refresh off."));
+    scheduleAutoRefresh();
+    updateRefreshStatus();
+  };
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden || !autoRefreshOn() || !$("#app").classList.contains("ready")) return;
+    if (AUTO_ROUTES.has(state.route) && state.lastLoadedAt && Date.now() - state.lastLoadedAt > AUTO_REFRESH_MS && !state.rendering) {
+      renderRoute(true, { quiet: true });
+    }
+  });
+
   // ── Auth flow ──────────────────────────────────────────────────────────────
+  // Two steps: Telegram ID → one-time code. Neither value is ever written to
+  // the URL, browser storage or the console; errors are generic by design.
+  const RESEND_COOLDOWN_S = 45; // matches the server-side per-ID issue limit
+  let resendTimer = null;
+  let loginTelegramId = "";
+
+  function loginAlert(kind, message) {
+    const el = $("#login-alert");
+    if (!message) { el.hidden = true; el.textContent = ""; el.className = "login-alert"; return; }
+    el.className = `login-alert ${kind}`;
+    el.textContent = t(message);
+    el.hidden = false;
+  }
+
+  function setBusy(button, busy, busyLabel) {
+    if (!button.dataset.idleHtml) button.dataset.idleHtml = button.innerHTML;
+    button.disabled = busy;
+    button.setAttribute("aria-busy", String(busy));
+    button.innerHTML = busy
+      ? `<span class="btn-spinner" aria-hidden="true"></span><span class="label">${esc(t(busyLabel))}</span>`
+      : button.dataset.idleHtml;
+  }
+
+  function setLoginStep(step) {
+    $("#login-form-id").hidden = step !== 1;
+    $("#login-form-code").hidden = step !== 2;
+    $("#login-step-1").className = step === 1 ? "active" : "done";
+    $("#login-step-2").className = step === 2 ? "active" : "";
+    $("#login-step-1").setAttribute("aria-current", step === 1 ? "step" : "false");
+    $("#login-step-2").setAttribute("aria-current", step === 2 ? "step" : "false");
+    window.setTimeout(() => (step === 1 ? $("#login-tid") : $("#login-code")).focus(), 0);
+  }
+
+  function startResendCooldown() {
+    let remaining = RESEND_COOLDOWN_S;
+    const button = $("#login-resend");
+    clearInterval(resendTimer);
+    const tick = () => {
+      if (remaining <= 0) {
+        clearInterval(resendTimer);
+        button.disabled = false;
+        button.textContent = t("Resend code");
+        return;
+      }
+      button.disabled = true;
+      button.textContent = t("Resend in {n}s", { n: num(remaining) });
+      remaining -= 1;
+    };
+    tick();
+    resendTimer = setInterval(tick, 1000);
+  }
+
+  function authErrorMessage(error, fallback) {
+    if (error?.status === 429) return "Too many attempts. Wait a minute and try again.";
+    if (error?.status >= 500) return "Sign-in is temporarily unavailable. Try again shortly.";
+    if (error?.status === 401) return "The sign-in code is invalid, expired, or already used.";
+    return error?.status ? fallback : "Network error — check your connection and try again.";
+  }
+
+  function resetLogin() {
+    clearInterval(resendTimer);
+    loginTelegramId = "";
+    $("#login-code").value = "";
+    $("#login-tid").removeAttribute("aria-invalid");
+    $("#login-code").removeAttribute("aria-invalid");
+    loginAlert(null);
+    setLoginStep(1);
+  }
+
   function showLogin() {
     state.csrfToken = null;
     state.actorId = null;
     $("#app").classList.remove("ready");
-    $("#login").classList.add("show");
+    if (!$("#login").classList.contains("show") || !state.loginInitialized) {
+      state.loginInitialized = true;
+      $("#login").classList.add("show");
+      resetLogin();
+    }
+    clearInterval(autoTimer);
   }
 
   function showApp() {
     $("#login").classList.remove("show");
     $("#app").classList.add("ready");
     $("#admin-id").textContent = state.actorId;
+    $("#login-code").value = "";
+    clearInterval(resendTimer);
     renderRoute();
+    scheduleAutoRefresh();
   }
 
-  $("#login-request").onclick = async () => {
-    const telegramId = $("#login-tid").value.trim();
-    if (!/^\d{5,20}$/.test(telegramId)) return toast("error", t("Enter a numeric Telegram ID."));
-    const button = $("#login-request");
-    button.disabled = true;
+  async function requestLoginCode({ resend = false } = {}) {
+    const input = $("#login-tid");
+    const telegramId = resend ? loginTelegramId : input.value.trim();
+    if (!/^[1-9]\d{4,19}$/.test(telegramId)) {
+      input.setAttribute("aria-invalid", "true");
+      loginAlert("error", "Enter a numeric Telegram ID.");
+      if (!resend) input.focus();
+      return;
+    }
+    input.removeAttribute("aria-invalid");
+    loginAlert(null);
+    const button = resend ? $("#login-resend") : $("#login-request");
+    setBusy(button, true, "Sending…");
     try {
-      const result = await POST("/auth/request-code", { telegramId });
-      $("#login-verify").disabled = false;
-      $("#login-code").focus();
-      void result;
-      toast("success", t("If this ID is authorized, a sign-in code was sent to the bot chat."));
+      await POST("/auth/request-code", { telegramId });
+      loginTelegramId = telegramId;
+      $("#login-sent-id").textContent = telegramId;
+      setBusy(button, false);
+      if (resend) loginAlert("info", "A new code was requested. Use the most recent message from the bot.");
+      else setLoginStep(2);
+      startResendCooldown();
     } catch (error) {
-      toast("error", error.message);
-    } finally { button.disabled = false; }
-  };
+      setBusy(button, false);
+      loginAlert("error", authErrorMessage(error, "Could not request a code. Try again."));
+    }
+  }
 
-  $("#login-verify").onclick = async () => {
-    const code = $("#login-code").value.trim();
-    if (!code) return toast("error", t("Paste the sign-in code from the bot."));
+  async function verifyLoginCode() {
+    const input = $("#login-code");
+    const code = input.value.trim();
+    if (!/^[A-Za-z0-9_-]{32}$/.test(code)) {
+      input.setAttribute("aria-invalid", "true");
+      loginAlert("error", "That code does not look right — paste it exactly as received.");
+      input.focus();
+      return;
+    }
+    input.removeAttribute("aria-invalid");
+    loginAlert(null);
     const button = $("#login-verify");
-    button.disabled = true;
+    setBusy(button, true, "Signing in…");
     try {
       const result = await POST("/auth/verify", { code });
       state.csrfToken = result.csrfToken;
       state.actorId = result.actorTelegramId;
+      setBusy(button, false);
       toast("success", t("Signed in."));
       showApp();
     } catch (error) {
-      toast("error", error.message);
-    } finally { button.disabled = false; }
-  };
+      setBusy(button, false);
+      input.setAttribute("aria-invalid", "true");
+      loginAlert("error", authErrorMessage(error, "The sign-in code is invalid, expired, or already used."));
+      input.select();
+    }
+  }
 
-  $("#login-code").addEventListener("keydown", (event) => { if (event.key === "Enter") $("#login-verify").click(); });
-  $("#login-tid").addEventListener("keydown", (event) => { if (event.key === "Enter") $("#login-request").click(); });
+  $("#login-form-id").addEventListener("submit", (event) => { event.preventDefault(); requestLoginCode(); });
+  $("#login-form-code").addEventListener("submit", (event) => { event.preventDefault(); verifyLoginCode(); });
+  $("#login-resend").addEventListener("click", () => requestLoginCode({ resend: true }));
+  $("#login-change").addEventListener("click", () => resetLogin());
+  $("#login-tid").addEventListener("input", () => $("#login-tid").removeAttribute("aria-invalid"));
+  $("#login-code").addEventListener("input", () => $("#login-code").removeAttribute("aria-invalid"));
 
   $("#btn-logout").onclick = async () => {
     try { await POST("/auth/logout", {}); } catch { /* clearing local state regardless */ }

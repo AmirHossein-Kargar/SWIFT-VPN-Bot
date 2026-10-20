@@ -30,7 +30,8 @@ import { getSystemHealth } from "../services/admin/monitoring.js";
 import { listAuditLogs } from "../services/admin/audit.js";
 import { listAdmins, addAdmin, removeAdmin } from "../services/admin/adminRegistry.js";
 import { default as botInstance } from "../config/botInstance.js";
-import { attachAdminSession, requireAdminSession, requireCsrfToken, requireSameOrigin, adminApiHeaders, rateLimitMiddleware, clientIp, sessionCookieOptions, adminApiErrorHandler } from "./adminMiddleware.js";
+import { attachAdminSession, requireAdminSession, requireCsrfToken, requireSameOrigin, adminApiHeaders, rateLimitMiddleware, clientIp, sessionCookieOptions, clearSessionCookieOptions, LEGACY_SESSION_COOKIE_PATH, adminApiErrorHandler } from "./adminMiddleware.js";
+import { runMockTests, listMockRuns, getMockRun } from "../services/mockTests/runner.js";
 
 const router = express.Router();
 router.use(adminApiHeaders);
@@ -102,6 +103,9 @@ router.post("/auth/verify", rateLimitMiddleware({ limit: 10 }), requireBody(), a
     const code = String(req.body?.code ?? "");
     const actorTelegramId = await consumeAdminLoginCode(code);
     if (!actorTelegramId) throw new AdminServiceError("The sign-in code is invalid, expired, or already used.", { status: 401, code: "invalid_login_code" });
+    // Session rotation: a session the browser already carried (possibly
+    // planted or stale) is invalidated server-side before a new one is issued.
+    if (req.adminSessionToken) await deleteAdminSession(req.adminSessionToken).catch(() => {});
     const { token, session, ttlSeconds } = await createAdminSession(actorTelegramId);
     await auditAuthEvent({
       actorTelegramId,
@@ -113,6 +117,7 @@ router.post("/auth/verify", rateLimitMiddleware({ limit: 10 }), requireBody(), a
       metadata: { channel: "web" },
     });
     res.cookie(ADMIN_SESSION_COOKIE, token, sessionCookieOptions(ttlSeconds));
+    res.clearCookie(ADMIN_SESSION_COOKIE, clearSessionCookieOptions(LEGACY_SESSION_COOKIE_PATH));
     res.json({ ok: true, actorTelegramId: session.actorTelegramId, csrfToken: session.csrfToken, expiresInSeconds: ttlSeconds });
   } catch (error) { next(error); }
 });
@@ -122,7 +127,8 @@ router.post("/auth/logout", requireBody(), (req, res, next) => {
     const token = req.adminSessionToken;
     const actorId = req.adminActorId;
     if (token) await deleteAdminSession(token).catch(() => {});
-    res.clearCookie(ADMIN_SESSION_COOKIE, { path: "/" });
+    res.clearCookie(ADMIN_SESSION_COOKIE, clearSessionCookieOptions());
+    res.clearCookie(ADMIN_SESSION_COOKIE, clearSessionCookieOptions(LEGACY_SESSION_COOKIE_PATH));
     if (actorId) {
       await auditAuthEvent({
         actorTelegramId: actorId,
@@ -189,6 +195,25 @@ router.delete("/admins/:telegramId", requireBody(), async (req, res, next) => {
         ipAddress: clientIp(req),
       }),
     });
+  } catch (error) { next(error); }
+});
+
+// Mock tests (isolated harness; gated server-side by MOCK_TESTS_ENABLED)
+router.get("/mock-tests", async (req, res, next) => {
+  try { res.json({ ok: true, data: await listMockRuns({ actorId: req.adminActorId, limit: req.query.limit }) }); }
+  catch (error) { next(error); }
+});
+
+router.get("/mock-tests/:runId", async (req, res, next) => {
+  try { res.json({ ok: true, data: await getMockRun({ actorId: req.adminActorId, runId: req.params.runId }) }); }
+  catch (error) { next(error); }
+});
+
+router.post("/mock-tests/run", rateLimitMiddleware({ limit: 6 }), requireBody(), async (req, res, next) => {
+  try {
+    const requested = req.body?.scenarios;
+    const scenarios = requested === undefined || requested === "all" ? "all" : requested;
+    res.json({ ok: true, data: await runMockTests({ actorId: req.adminActorId, trigger: "web", scenarios }) });
   } catch (error) { next(error); }
 });
 

@@ -48,33 +48,57 @@
   </svg>
 
   <div id="login" class="show">
-    <div class="login-card">
+    <div class="login-shell">
       <div class="login-tools" data-no-i18n>
-        <button type="button" class="icon-btn" data-theme-toggle></button>
-        <div class="segmented" role="group" aria-label="Language"><button type="button" data-lang="fa" aria-pressed="false">فارسی</button><button type="button" data-lang="en" aria-pressed="false">English</button></div>
-      </div>
-      <div class="brand">
-        <div class="brand-mark"><svg width="19" height="19"><use href="#i-shield"/></svg></div>
-        <div>
-          <div class="brand-name">SWIFT Admin</div>
-          <div class="brand-sub">VPN Control Center</div>
+        <a class="login-back" href="/"><span class="back-arrow" aria-hidden="true">&larr;</span> SWIFT VPN</a>
+        <div class="login-tools-end">
+          <div class="segmented" role="group" aria-label="Language"><button type="button" data-lang="fa" aria-pressed="false">فارسی</button><button type="button" data-lang="en" aria-pressed="false">English</button></div>
+          <button type="button" class="icon-btn" data-theme-toggle></button>
         </div>
       </div>
-      <h2 class="login-title">Sign in with Telegram</h2>
-      <p class="login-sub">Authentication is tied to the bot's admin allowlist. Sign-in codes are delivered by the bot as a direct message.</p>
-      <div class="login-steps">
-        <label class="field">
-          <span class="field-label">TELEGRAM ID</span>
-          <input id="login-tid" class="input mono" inputmode="numeric" placeholder="e.g. 123456789" autocomplete="off" />
-        </label>
-        <button id="login-request" class="btn primary"><svg><use href="#i-send"/></svg> Send sign-in code</button>
-        <label class="field">
-          <span class="field-label">SIGN-IN CODE</span>
-          <input id="login-code" class="input mono" placeholder="Code from the bot's DM" autocomplete="off" />
-        </label>
-        <button id="login-verify" class="btn primary" disabled><svg><use href="#i-shield"/></svg> Verify &amp; sign in</button>
-      </div>
-      <p class="login-hint" id="login-hint">Only Telegram IDs listed in the server's <span class="mono">ADMINS</span> environment variable can sign in. Codes expire after 5 minutes and can be used once.</p>
+      <section class="login-card" aria-labelledby="login-title">
+        <div class="login-brand">
+          <div class="brand-mark lg"><svg width="24" height="24"><use href="#i-shield"/></svg></div>
+          <div>
+            <div class="brand-name">SWIFT Admin</div>
+            <div class="brand-sub">VPN Control Center</div>
+          </div>
+        </div>
+        <h1 class="login-title" id="login-title">Sign in with Telegram</h1>
+        <p class="login-sub">Authentication is tied to the bot's admin allowlist. Sign-in codes are delivered by the bot as a direct message.</p>
+
+        <ol class="login-progress" aria-label="Sign-in steps">
+          <li class="active" id="login-step-1"><span class="n">1</span><span>Telegram ID</span></li>
+          <li id="login-step-2"><span class="n">2</span><span>Sign-in code</span></li>
+        </ol>
+
+        <div class="login-alert" id="login-alert" role="alert" hidden></div>
+
+        <form class="login-form" id="login-form-id" novalidate>
+          <label class="field" for="login-tid">
+            <span class="field-label">TELEGRAM ID</span>
+            <input id="login-tid" name="telegramId" class="input mono" inputmode="numeric" autocomplete="username" spellcheck="false" placeholder="e.g. 123456789" aria-describedby="login-tid-help" required />
+            <span class="field-help" id="login-tid-help">The numeric ID of your Telegram account.</span>
+          </label>
+          <button id="login-request" class="btn primary block" type="submit"><svg><use href="#i-send"/></svg><span class="label">Send sign-in code</span></button>
+        </form>
+
+        <form class="login-form" id="login-form-code" novalidate hidden>
+          <div class="login-sent" id="login-sent">If this ID is authorized, the bot sent a sign-in code to <span class="mono" id="login-sent-id"></span>.</div>
+          <label class="field" for="login-code">
+            <span class="field-label">SIGN-IN CODE</span>
+            <input id="login-code" name="code" class="input mono" autocomplete="one-time-code" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Code from the bot's DM" aria-describedby="login-code-help" required />
+            <span class="field-help" id="login-code-help">Paste the code exactly as received. It works once and expires after 5 minutes.</span>
+          </label>
+          <button id="login-verify" class="btn primary block" type="submit"><svg><use href="#i-shield"/></svg><span class="label">Verify &amp; sign in</span></button>
+          <div class="login-secondary">
+            <button type="button" class="btn ghost sm" id="login-change">Use another ID</button>
+            <button type="button" class="btn ghost sm" id="login-resend">Resend code</button>
+          </div>
+        </form>
+
+        <p class="login-hint" id="login-hint">Only Telegram IDs listed in the server's <span class="mono">ADMINS</span> environment variable can sign in. Codes expire after 5 minutes and can be used once.</p>
+      </section>
     </div>
   </div>
 
@@ -92,6 +116,8 @@
           <div class="topbar-actions">
             <div class="segmented" role="group" aria-label="Language" data-no-i18n><button type="button" data-lang="fa" aria-pressed="false">فارسی</button><button type="button" data-lang="en" aria-pressed="false">English</button></div>
             <button type="button" class="icon-btn" data-theme-toggle></button>
+            <span class="refresh-status" id="refresh-status" role="status" aria-live="polite"></span>
+            <button class="btn ghost" id="btn-auto" type="button" aria-pressed="false" title="Auto-refresh every 60 seconds"><svg><use href="#i-clock"/></svg><span class="label">Auto</span></button>
             <button class="btn ghost" id="btn-refresh" title="Refresh"><svg><use href="#i-refresh"/></svg><span class="label">Refresh</span></button>
             <div class="admin-chip"><span class="dot"></span><span class="mono" id="admin-id"></span></div>
             <button class="btn ghost" id="btn-logout" title="Sign out"><svg><use href="#i-logout"/></svg></button>

@@ -2,6 +2,7 @@ import connectDB from "./config/db.js";
 import TelegramBot from "node-telegram-bot-api";
 import trxScanner from "./services/trxWalletScanner.js";
 import { setBotInstance } from "./config/botInstance.js";
+import { setBotIdentity } from "./config/botIdentity.js";
 import app, { PORT, setRuntimeReadiness } from "./server.js";
 import { startHooshpayRecoveryCron, stopHooshpayRecoveryCron } from "./services/hooshpay/hooshpayRecoveryCron.js";
 import { startNowPaymentsRecoveryCron, stopNowPaymentsRecoveryCron } from "./services/nowpayments/recovery.js";
@@ -169,13 +170,14 @@ export default async function startBot() {
   // Register the instance before an incoming signed callback can be processed.
   setBotInstance(bot);
   try {
-    await Promise.race([
+    const me = await Promise.race([
       bot.getMe(),
       new Promise((_, reject) => {
         const timer = setTimeout(() => reject(new Error("Telegram API startup check timed out")), 10_000);
         timer.unref?.();
       }),
     ]);
+    setBotIdentity(me);
     setRuntimeReadiness({ telegram: true });
   } catch (error) {
     await bot.stopPolling().catch(() => {});
