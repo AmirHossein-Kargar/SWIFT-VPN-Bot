@@ -5,7 +5,7 @@ import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis } f
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { formatToman, formatDate } from "@/lib/utils";
 
-const PRIMARY = "hsl(217 91% 60%)";
+const PRIMARY = "hsl(0 0% 9%)";
 
 export function RevenueChart({ data }: { data: { date: string; value: number }[] }) {
   return (
@@ -23,18 +23,19 @@ export function RevenueChart({ data }: { data: { date: string; value: number }[]
                 <stop offset="100%" stopColor={PRIMARY} stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid vertical={false} stroke="hsl(0 0% 16%)" />
+            <CartesianGrid vertical={false} stroke="hsl(0 0% 89%)" />
             <XAxis
               dataKey="date"
               tickFormatter={(value) => formatDate(value)}
-              tick={{ fill: "hsl(0 0% 63%)", fontSize: 11 }}
-              axisLine={{ stroke: "hsl(0 0% 16%)" }}
+              tick={{ fill: "hsl(0 0% 45%)", fontSize: 11 }}
+              axisLine={{ stroke: "hsl(0 0% 89%)" }}
               tickLine={false}
               minTickGap={32}
             />
             <Tooltip
-              contentStyle={{ background: "hsl(0 0% 9%)", border: "1px solid hsl(0 0% 16%)", borderRadius: 8, fontSize: 12 }}
-              labelStyle={{ color: "hsl(0 0% 63%)" }}
+              contentStyle={{ background: "hsl(0 0% 100%)", border: "1px solid hsl(0 0% 89%)", borderRadius: 8, fontSize: 12 }}
+              labelStyle={{ color: "hsl(0 0% 45%)" }}
+              itemStyle={{ color: "hsl(0 0% 9%)" }}
               formatter={(value: number) => [formatToman(value), "Revenue"]}
               labelFormatter={(value) => formatDate(value)}
             />
