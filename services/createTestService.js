@@ -13,11 +13,11 @@ function log(level, message, meta = {}) {
   );
 }
 
-async function notifyTestServiceOnce(user, bot) {
+async function notifyTestServiceOnce(user, bot, userModel = User) {
   if (!user?.testServiceNotificationPending || !bot?.sendPhoto) return false;
   const now = new Date();
   const stale = new Date(now.getTime() - NOTIFICATION_CLAIM_MS);
-  const claimed = await User.findOneAndUpdate(
+  const claimed = await userModel.findOneAndUpdate(
     {
       telegramId: String(user.telegramId),
       testServiceAttemptId: user.testServiceAttemptId,
@@ -51,7 +51,7 @@ async function notifyTestServiceOnce(user, bot) {
       disable_web_page_preview: true,
       reply_markup: guideButtons.reply_markup,
     });
-    await User.findOneAndUpdate(
+    await userModel.findOneAndUpdate(
       {
         telegramId: String(claimed.telegramId),
         testServiceAttemptId: claimed.testServiceAttemptId,
@@ -94,11 +94,15 @@ async function alertAdmin(user, bot, reason) {
   }
 }
 
-const createTestService = async (bot, msg) => {
+/**
+ * `deps` is an injection seam for the isolated mock-test harness (in-memory
+ * user model and a fake panel adapter); Telegram callers pass nothing.
+ */
+const createTestService = async (bot, msg, { userModel = User, createApi = createTestServiceApi } = {}) => {
   const chatId = msg.chat.id;
   const userId = String(msg.from.id);
   try {
-    await User.updateOne({ telegramId: userId }, { $setOnInsert: { telegramId: userId } }, { upsert: true });
+    await userModel.updateOne({ telegramId: userId }, { $setOnInsert: { telegramId: userId } }, { upsert: true });
   } catch (error) {
     log("error", "Could not load test-service account", { errorType: error?.name || "DatabaseError" });
     await bot.sendMessage(chatId, "❌ خطا در ارتباط با پایگاه داده. لطفاً بعداً تلاش کنید.");
@@ -108,7 +112,7 @@ const createTestService = async (bot, msg) => {
   const attemptId = randomUUID();
   let user;
   try {
-    user = await User.findOneAndUpdate(
+    user = await userModel.findOneAndUpdate(
       {
         telegramId: userId,
         hasReceivedTest: { $ne: true },
@@ -138,7 +142,7 @@ const createTestService = async (bot, msg) => {
   }
 
   if (!user) {
-    const existing = await User.findOne({ telegramId: userId }).select("hasReceivedTest testServiceStatus").lean();
+    const existing = await userModel.findOne({ telegramId: userId }).select("hasReceivedTest testServiceStatus").lean();
     if (existing?.hasReceivedTest || existing?.testServiceStatus === "completed") {
       await bot.sendMessage(chatId, "⚠️ شما قبلاً این سرویس را دریافت کرده‌اید.");
     } else if (["provisioning", "manual_review"].includes(existing?.testServiceStatus)) {
@@ -153,14 +157,14 @@ const createTestService = async (bot, msg) => {
   let panelResponseReceived = false;
   try {
     loadingMsg = await bot.sendMessage(chatId, "⏳ در حال ساخت سرویس ...");
-    const data = await createTestServiceApi();
+    const data = await createApi();
     panelResponseReceived = true;
     const result = data.result;
     const hash = typeof result.hash === "string" && /^[A-Za-z0-9_-]{1,256}$/.test(result.hash) ? result.hash : null;
     const serviceLink = typeof result.sub_link === "string" && result.sub_link.length <= 4096 ? result.sub_link : null;
     const singleLink = Array.isArray(result.tak_links) && typeof result.tak_links[0] === "string" && result.tak_links[0].length <= 4096 ? result.tak_links[0] : "";
 
-    const updated = await User.findOneAndUpdate(
+    const updated = await userModel.findOneAndUpdate(
       { telegramId: userId, testServiceAttemptId: attemptId, testServiceStatus: "provisioning" },
       {
         $set: {
@@ -181,16 +185,16 @@ const createTestService = async (bot, msg) => {
     if (!updated) throw new Error("Test-service result could not be committed to the owner account");
 
     if (loadingMsg?.message_id) bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
-    const delivered = await notifyTestServiceOnce(updated, bot);
+    const delivered = await notifyTestServiceOnce(updated, bot, userModel);
     if (!delivered) {
       await bot.sendMessage(chatId, "✅ سرویس ساخته و به حساب شما اضافه شد، اما ارسال لینک با تأخیر روبه‌رو شد. کمی بعد دوباره بررسی کنید.").catch(() => {});
     }
   } catch (error) {
     if (loadingMsg?.message_id) bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
-    const current = await User.findOne({ telegramId: userId, testServiceAttemptId: attemptId }).lean().catch(() => null);
+    const current = await userModel.findOne({ telegramId: userId, testServiceAttemptId: attemptId }).lean().catch(() => null);
 
     if (error?.ambiguous || (panelResponseReceived && current?.testServiceStatus !== "completed")) {
-      const uncertain = await User.findOneAndUpdate(
+      const uncertain = await userModel.findOneAndUpdate(
         { telegramId: userId, testServiceAttemptId: attemptId, testServiceStatus: "provisioning" },
         { $set: { testServiceStatus: "manual_review" } },
         { new: true }
@@ -203,12 +207,12 @@ const createTestService = async (bot, msg) => {
       if (uncertain) await alertAdmin(uncertain, bot, error.code || "PANEL_RESULT_UNKNOWN");
       await bot.sendMessage(chatId, "⏳ وضعیت ساخت سرویس تست از پنل مشخص نیست. برای جلوگیری از ساخت تکراری، درخواست شما تا بررسی پشتیبانی متوقف شده است.");
     } else if (current?.testServiceStatus === "completed") {
-      const delivered = await notifyTestServiceOnce(current, bot).catch(() => false);
+      const delivered = await notifyTestServiceOnce(current, bot, userModel).catch(() => false);
       if (!delivered) {
         await bot.sendMessage(chatId, "✅ سرویس تست ساخته و به حساب شما اضافه شد؛ ارسال لینک در حال بازیابی است.").catch(() => {});
       }
     } else if (current?.testServiceStatus === "provisioning") {
-      await User.updateOne(
+      await userModel.updateOne(
         { telegramId: userId, testServiceAttemptId: attemptId, testServiceStatus: "provisioning" },
         { $set: { testServiceStatus: "failed", hasReceivedTest: false } }
       ).catch(() => {});

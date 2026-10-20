@@ -5,13 +5,26 @@ import express from "express";
 
 const webRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "public");
 
-const OPTIONS = {
+// Matches .html/.htm, tolerating trailing dots/spaces that Windows file
+// systems ignore when resolving a path.
+const HTML_FILE = /\.html?[.\s]*$/i;
+
+export const STATIC_OPTIONS = {
   dotfiles: "ignore",
   extensions: [],
   fallthrough: true,
   index: false,
   maxAge: "1h",
   redirect: false,
+  // Safety net: the HTML shells are routed to their own handlers below, but
+  // any HTML that still reaches the static middleware must never be framable
+  // or publicly cached. Scripts, styles and images keep the 1h public cache.
+  setHeaders(res, filePath) {
+    if (!HTML_FILE.test(filePath)) return;
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Robots-Tag", "noindex, nofollow");
+    securityHeaders(res, ADMIN_CSP);
+  },
 };
 
 // Scripts only from this origin (no inline handlers). Inline styles are allowed
@@ -30,11 +43,32 @@ export const ADMIN_CSP = [
   "frame-ancestors 'none'",
 ].join("; ");
 
+// Public storefront: same strict script policy; it also only talks to its own
+// origin (/api/store) and links out to Telegram.
+export const STORE_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data:",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+
+/** Admin application entry points. Everything else is the storefront or 404. */
+const ADMIN_PAGE = /^\/(?:panel|admin)(?:\/.*)?$/;
+
+/** HTML files in web/public and the route whose headers they must carry. */
+const HTML_SHELLS = Object.freeze({ "index.html": "admin", "store.html": "store", "404.html": "notFound" });
+
 let staticMiddleware = null;
 
 function ensureStatic() {
   if (staticMiddleware) return staticMiddleware;
-  staticMiddleware = express.static(webRoot, OPTIONS);
+  staticMiddleware = express.static(webRoot, STATIC_OPTIONS);
   return staticMiddleware;
 }
 
@@ -50,6 +84,7 @@ function safeRelative(urlPath) {
 export function serveAdminSpa(req, res, next) {
   // API and health endpoints are never handled by the SPA.
   if (req.path.startsWith("/api/") || ["/health", "/ready", "/livez"].includes(req.path)) return next();
+  if (req.path === "/") return serveStorefront(req, res, next);
 
   const relative = safeRelative(req.path);
   if (!relative) return next();
@@ -59,22 +94,75 @@ export function serveAdminSpa(req, res, next) {
 
   fs.stat(candidate, (statError, stats) => {
     if (!statError && stats.isFile()) {
+      // HTML shells requested by file name get exactly the headers of their
+      // canonical route (/index.html is the admin sign-in page).
+      const shell = HTML_SHELLS[relative.replace(/\\/g, "/").replace(/[.\s]+$/, "").toLowerCase()];
+      if (shell === "admin") return sendAdminShell(res, next);
+      if (shell === "store") return serveStorefront(req, res, next);
+      if (shell === "notFound") return notFoundHandler(req, res);
       return ensureStatic()(req, res, next);
     }
-    // History-API fallback: any non-file path serves the app shell.
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("Referrer-Policy", "same-origin");
-    res.setHeader("X-Frame-Options", "DENY");
-    res.setHeader("Content-Security-Policy", ADMIN_CSP);
-    res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-    res.sendFile(path.join(webRoot, "index.html"), (sendError) => {
-      if (sendError) next();
-    });
+    // The admin app lives at /panel (and the legacy /admin); it routes by hash.
+    if (!ADMIN_PAGE.test(req.path)) return next();
+    sendAdminShell(res, next);
   });
+}
+
+function securityHeaders(res, csp) {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Content-Security-Policy", csp);
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+}
+
+function sendAdminShell(res, next) {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Referrer-Policy", "same-origin");
+  res.setHeader("X-Robots-Tag", "noindex, nofollow");
+  securityHeaders(res, ADMIN_CSP);
+  res.sendFile(path.join(webRoot, "index.html"), (sendError) => {
+    if (sendError) next();
+  });
+}
+
+/** Canonical origin for SEO, taken only from a valid public HTTPS WEBHOOK_BASE_URL. */
+export function storefrontCanonical(env = process.env) {
+  try {
+    const parsed = new URL(String(env.WEBHOOK_BASE_URL || "").trim());
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash) return null;
+    return `${parsed.origin}/`;
+  } catch {
+    return null;
+  }
+}
+
+let storeTemplate = null;
+function storeHtml() {
+  storeTemplate ??= fs.readFileSync(path.join(webRoot, "store.html"), "utf8");
+  const canonical = storefrontCanonical();
+  const escaped = canonical ? canonical.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) : null;
+  return storeTemplate.replace("<!--canonical-->", escaped
+    ? `<link rel="canonical" href="${escaped}" />
+  <meta property="og:url" content="${escaped}" />`
+    : "");
+}
+
+/** GET / — the public VPN storefront. */
+export function serveStorefront(req, res, next) {
+  if (req.method !== "GET" && req.method !== "HEAD") return next();
+  let html;
+  try { html = storeHtml(); } catch { return next(); }
+  res.setHeader("Cache-Control", "public, max-age=300");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  securityHeaders(res, STORE_CSP);
+  res.type("html").send(html);
 }
 
 export function notFoundHandler(req, res) {
   if (req.path.startsWith("/api/")) return res.status(404).json({ ok: false, error: "not_found" });
-  res.status(404).send("Not found");
+  securityHeaders(res, STORE_CSP);
+  res.setHeader("Cache-Control", "no-store");
+  res.status(404).sendFile(path.join(webRoot, "404.html"), (sendError) => {
+    if (sendError && !res.headersSent) res.type("text/plain").send("Not found");
+  });
 }

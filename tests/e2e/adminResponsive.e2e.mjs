@@ -15,6 +15,7 @@ import { chromium } from "playwright-core";
 
 process.env.ADMINS = "424242";
 process.env.GROUP_ID = "";
+process.env.BOT_USERNAME = "Swift_servicebot";
 const { makeFakeRedis } = await import("../helpers/fakeRedis.js");
 const auth = await import("../../services/admin/auth.js");
 auth.setAdminSessionRedisForTests(makeFakeRedis());
@@ -57,6 +58,18 @@ const fixtures = {
   "/users": { ok: true, data: { items: users, page: 1, pages: 3, pageSize: 15, total: 40 } },
   "/payments": { ok: true, data: { items: users.slice(0, 4).map((u, i) => ({ key: `hooshpay:${i}`, id: `ORDER-${i}-0123456789abcdef0123456789abcdef`, provider: "hooshpay", status: i % 2 ? "pending" : "fulfilled", amount: 250_000, telegramId: u.telegramId, createdAt: u.createdAt, trackingCode: "TRK" + i })), page: 1, pages: 1, pageSize: 15, total: 4, counts: {} } },
   "/vpns": { ok: true, data: { items: [], page: 1, pages: 1, total: 0, summary: {} } },
+  "/mock-tests": { ok: true, data: { enabled: true, running: false, source: "database", scenarios: [
+    { id: "purchase", title: "VPN subscription purchase", titleFa: "خرید اشتراک VPN" },
+    { id: "crypto", title: "Cryptocurrency wallet top-up", titleFa: "شارژ کیف پول با ارز دیجیتال" },
+    { id: "card", title: "Card-to-card top-up", titleFa: "شارژ کارت به کارت" },
+    { id: "trial", title: "Test subscription", titleFa: "سرویس تست" }],
+    items: [{ runId: "MT-20261020080922-7d43af0d", environment: "mock-isolated", actorTelegramId: "424242", trigger: "telegram", startedAt: now.toISOString(), completedAt: now.toISOString(),
+      summary: { PASS: 3, FAIL: 1, BLOCKED: 0, "NOT RUN": 0, overall: "FAIL" },
+      scenarios: [
+        { id: "purchase", title: "VPN subscription purchase", titleFa: "خرید اشتراک VPN", status: "PASS", counts: { total: 57, passed: 57, failed: 0, skipped: 0 } },
+        { id: "crypto", title: "Cryptocurrency wallet top-up", titleFa: "شارژ کیف پول با ارز دیجیتال", status: "FAIL", counts: { total: 49, passed: 48, failed: 1, skipped: 0 }, explanation: "1 assertion(s) failed: balance credited exactly once" },
+        { id: "card", title: "Card-to-card top-up", titleFa: "شارژ کارت به کارت", status: "PASS", counts: { total: 45, passed: 45, failed: 0, skipped: 0 } },
+        { id: "trial", title: "Test subscription", titleFa: "سرویس تست", status: "PASS", counts: { total: 29, passed: 28, failed: 0, skipped: 1 } }] }] } },
 };
 function userDetail(id) {
   return { ok: true, data: { user: { ...users[0], telegramId: id }, totalSpent: 540000, orderCount: 6, activeVpns: 2, expiredVpns: 1, untrackedServiceCount: 0, blockedAt: null, testService: { received: true, status: "completed", inFlight: false, eligible: false }, referral: { referralCount: 2, referredByTelegramId: null, trackingAvailable: true }, payments: [{ provider: "nowpayments", id: "NP-11111111-1111-4111-8111-111111111111", amount: 100000, status: "fulfilled", createdAt: now.toISOString() }], services: [{ username: "svc_user_abcdef0123456789abcdef", createdAt: now.toISOString(), expiresAt: new Date(now.getTime() + 864e5).toISOString() }] } };
@@ -95,7 +108,7 @@ async function newPage(viewport, { lang, theme, mobile }) {
 const ALL_VIEWPORTS = [[320, 640], [360, 740], [375, 812], [390, 844], [430, 932], [768, 1024], [1024, 768], [1280, 800], [1440, 900]];
 const WIDTHS = (process.env.E2E_WIDTHS || "").split(",").filter(Boolean).map(Number);
 const VIEWPORTS = WIDTHS.length ? ALL_VIEWPORTS.filter(([w]) => WIDTHS.includes(w)) : ALL_VIEWPORTS;
-const PAGES = ["dashboard", "analytics", "users", "payments", "vpns", "recovery"];
+const PAGES = ["dashboard", "analytics", "users", "payments", "vpns", "recovery", "mock"];
 
 async function overflow(page) {
   return page.evaluate(() => {
@@ -285,6 +298,92 @@ for (const [width, height] of VIEWPORTS) {
   await reduced.emulateMedia({ reducedMotion: "reduce" });
   await reduced.goto(`${base}/admin#/dashboard`);
   check(await reduced.evaluate(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches), "reduced-motion media query honoured");
+  await context.close();
+}
+
+
+// Storefront (/): real catalog API, responsive cards, tabs, review dialog.
+for (const [width, height] of VIEWPORTS) {
+  for (const theme of ["dark", "light"]) {
+    const { page, context } = await newPage({ width, height }, { lang: "fa", theme, mobile: width < 900 });
+    const tag = `store ${width}px/${theme}`;
+    await page.goto(`${base}/`);
+    await page.waitForSelector(".plan-card:not(.skeleton)");
+    check(await page.evaluate(() => document.documentElement.dir) === "rtl", `${tag}: storefront is RTL`);
+    check(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), `${tag}: no horizontal overflow`);
+    const inside = await page.$$eval(".plan-card", (els) => els.length > 0 && els.every((el) => { const r = el.getBoundingClientRect(); return r.left >= -1 && r.right <= window.innerWidth + 1; }));
+    check(inside, `${tag}: cards inside viewport`);
+    const ctaHeights = await page.$$eval(".plan-card .btn", (els) => els.map((el) => el.getBoundingClientRect().height));
+    check(ctaHeights.every((h) => h >= 43), `${tag}: plan buttons are touch-sized`);
+    check(/[۰-۹]/.test(await page.locator(".plan-price").first().innerText()), `${tag}: prices use Persian digits`);
+    if (theme === "dark") {
+      await page.locator('.tab[aria-selected="true"]').focus();
+      await page.keyboard.press("ArrowLeft");
+      check(await page.evaluate(() => document.activeElement?.getAttribute("aria-selected") === "true" && document.activeElement?.dataset.days !== "30"), `${tag}: arrow keys move between duration tabs`);
+      await page.locator("[data-plan]").first().click();
+      await page.waitForSelector('.sheet a[href^="https://t.me/Swift_servicebot?start=plan_"]');
+      await page.waitForTimeout(350);
+      const sheet = await page.locator(".sheet").boundingBox();
+      check(sheet && sheet.x >= -1 && sheet.x + sheet.width <= width + 1 && sheet.y + sheet.height <= height + 1, `${tag}: review dialog fits viewport`);
+      await page.keyboard.press("Escape");
+      check(await page.locator("#sheet-backdrop").isHidden(), `${tag}: Escape closes the dialog`);
+      check(await page.evaluate(() => document.activeElement?.hasAttribute("data-plan")), `${tag}: focus returns to the plan button`);
+    }
+    if (width === 390) await page.screenshot({ path: join(shots, `store-${width}-${theme}.png`), fullPage: true });
+    await context.close();
+  }
+}
+
+// Sign-in page: two-step flow, generic errors, no secrets in URL/storage.
+{
+  const { page, context } = await newPage({ width: 390, height: 844 }, { lang: "en", theme: "dark", mobile: true });
+  await page.unroute("**/api/admin/**");
+  await page.route("**/api/admin/**", (route) => {
+    const path = new URL(route.request().url()).pathname.replace("/api/admin", "");
+    const json = (status, body) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    if (path === "/auth/session") return json(200, { ok: true, authenticated: false });
+    if (path === "/auth/request-code") return json(200, { ok: true, expiresInSeconds: 300 });
+    if (path === "/auth/verify") return json(401, { ok: false, error: "invalid_login_code" });
+    return json(401, { ok: false, error: "unauthorized" });
+  });
+  await page.goto(`${base}/panel`);
+  await page.waitForSelector("#login.show #login-tid");
+  await page.locator("#login-request").click();
+  check(await page.locator("#login-alert").isVisible(), "login: empty ID shows an inline error");
+  check(await page.locator("#login-tid").getAttribute("aria-invalid") === "true", "login: invalid ID is marked aria-invalid");
+  await page.fill("#login-tid", "424242");
+  await page.keyboard.press("Enter");
+  await page.waitForSelector("#login-form-code:not([hidden])");
+  await page.waitForTimeout(50);
+  check(await page.evaluate(() => document.activeElement?.id === "login-code"), "login: focus moves to the code field");
+  check(await page.locator("#login-resend").isDisabled(), "login: resend waits for the cooldown");
+  await page.fill("#login-code", "A".repeat(32));
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => !document.querySelector("#login-alert").hidden);
+  check((await page.locator("#login-alert").innerText()).includes("invalid, expired, or already used"), "login: failed verification shows a generic message");
+  check(await page.locator("#login-form-code").isVisible(), "login: a failed code keeps the user on step 2");
+  check(!page.url().includes("AAAA") && !page.url().includes("424242"), "login: no ID or code in the URL");
+  check(await page.evaluate(() => { const all = []; for (const store of [localStorage, sessionStorage]) for (let i = 0; i < store.length; i += 1) all.push(store.getItem(store.key(i))); return !all.join("|").includes("AAAAAAAA"); }), "login: code is not written to browser storage");
+  await page.locator("#login-change").click();
+  check(await page.locator("#login-form-id").isVisible() && (await page.inputValue("#login-code")) === "", "login: 'use another ID' resets the code");
+  check(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), "login: no horizontal overflow at 390px");
+  await page.screenshot({ path: join(shots, "login-390.png") });
+  await context.close();
+}
+
+// Mock-test report drawer through the /panel entry point.
+{
+  const { page, context } = await newPage({ width: 1280, height: 800 }, { lang: "en", theme: "dark", mobile: false });
+  const run = fixtures["/mock-tests"].data.items[0];
+  await page.route("**/api/admin/mock-tests/MT-*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, data: { ...run, scenarios: [{ ...run.scenarios[1], startedAt: now.toISOString(), completedAt: now.toISOString(), assertions: [{ name: "balance credited exactly once", status: "fail", detail: "expected 250000, got 500000" }], notes: [], isolationViolations: [] }] } }) }));
+  await page.goto(`${base}/panel#/mock`);
+  await page.waitForSelector(".mock-scenario");
+  check((await page.locator(".mock-scenario").count()) === 4, "mock: four scenarios listed");
+  check((await page.locator("#mock-history .mock-status.FAIL").count()) === 1, "mock: failed run is labelled FAIL");
+  await page.locator("[data-mock-report]").first().click();
+  check(await page.waitForSelector("#drawer.open .assert-list li.fail").then(() => true, () => false), "mock: report drawer lists failed assertions");
+  check((await page.locator("#refresh-status").innerText()).trim() !== "", "freshness: last-updated indicator is shown");
+  await page.screenshot({ path: join(shots, "mock-1280.png") });
   await context.close();
 }
 

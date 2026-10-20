@@ -15,6 +15,7 @@ import {
 } from "./services/hooshpay/paymentValidation.js";
 import { recordWebhookOutcome } from "./services/admin/monitoring.js";
 import adminRouter from "./web/adminRouter.js";
+import storeRouter from "./web/storeRouter.js";
 import { serveAdminSpa, notFoundHandler } from "./web/spa.js";
 import { handleNowPaymentsIpn } from "./services/nowpayments/ipnHandler.js";
 import { findTombstone, recordLateEvent } from "./services/payments/invoiceCleanup.js";
@@ -358,6 +359,7 @@ app.get("/ready", (_req, res) => {
 // Admin Panel API + web dashboard (mounted after the webhook route so the
 // payment webhook path is untouched).
 app.use("/api/admin", adminRouter);
+app.use("/api/store", storeRouter);
 app.use(serveAdminSpa);
 app.use(notFoundHandler);
 

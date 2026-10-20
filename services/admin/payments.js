@@ -442,14 +442,19 @@ export async function resolvePaymentRecovery({ actorId, operationId, key, reason
   return result;
 }
 
-export async function confirmBankInvoice({ actorId, operationId, paymentId, ipAddress } = {}) {
+/**
+ * bankModel/userModel/auditModel/bot are injection seams used only by the
+ * isolated mock-test harness; production callers rely on the defaults.
+ */
+export async function confirmBankInvoice({ actorId, operationId, paymentId, ipAddress, bankModel = bankInvoice, userModel, auditModel, bot = botInstance.bot } = {}) {
   assertAdminUser(actorId);
   const id = String(paymentId ?? "");
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new AdminServiceError("شناسه پرداخت بانکی نامعتبر است.", { status: 400, code: "invalid_payment_id" });
   const { result } = await runAuditedAction({
     actorTelegramId: actorId, operationId, action: "BANK_PAYMENT_CONFIRMED", targetType: "payment", targetId: id, ipAddress,
+    ...(auditModel ? { auditModel } : {}),
     execute: async () => {
-      const out = await confirmBankPayment({ paymentId: id, adminId: actorId, bot: botInstance.bot });
+      const out = await confirmBankPayment({ paymentId: id, adminId: actorId, bot, invoiceModel: bankModel, ...(userModel ? { userModel } : {}) });
       if (!["credited", "recovered", "already_confirmed"].includes(out.status)) throw new AdminServiceError(`Bank payment was not confirmed (${out.status}).`, { status: 409, code: `bank_${out.status}` });
       return { ok: true, status: out.status, auditSummary: { status: out.status } };
     },
@@ -457,7 +462,7 @@ export async function confirmBankInvoice({ actorId, operationId, paymentId, ipAd
   return result;
 }
 
-export async function rejectBankInvoice({ actorId, operationId, paymentId, reason, ipAddress } = {}) {
+export async function rejectBankInvoice({ actorId, operationId, paymentId, reason, ipAddress, bankModel = bankInvoice, auditModel, bot = botInstance.bot } = {}) {
   assertAdminUser(actorId);
   const id = String(paymentId ?? "");
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new AdminServiceError("شناسه پرداخت بانکی نامعتبر است.", { status: 400, code: "invalid_payment_id" });
@@ -465,14 +470,15 @@ export async function rejectBankInvoice({ actorId, operationId, paymentId, reaso
   const { result } = await runAuditedAction({
     actorTelegramId: actorId, operationId, action: "BANK_PAYMENT_REJECTED", targetType: "payment", targetId: id, targetUserId: null, ipAddress,
     metadata: { reason: safeReason },
+    ...(auditModel ? { auditModel } : {}),
     execute: async () => {
-      const payment = await bankInvoice.findOneAndUpdate(
+      const payment = await bankModel.findOneAndUpdate(
         { paymentId: id, paymentType: "bank", status: "waiting_for_approval", balanceCredited: false },
         { $set: { status: "rejected", rejectedAt: new Date(), rejectedBy: String(actorId) } },
         { new: true }
       );
       if (!payment) throw new AdminServiceError("این پرداخت بانکی دیگر در انتظار تأیید نیست.", { status: 409, code: "bank_payment_not_pending" });
-      try { await botInstance.bot?.sendMessage(String(payment.userId), "❌ رسید پرداخت شما بررسی شد. در صورت نیاز با پشتیبانی تماس بگیرید."); } catch { /* Notification failure does not undo a rejected receipt. */ }
+      try { await bot?.sendMessage(String(payment.userId), "❌ رسید پرداخت شما بررسی شد. در صورت نیاز با پشتیبانی تماس بگیرید."); } catch { /* Notification failure does not undo a rejected receipt. */ }
       return { ok: true, status: "rejected", auditSummary: { status: "rejected" } };
     },
   });

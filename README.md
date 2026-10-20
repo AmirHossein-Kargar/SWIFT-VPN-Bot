@@ -20,6 +20,7 @@ panel, and an admin panel that runs entirely inside a Telegram group.
 10. [Production checklist](#10-production-checklist)
 11. [Operations & recovery](#11-operations--recovery)
 12. [Admin Panel ecosystem (web + Telegram)](#12-admin-panel-ecosystem-web--telegram)
+13. [Storefront, /panel and mock tests](#13-storefront-panel-and-mock-tests)
 
 ---
 
@@ -190,6 +191,8 @@ authoritative list — every variable below is read somewhere in the codebase.
 | `OWNER_TELEGRAM_ID` | first `ADMINS` entry | Explicit owner for the multi-admin registry. Owners always keep full access and cannot be removed from the panel. |
 | `ADMIN_CACHE_TTL_SECONDS` | `60` | How long the admin allowlist cache (env + database admins) is kept before refresh. |
 | `WIZARD_STATUS_TTL_SECONDS` | `90` | Live WizardXray status cache TTL for «سرویس‌های من» and admin views; `0` forces a fresh panel lookup. |
+| `BOT_USERNAME` | from Telegram `getMe()` | Bot username (no `@`) for storefront checkout deep links. |
+| `MOCK_TESTS_ENABLED` | `false` | Must be exactly `true` to allow admins to run the isolated mock-test harness (section 13.3). |
 | `CARD_NUMBER` | *(empty)* | **Legacy.** Direct card-to-card was removed from the purchase flow; the value is only validated if still set. No longer required. |
 
 > **Legacy name removed:** `NOW_PAYMENTS_API_KEY` (with an extra underscore) and
@@ -529,15 +532,13 @@ npm test
 | `tests/integration/adminServices.test.js` | Real admin services: user search, balance idempotency, products, payments, recovery, VPN registry, broadcast safety | yes |
 | `tests/integration/adminWeb.test.js` | Real HTTP: login flow, CSRF, session enforcement, SPA, admin API | no (data tests: yes) |
 | `tests/integration/adminTelegramPanel.test.js` | Telegram panel authorization, navigation, safe failures | no (data screens: yes) |
+| `tests/unit/mockTests.test.js` | Mock-test harness: in-memory store, isolation guards on the real models/network, server gate, run lock, all four scenarios against the real services | no |
+| `tests/integration/storefrontAndPanel.test.js` | Real HTTP: `/` storefront, `/panel`, 404, public catalog API, mock-test API gate, session rotation and cookie scope, deep links | no |
+| `tests/integration/adminTelegramMock.test.js` | Telegram `adm:mock*` authorization and gating | no |
 
-Expected result on a machine with MongoDB available: **212 tests, all passing,
-0 skipped** (without MongoDB the DB-backed suites skip by design).
-
-```text
-# tests 212
-# pass 212
-# fail 0
-```
+Without MongoDB the DB-backed suites **skip** by design; a green run with skips
+means those money-path assertions did not execute. The browser suite
+(`npm run test:e2e`, needs Chrome) is not part of `npm test`.
 
 ---
 
@@ -653,7 +654,7 @@ Telegram admin panel (handlers/admin/panel.js)     Web dashboard (web/public SPA
 
 ### 12.1 Web dashboard
 
-Open `<WEBHOOK_BASE_URL>/admin`. Sign-in is Telegram-based:
+Open `<WEBHOOK_BASE_URL>/panel` (`/admin` remains an alias). Sign-in is Telegram-based:
 
 1. Enter the Telegram ID of an account listed in `ADMINS`.
 2. The bot DMs a one-time code (valid 5 minutes, single use, SHA-256 stored).
@@ -762,3 +763,65 @@ and no destructive migration is run.
   to 25 batches × 200 per run, guarded by the Redis lease `lock:invoice-cleanup` so concurrent instances cannot
   overlap; deletes are conditional so a row credited meanwhile survives. Dry run:
   `runInvoiceCleanupBatches({ dryRun: true })`.
+
+---
+
+## 13. Storefront, /panel and mock tests
+
+### 13.1 Routes
+
+| Path | Serves |
+|---|---|
+| `/` | Public storefront (Persian/RTL, light/dark). Strict CSP, canonical URL from `WEBHOOK_BASE_URL`. |
+| `/panel`, `/panel/*` (alias `/admin`) | Admin control center (hash-routed SPA, `noindex`, `no-store`). |
+| `/api/store/catalog`, `/api/store/plans/:id` | Read-only public catalog (GET only, rate-limited). |
+| `/api/admin/mock-tests`, `/api/admin/mock-tests/:runId`, `POST /api/admin/mock-tests/run` | Mock-test reports and runs (admin session + CSRF + same-origin). |
+| any other non-API path | 404 page (previously every unknown path served the admin shell). |
+
+Webhook (`/api/hooshpay/webhook`, `/api/nowpayments/ipn`), health and admin API routes are unchanged.
+
+### 13.2 Storefront and checkout
+
+- Plans, prices (stored Toman, never divided by 10) and durations come from `customerPlans`
+  in `services/plans.js` — the same catalog the Telegram shop charges from. The API strips
+  everything but `id, name, days, durationLabel, gig, price`.
+- Selecting a plan re-validates it on the server (`/api/store/plans/:id`) and hands off to
+  Telegram with `https://t.me/<bot>?start=plan_<id>`. The bot shows its standard order
+  confirmation; `confirm_order_` re-reads price, traffic and duration at charge time.
+- **There is no web checkout.** Wallet, payment providers and the order identity are bound to
+  the customer's Telegram account and there is no customer web login, so payment, order status
+  and subscription delivery stay in Telegram.
+- Payment-method chips show only providers that are configured on the server.
+
+### 13.3 Mock tests (🧪 تست ماک)
+
+Entry points: the admin reply-keyboard button (private chat, allowlisted admins only), the
+`🧪 تست ماک` button in the Telegram admin panel (`adm:mock`), and **Mock Tests** in `/panel`.
+Every callback and API call is re-authorized on the server.
+
+| Scenario | Real code exercised |
+|---|---|
+| VPN purchase | catalog, `purchasePlan` reserve/provision/commit, duplicate + concurrent callbacks, insufficient balance, provider rejection → exactly-once refund, timeout/malformed → manual review without replay, failed DB write after provisioning |
+| Crypto top-up | `buildCatalogFromProviderData`/`validateCatalogSelection`, `createNowPaymentsTopUp` (in-flight lock, 5xx/4xx/timeout), IPN signature, `applyNowPaymentsUpdate` state machine, duplicate/concurrent IPNs, amount/underpayment mismatches |
+| Card-to-card | `createHooshInvoice`, webhook signature + `validateHooshPaidDetails`, `fulfillHooshOrder` two-phase credit, duplicates, crash recovery; bank receipt `confirmBankInvoice`/`rejectBankInvoice` with audit trail |
+| Test service | `createTestService` eligibility, duplicates/concurrency, ineligible users, ambiguous and failed panel results, `resetTestServiceEligibility` |
+
+Safety model:
+
+- **Gate:** runs require `MOCK_TESTS_ENABLED=true` in the server environment *and* an
+  allowlisted admin. Request bodies cannot enable mock mode.
+- **Isolation:** scenarios inject in-memory models and fake provider/Telegram adapters. While a
+  run is active, every static query/mutation on the real Mongoose models and every
+  `http`/`https`/`fetch` request throws and is recorded as an isolation violation (which fails the
+  scenario even if production code swallows the error). Customer traffic outside the run is
+  unaffected.
+- **Separation:** only the report is persisted, in its own `mocktestruns` collection (90-day TTL).
+  No balance, invoice, purchase, revenue or analytics query reads it. The admin audit log records
+  one `MOCK_TEST_RUN` entry (who ran what); scenario-internal audit rows stay in memory.
+- **Statuses:** `PASS` only when assertions executed and all passed; `FAIL` on a failed
+  assertion, an unexpected error or an isolation violation; `BLOCKED` when a precondition is
+  missing; `NOT RUN` when disabled or not selected. Errors are redacted.
+- One run at a time per process, with a 5-second cool-down.
+
+Not verifiable in mock mode: real provider behaviour, blockchain confirmation, WizardXray-side
+expiry of test services, and Telegram delivery.
