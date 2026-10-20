@@ -62,6 +62,7 @@ export async function createHooshInvoice({
   createInvoice = apiCreateInvoice,
   cancelInvoice = apiCancelInvoice,
   now = () => new Date(),
+  webhookBaseUrl = process.env.WEBHOOK_BASE_URL,
 } = {}) {
   if (!Number.isSafeInteger(Number(userId)) || Number(userId) <= 0) {
     throw new TypeError("userId must be a positive Telegram user ID");
@@ -70,7 +71,7 @@ export async function createHooshInvoice({
     throw new TypeError("amount must be a positive integer amount in Toman");
   }
 
-  const webhookBase = process.env.WEBHOOK_BASE_URL?.trim();
+  const webhookBase = webhookBaseUrl?.trim();
   if (!webhookBase) throw new Error("WEBHOOK_BASE_URL is not configured");
   let parsedBase;
   try { parsedBase = new URL(webhookBase); } catch { throw new Error("WEBHOOK_BASE_URL is invalid"); }

@@ -1,12 +1,13 @@
 import invoice from "../../models/invoice.js";
+import User from "../../models/User.js";
 import { creditWalletOnce } from "../walletCredit.js";
 import escapeHtml from "../../utils/escapeHtml.js";
 
-async function notifyUserOnce(payment, user, bot) {
+async function notifyUserOnce(payment, user, bot, invoiceModel = invoice) {
   if (!payment.notificationPending || !bot?.sendMessage) return false;
   const now = new Date();
   const staleClaim = new Date(now.getTime() - 5 * 60_000);
-  const claim = await invoice.findOneAndUpdate(
+  const claim = await invoiceModel.findOneAndUpdate(
     {
       _id: payment._id,
       status: "confirmed",
@@ -28,7 +29,7 @@ async function notifyUserOnce(payment, user, bot) {
       `💰 مبلغ ${Number(claim.amount).toLocaleString("en-US")} تومان به کیف پول شما اضافه شد.\n` +
       `💳 موجودی جدید: ${Number(user?.balance ?? 0).toLocaleString("en-US")} تومان`;
     await bot.sendMessage(String(claim.userId), message);
-    await invoice.findOneAndUpdate(
+    await invoiceModel.findOneAndUpdate(
       { _id: claim._id, notificationClaimedAt: now, notificationPending: true },
       { $set: { notificationPending: false, notifiedAt: new Date() }, $unset: { notificationClaimedAt: 1 } }
     );
@@ -43,13 +44,14 @@ async function notifyUserOnce(payment, user, bot) {
 /**
  * Atomically approve a manual card-transfer invoice and credit its owner once.
  * The user ID and amount are always read from MongoDB, never callback_data.
+ * invoiceModel/userModel are injection seams for the isolated mock-test harness.
  */
-export async function confirmBankPayment({ paymentId, adminId, bot }) {
+export async function confirmBankPayment({ paymentId, adminId, bot, invoiceModel = invoice, userModel = User }) {
   if (typeof paymentId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(paymentId)) {
     return { status: "invalid" };
   }
 
-  let payment = await invoice.findOneAndUpdate(
+  let payment = await invoiceModel.findOneAndUpdate(
     { paymentId, status: "waiting_for_approval", paymentType: "bank" },
     {
       $set: {
@@ -65,7 +67,7 @@ export async function confirmBankPayment({ paymentId, adminId, bot }) {
   const newlyClaimed = Boolean(payment);
 
   if (!payment) {
-    payment = await invoice.findOne({
+    payment = await invoiceModel.findOne({
       paymentId,
       status: "confirmed",
       paymentType: "bank",
@@ -73,7 +75,7 @@ export async function confirmBankPayment({ paymentId, adminId, bot }) {
       balanceCredited: false,
     });
     if (!payment) {
-      const existing = await invoice.findOne({ paymentId }).select("status creditLedgerVersion balanceCredited").lean();
+      const existing = await invoiceModel.findOne({ paymentId }).select("status creditLedgerVersion balanceCredited").lean();
       if (existing?.status === "confirmed" && existing.creditLedgerVersion !== 2 && !existing.balanceCredited) {
         return { status: "manual_review" };
       }
@@ -87,6 +89,7 @@ export async function confirmBankPayment({ paymentId, adminId, bot }) {
       telegramId: payment.userId,
       amount: Number(payment.amount),
       creditKey: `bank:${payment.paymentId}`,
+      userModel,
     });
   } catch (error) {
     console.error("Bank wallet credit failed:", error?.name || "DatabaseError");
@@ -95,7 +98,7 @@ export async function confirmBankPayment({ paymentId, adminId, bot }) {
 
   if (!credit.user) {
     if (newlyClaimed) {
-      await invoice.findOneAndUpdate(
+      await invoiceModel.findOneAndUpdate(
         { _id: payment._id, status: "confirmed", balanceCredited: false },
         {
           $set: { status: "waiting_for_approval", confirmedAt: null, confirmedBy: null, notificationPending: false },
@@ -106,7 +109,7 @@ export async function confirmBankPayment({ paymentId, adminId, bot }) {
     return { status: "user_not_found" };
   }
 
-  const finalized = await invoice.findOneAndUpdate(
+  const finalized = await invoiceModel.findOneAndUpdate(
     { _id: payment._id, status: "confirmed", creditLedgerVersion: 2, balanceCredited: false },
     { $set: { balanceCredited: true, balanceCreditedAt: new Date(), notificationPending: true } },
     { new: true }
@@ -114,11 +117,11 @@ export async function confirmBankPayment({ paymentId, adminId, bot }) {
   if (finalized) {
     payment = finalized;
   } else {
-    payment = await invoice.findById(payment._id);
+    payment = await invoiceModel.findById(payment._id);
     if (!payment?.balanceCredited) throw new Error("Bank wallet credit is durable but invoice completion is pending");
   }
 
-  const notified = await notifyUserOnce(payment, credit.user, bot);
+  const notified = await notifyUserOnce(payment, credit.user, bot, invoiceModel);
   return {
     status: credit.credited ? "credited" : "recovered",
     amount: Number(payment.amount),
