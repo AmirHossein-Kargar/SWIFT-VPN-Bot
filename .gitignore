@@ -13,6 +13,11 @@ coverage/
 npm-debug.log*
 logs/
 
+# ── Next.js admin panel (admin-panel/) ───────────────────────────────────────
+admin-panel/.next/
+admin-panel/next-env.d.ts
+admin-panel/node_modules/
+
 # ── Editor / tooling state ───────────────────────────────────────────────────
 .vscode/settings.json
 .mimocode/

@@ -17,6 +17,7 @@ import { recordWebhookOutcome } from "./services/admin/monitoring.js";
 import adminRouter from "./web/adminRouter.js";
 import storeRouter from "./web/storeRouter.js";
 import { serveAdminSpa, notFoundHandler } from "./web/spa.js";
+import { nextAdminMiddleware } from "./web/nextAdminMiddleware.js";
 import { handleNowPaymentsIpn } from "./services/nowpayments/ipnHandler.js";
 import { findTombstone, recordLateEvent } from "./services/payments/invoiceCleanup.js";
 
@@ -360,6 +361,9 @@ app.get("/ready", (_req, res) => {
 // payment webhook path is untouched).
 app.use("/api/admin", adminRouter);
 app.use("/api/store", storeRouter);
+// The in-progress Next.js admin panel (see README for scope); the legacy
+// vanilla-JS panel below still serves everything else at /panel.
+app.use(nextAdminMiddleware);
 app.use(serveAdminSpa);
 app.use(notFoundHandler);
 
