@@ -241,15 +241,55 @@ describe("Telegram integration", () => {
 });
 
 describe("admin session hardening", () => {
-  test("the session cookie is scoped to the admin API and logout clears both paths", async () => {
+  test("the session is issued as two narrowly-scoped cookies (admin API + the Next.js panel), never the whole origin", async () => {
+    const { verify } = await signIn();
+    const setCookies = verify.headers.getSetCookie();
+    // Plus a third Set-Cookie clearing any pre-hardening Path=/ leftover —
+    // asserted separately below; here only the two issued session copies matter.
+    const issued = setCookies.filter((entry) => /swift_admin_session=(?!;)[^;]+/.test(entry));
+    assert.equal(issued.length, 2, "one issued cookie per consumer, not a single Path=/ cookie");
+    const apiCookie = setCookies.find((entry) => /Path=\/api\/admin(;|$)/i.test(entry));
+    const panelCookie = setCookies.find((entry) => /Path=\/panel-next(;|$)/i.test(entry));
+    assert.ok(apiCookie, "a cookie scoped to /api/admin");
+    assert.ok(panelCookie, "a cookie scoped to /panel-next");
+    for (const entry of [apiCookie, panelCookie]) {
+      assert.match(entry, /swift_admin_session=[^;]+/);
+      assert.match(entry, /HttpOnly/i);
+      assert.match(entry, /Secure/i);
+      assert.match(entry, /SameSite=Lax/i);
+    }
+    // Same underlying session (and therefore the same revocation) either way.
+    assert.equal(apiCookie.match(/swift_admin_session=([^;]+)/)[1], panelCookie.match(/swift_admin_session=([^;]+)/)[1]);
+  });
+
+  test("a request carrying only the /panel-next-scoped cookie is still recognized as authenticated", async () => {
+    // This is exactly what the Next.js SSR layer does: it forwards whatever
+    // cookie header the browser attached to a /panel-next/* page request to
+    // a server-to-server loopback call against /api/admin/auth/session. A
+    // browser visiting /panel-next only ever attaches the /panel-next cookie
+    // (never the /api/admin one), so this is the real-world shape of that
+    // forwarded header, not the combined pair a same-path request would see.
+    const { verify } = await signIn();
+    const panelCookie = verify.headers.getSetCookie().find((entry) => /Path=\/panel-next(;|$)/i.test(entry));
+    const cookie = panelCookie.split(";")[0];
+    const session = await call("GET", "/api/admin/auth/session", { cookie });
+    assert.equal(session.data.authenticated, true);
+    assert.equal(session.data.actorTelegramId, ADMIN);
+  });
+
+  test("logout clears the session everywhere: both current cookie paths and the pre-hardening legacy path", async () => {
     const { verify, cookie, csrf } = await signIn();
-    const setCookie = verify.headers.get("set-cookie");
-    assert.match(setCookie, /swift_admin_session=[^;]+;[^,]*Path=\/api\/admin/i);
-    assert.match(setCookie, /HttpOnly/i);
+    const panelCookie = verify.headers.getSetCookie().find((entry) => /Path=\/panel-next(;|$)/i.test(entry)).split(";")[0];
+
     const logout = await call("POST", "/api/admin/auth/logout", { cookie, csrf });
-    const cleared = logout.headers.get("set-cookie") || "";
-    assert.match(cleared, /Path=\/api\/admin/);
-    assert.match(cleared, /Path=\/(;|,|$)/);
+    const cleared = logout.headers.getSetCookie();
+    assert.ok(cleared.some((entry) => /Path=\/api\/admin(;|$)/i.test(entry)), "clears the /api/admin cookie");
+    assert.ok(cleared.some((entry) => /Path=\/panel-next(;|$)/i.test(entry)), "clears the /panel-next cookie");
+    assert.ok(cleared.some((entry) => /Path=\/(;|,|$)/.test(entry)), "clears the legacy root-path cookie");
+
+    // The underlying session is gone, so neither cookie copy still works.
+    assert.equal((await call("GET", "/api/admin/auth/session", { cookie })).data.authenticated, false);
+    assert.equal((await call("GET", "/api/admin/auth/session", { cookie: panelCookie })).data.authenticated, false);
   });
 
   test("signing in rotates the session: a pre-existing session token is invalidated", async () => {
