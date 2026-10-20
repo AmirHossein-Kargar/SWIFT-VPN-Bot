@@ -30,7 +30,7 @@ import { getSystemHealth } from "../services/admin/monitoring.js";
 import { listAuditLogs } from "../services/admin/audit.js";
 import { listAdmins, addAdmin, removeAdmin } from "../services/admin/adminRegistry.js";
 import { default as botInstance } from "../config/botInstance.js";
-import { attachAdminSession, requireAdminSession, requireCsrfToken, requireSameOrigin, adminApiHeaders, rateLimitMiddleware, clientIp, sessionCookieOptions, clearSessionCookieOptions, LEGACY_SESSION_COOKIE_PATH, adminApiErrorHandler } from "./adminMiddleware.js";
+import { attachAdminSession, requireAdminSession, requireCsrfToken, requireSameOrigin, adminApiHeaders, rateLimitMiddleware, clientIp, sessionCookieOptions, clearSessionCookieOptions, LEGACY_SESSION_COOKIE_PATH, NEXT_PANEL_SESSION_COOKIE_PATH, adminApiErrorHandler } from "./adminMiddleware.js";
 import { runMockTests, listMockRuns, getMockRun } from "../services/mockTests/runner.js";
 
 const router = express.Router();
@@ -116,7 +116,12 @@ router.post("/auth/verify", rateLimitMiddleware({ limit: 10 }), requireBody(), a
       ipAddress: clientIp(req),
       metadata: { channel: "web" },
     });
+    // Issued twice, at two disjoint, narrow paths: /api/admin (both panels'
+    // own fetches) and /panel-next (so the Next.js admin panel can verify
+    // the session server-side on its own page requests — see
+    // NEXT_PANEL_SESSION_COOKIE_PATH for why one cookie cannot cover both).
     res.cookie(ADMIN_SESSION_COOKIE, token, sessionCookieOptions(ttlSeconds));
+    res.cookie(ADMIN_SESSION_COOKIE, token, sessionCookieOptions(ttlSeconds, NEXT_PANEL_SESSION_COOKIE_PATH));
     res.clearCookie(ADMIN_SESSION_COOKIE, clearSessionCookieOptions(LEGACY_SESSION_COOKIE_PATH));
     res.json({ ok: true, actorTelegramId: session.actorTelegramId, csrfToken: session.csrfToken, expiresInSeconds: ttlSeconds });
   } catch (error) { next(error); }
@@ -128,6 +133,7 @@ router.post("/auth/logout", requireBody(), (req, res, next) => {
     const actorId = req.adminActorId;
     if (token) await deleteAdminSession(token).catch(() => {});
     res.clearCookie(ADMIN_SESSION_COOKIE, clearSessionCookieOptions());
+    res.clearCookie(ADMIN_SESSION_COOKIE, clearSessionCookieOptions(NEXT_PANEL_SESSION_COOKIE_PATH));
     res.clearCookie(ADMIN_SESSION_COOKIE, clearSessionCookieOptions(LEGACY_SESSION_COOKIE_PATH));
     if (actorId) {
       await auditAuthEvent({

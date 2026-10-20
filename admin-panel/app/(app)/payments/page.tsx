@@ -17,13 +17,14 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Pro
   const params = await searchParams;
   const search = first(params.search);
   const status = first(params.status) || "all";
+  const provider = first(params.provider) || "all";
   const page = Number(first(params.page)) || 1;
 
-  const result = await adminApiGet<PagedResult<AdminPayment>>("/payments", { search, status, page, pageSize: 25 });
+  const result = await adminApiGet<PagedResult<AdminPayment>>("/payments", { search, status, provider, page, pageSize: 25 });
 
   return (
     <div className="space-y-4">
-      <PaymentsFilters defaultSearch={search} status={status} />
+      <PaymentsFilters defaultSearch={search} status={status} provider={provider} />
       <Card>
         <CardContent className="p-0">
           <PaymentsTable items={result.items} />

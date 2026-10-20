@@ -9,8 +9,25 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { stripBasePath } from "@/lib/basePath";
 
 const STATUSES = ["all", "pending", "paid", "fulfilled", "failed", "cancelled", "refunded", "recovery-required"];
+const PROVIDERS = ["all", "hooshpay", "nowpayments", "bank", "trx", "wallet"];
+const PROVIDER_LABEL: Record<string, string> = {
+  all: "All providers",
+  hooshpay: "HooshPay",
+  nowpayments: "NOWPayments",
+  bank: "Bank transfer",
+  trx: "TRX (legacy)",
+  wallet: "Wallet (order)",
+};
 
-export function PaymentsFilters({ defaultSearch, status }: { defaultSearch: string; status: string }) {
+export function PaymentsFilters({
+  defaultSearch,
+  status,
+  provider,
+}: {
+  defaultSearch: string;
+  status: string;
+  provider: string;
+}) {
   const router = useRouter();
   const pathname = stripBasePath(usePathname());
   const searchParams = useSearchParams();
@@ -49,6 +66,18 @@ export function PaymentsFilters({ defaultSearch, status }: { defaultSearch: stri
           {STATUSES.map((value) => (
             <SelectItem key={value} value={value}>
               {value === "all" ? "All statuses" : value.replace("-", " ")}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Select value={provider} onValueChange={(value) => update({ provider: value })}>
+        <SelectTrigger className="w-44">
+          <SelectValue placeholder="Provider" />
+        </SelectTrigger>
+        <SelectContent>
+          {PROVIDERS.map((value) => (
+            <SelectItem key={value} value={value}>
+              {PROVIDER_LABEL[value]}
             </SelectItem>
           ))}
         </SelectContent>

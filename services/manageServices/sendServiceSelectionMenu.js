@@ -1,10 +1,19 @@
 import User from "../../models/User.js";
+import { renderInterface } from "../messaging/messageManager.js";
 
-async function sendServiceSelectionMenu(bot, chatId, userId) {
+/**
+ * @param {object} [options]
+ * @param {number} [options.messageId] - edit this exact message (e.g. the
+ *   profile screen's message id, when reached via my_services_from_profile)
+ *   instead of sending a new one, when that is still possible.
+ * @param {object} [options.userModel] - test-only override for User (see
+ *   handlers/message/handleProfile.js for the same convention).
+ */
+async function sendServiceSelectionMenu(bot, chatId, userId, { messageId, userModel = User } = {}) {
   try {
-    const user = await User.findOne({ telegramId: userId });
+    const user = await userModel.findOne({ telegramId: userId });
     if (!user || !Array.isArray(user.services) || user.services.length === 0) {
-      await bot.sendMessage(chatId, "⚠️ شما هیچ سرویسی ندارید.");
+      await renderInterface(bot, { chatId, text: "⚠️ شما هیچ سرویسی ندارید.", messageId });
       return;
     }
 
@@ -16,10 +25,11 @@ async function sendServiceSelectionMenu(bot, chatId, userId) {
       },
     ]);
 
-    await bot.sendMessage(chatId, "📌 یکی از اشتراک‌های زیر را انتخاب کنید:", {
-      reply_markup: {
-        inline_keyboard: serviceButtons,
-      },
+    await renderInterface(bot, {
+      chatId,
+      text: "📌 یکی از اشتراک‌های زیر را انتخاب کنید:",
+      options: { reply_markup: { inline_keyboard: serviceButtons } },
+      messageId,
     });
   } catch (error) {
     console.error("Error sending service selection menu:", error);

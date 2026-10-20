@@ -2,6 +2,7 @@ import User from "../../models/User.js";
 import { getServiceView } from "../../services/wizardServiceStatus.js";
 import formatDate from "../../utils/formatDate.js";
 import escapeHtml from "../../utils/escapeHtml.js";
+import { renderInterface } from "../messaging/messageManager.js";
 
 const HOME_BUTTON = [{ text: "🔙 بازگشت به منوی اصلی", callback_data: "buy_service_back_to_main" }];
 
@@ -40,13 +41,12 @@ const showServiceDetails = async (bot, chatId, username, messageId) => {
           HOME_BUTTON,
         ],
       };
-      if (messageId) {
-        try {
-          await bot.editMessageText(messageText, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
-          return;
-        } catch { /* fall through to send */ }
-      }
-      await bot.sendMessage(chatId, messageText, { parse_mode: "HTML", reply_markup: keyboard });
+      await renderInterface(bot, {
+        chatId,
+        text: messageText,
+        options: { parse_mode: "HTML", reply_markup: keyboard },
+        messageId,
+      });
       return;
     }
 
@@ -101,6 +101,9 @@ ${record.sub_link ? `🔗 لینک اتصال (Subscription):\n<code>${escapeHtm
   }
 };
 
+/** Exported so the edit-in-place/fallback-cleanup logic can be tested in
+ * isolation, without the WizardXray panel or MongoDB (see showServiceDetails,
+ * which is what actually builds `message`/`username`/`status` in production). */
 async function sendDetailsMessage(bot, chatId, messageId, message, username, status) {
   const inlineKeyboard = [
     [{ text: "‼️چجوری به سرویس متصل بشم‼️", url: "https://t.me/swift_shield/9" }],
@@ -136,15 +139,21 @@ async function sendDetailsMessage(bot, chatId, messageId, message, username, sta
   inlineKeyboard.push([{ text: "🔄 بروزرسانی وضعیت", callback_data: `show_service_${username}` }]);
   inlineKeyboard.push(HOME_BUTTON);
 
-  if (messageId) {
-    try {
-      await bot.deleteMessage(chatId, messageId);
-    } catch { /* message deletion failed, continue */ }
-  }
-  await bot.sendMessage(chatId, message, {
-    parse_mode: "HTML",
-    reply_markup: { inline_keyboard: inlineKeyboard },
+  const result = await renderInterface(bot, {
+    chatId,
+    text: message,
+    options: { parse_mode: "HTML", reply_markup: { inline_keyboard: inlineKeyboard } },
+    messageId,
   });
+
+  // renderInterface only edits or sends, never deletes. Editing is impossible
+  // when the caller's screen is currently a QR-code photo (editMessageText
+  // cannot turn a photo into text) — in that case, and only then, a fresh
+  // message was sent, so clean up the now-stale photo ourselves, exactly as
+  // this screen always did before it could be edited in place.
+  if (result.sent && messageId && messageId !== result.messageId) {
+    await bot.deleteMessage(chatId, messageId).catch(() => {});
+  }
 }
 
 // Kept for backward compatibility with any external callers.
@@ -159,5 +168,5 @@ const removeServiceFromDatabase = async (username) => {
   return { success: true, message: `سرویس ${username} از لیست شما حذف شد.` };
 };
 
-export { removeServiceFromDatabase };
+export { removeServiceFromDatabase, sendDetailsMessage };
 export default showServiceDetails;

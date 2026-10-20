@@ -12,6 +12,7 @@ import {
   isVisibleRecentOrder,
   normalizePaymentStatus,
 } from "../../services/payments/status.js";
+import { renderInterface } from "../../services/messaging/messageManager.js";
 
 moment.loadPersian({ usePersianDigits: false, dialect: "persian-modern" });
 
@@ -198,7 +199,15 @@ const handleProfile = async (bot, chatId, userId, dependencies = {}) => {
       },
     };
 
-    await bot.sendMessage(chatId, message, { parse_mode: "HTML", ...reply_markup });
+    // Edits the caller's screen in place (e.g. navigating back from the
+    // discount-disabled notice) instead of sending a new message every time;
+    // falls back to a fresh send on its own if no editable message is known.
+    await renderInterface(bot, {
+      chatId,
+      text: message,
+      options: { parse_mode: "HTML", ...reply_markup },
+      messageId: dependencies.messageId,
+    });
   } catch (err) {
     console.error("profile error:", err?.name || "Error");
     await bot.sendMessage(chatId, "❌ خطایی رخ داده است. لطفاً دوباره تلاش کنید.");

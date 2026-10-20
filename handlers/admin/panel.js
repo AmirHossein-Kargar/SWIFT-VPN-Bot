@@ -80,13 +80,30 @@ async function deny(bot, query) {
   await bot.answerCallbackQuery(query.id, { text: "⛔️ دسترسی مدیر تأیید نشد.", show_alert: true }).catch(() => {});
 }
 
-async function editOrSend(bot, chatId, messageId, text, keyboard) {
+/** Exported so the edit/fallback/cleanup behavior can be tested in isolation
+ * (see tests/unit/adminPanelEditOrSend.test.js). */
+export async function editOrSend(bot, chatId, messageId, text, keyboard) {
   const options = { parse_mode: "HTML", disable_web_page_preview: true };
   if (keyboard) options.reply_markup = keyboard;
   try {
     await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...options });
   } catch {
-    try { await bot.sendMessage(chatId, text, options); } catch { /* chat unreachable */ }
+    let sent;
+    try {
+      sent = await bot.sendMessage(chatId, text, options);
+    } catch {
+      // Replacement could not be sent either (e.g. chat unreachable) — leave
+      // the old message alone rather than deleting it with nothing to show
+      // in its place.
+      return;
+    }
+    // Clean up the now-obsolete screen only once its replacement is
+    // confirmed sent, and only when there was an old message to begin with
+    // (editOrSend is also called with messageId === null on first entry,
+    // e.g. screenMockTests — nothing to delete there).
+    if (messageId != null && sent?.message_id != null && bot?.deleteMessage) {
+      await bot.deleteMessage(chatId, messageId).catch(() => {});
+    }
   }
 }
 

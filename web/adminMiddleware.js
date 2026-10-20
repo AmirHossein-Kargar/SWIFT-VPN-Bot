@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { ADMIN_SESSION_COOKIE, getAdminSession } from "../services/admin/auth.js";
 import { AdminServiceError } from "../services/admin/authorization.js";
+import { ADMIN_PANEL_NEXT_BASE_PATH } from "./nextAdminMiddleware.js";
 
 const WINDOW_MS = 60_000;
 const MAX_BUCKETS = 20_000;
@@ -79,15 +80,28 @@ function parseCookies(header) {
 
 /** The session cookie is only ever needed by the admin API. */
 export const SESSION_COOKIE_PATH = "/api/admin";
+/**
+ * The Next.js admin panel verifies the session server-side on every page
+ * request (app/(app)/layout.tsx), which requires the browser to attach the
+ * cookie to /panel-next/* requests directly — a server-to-server loopback
+ * fetch cannot forward a cookie the browser never sent it in the first
+ * place. /api/admin and /panel-next are sibling paths with no shared
+ * non-root prefix, so a single Set-Cookie Path cannot cover both without
+ * widening to "/"; instead the same session is issued as a second cookie
+ * scoped to this path, keeping each narrower than "/" (the legacy /panel
+ * and /admin shells are unauthenticated static shells that only ever read
+ * the session via their own /api/admin fetches, so they need neither path).
+ */
+export const NEXT_PANEL_SESSION_COOKIE_PATH = ADMIN_PANEL_NEXT_BASE_PATH;
 /** Path used by releases before the storefront shared this origin. */
 export const LEGACY_SESSION_COOKIE_PATH = "/";
 
-export function sessionCookieOptions(maxAgeSeconds) {
+export function sessionCookieOptions(maxAgeSeconds, path = SESSION_COOKIE_PATH) {
   return {
     httpOnly: true,
     secure: true,
     sameSite: "lax",
-    path: SESSION_COOKIE_PATH,
+    path,
     maxAge: maxAgeSeconds * 1000,
   };
 }
