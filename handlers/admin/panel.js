@@ -26,6 +26,7 @@ import { getSystemHealth } from "../../services/admin/monitoring.js";
 import { listAuditLogs } from "../../services/admin/audit.js";
 import { createBroadcast, getBroadcastStatus } from "../../services/admin/broadcast.js";
 import { listAdmins, addAdmin, removeAdmin, isOwnerUser } from "../../services/admin/adminRegistry.js";
+import { runMockTests, listMockRuns, getMockRun, listMockScenarios, mockTestsEnabled, formatReportForTelegram } from "../../services/mockTests/runner.js";
 
 const PAGE_SIZE = 5;
 const PAY_STATUSES = [
@@ -99,7 +100,7 @@ function mainMenuKeyboard() {
       [{ text: "📦 محصولات", callback_data: "adm:prod" }, { text: "📢 ارسال پیام همگانی", callback_data: "adm:bcast" }],
       [{ text: "🎁 معرفی‌ها", callback_data: "adm:ref" }, { text: "📋 بازیابی پرداخت‌ها", callback_data: "adm:rec" }],
       [{ text: "📜 گزارش عملیات", callback_data: "adm:audit:1" }, { text: "⚙️ وضعیت سیستم", callback_data: "adm:sys" }],
-      [{ text: "🛡 مدیریت مدیران", callback_data: "adm:admins" }],
+      [{ text: "🛡 مدیریت مدیران", callback_data: "adm:admins" }, { text: "🧪 تست ماک", callback_data: "adm:mock" }],
     ],
   };
 }
@@ -459,6 +460,94 @@ async function screenAdmins(bot, chatId, messageId, userId) {
   await editOrSend(bot, chatId, messageId, text, keyboard);
 }
 
+// ── Mock tests (isolated; never touch real money, invoices or services) ─────
+
+const MOCK_ICON = { PASS: "✅", FAIL: "❌", BLOCKED: "⛔️", "NOT RUN": "⏸" };
+
+async function screenMockTests(bot, chatId, messageId) {
+  const enabled = mockTestsEnabled();
+  let latest = null;
+  let historyError = false;
+  try {
+    latest = (await listMockRuns({ actorId: bot.__adminActorId, limit: 1 })).items[0] || null;
+  } catch {
+    historyError = true;
+  }
+  const lastStatus = new Map((latest?.scenarios || []).map((scenario) => [scenario.id, scenario.status]));
+  const lines = listMockScenarios().map((scenario) => {
+    const status = lastStatus.get(scenario.id) || "NOT RUN";
+    return `${MOCK_ICON[status] || "•"} ${esc(scenario.titleFa)} — <b>${esc(status)}</b>`;
+  });
+  const text =
+    "🧪 <b>تست ماک</b>\n\n" +
+    "سناریوها روی منطق واقعی برنامه اجرا می‌شوند، اما با پایگاه‌داده درون‌حافظه‌ای و درگاه‌های شبیه‌سازی‌شده. " +
+    "هیچ پرداخت، شارژ کیف پول، تراکنش بلاکچین یا سرویس واقعی ایجاد <b>نمی‌شود</b> و نتایج از گزارش‌های مالی جدا هستند.\n\n" +
+    `وضعیت اجرا روی سرور: <b>${enabled ? "فعال" : "غیرفعال (MOCK_TESTS_ENABLED)"}</b>\n\n` +
+    `<b>آخرین نتیجه هر سناریو</b>${latest ? ` (<code>${esc(latest.runId)}</code>)` : ""}:\n` +
+    lines.join("\n") +
+    (historyError ? "\n\n⚠️ تاریخچه گزارش‌ها در دسترس نیست." : "");
+  const scenarioButtons = listMockScenarios().map((scenario) => ({ text: `▶️ ${scenario.titleFa}`, callback_data: `adm:mockrun:${scenario.id}` }));
+  const rows = enabled
+    ? [[{ text: "▶️ اجرای همه سناریوها", callback_data: "adm:mockrun:all" }], scenarioButtons.slice(0, 2), scenarioButtons.slice(2, 4)]
+    : [];
+  if (latest) rows.push([{ text: "📄 جزئیات آخرین گزارش", callback_data: "adm:mockrep" }]);
+  rows.push([REFRESH_MOCK_BTN, HOME_BTN]);
+  await editOrSend(bot, chatId, messageId, text, { inline_keyboard: rows });
+}
+
+const REFRESH_MOCK_BTN = { text: "🔄 بروزرسانی", callback_data: "adm:mock" };
+
+async function runMockFromTelegram(bot, query, chatId, messageId, target) {
+  const scenarioIds = listMockScenarios().map((scenario) => scenario.id);
+  const scenarios = target === "all" ? "all" : scenarioIds.includes(target) ? [target] : null;
+  if (!scenarios) return screenMockTests(bot, chatId, messageId);
+  if (!confirmThrottle.check(query.from.id)) {
+    await bot.answerCallbackQuery(query.id, { text: "⏳ تعداد اجراها زیاد است؛ کمی بعد دوباره تلاش کنید.", show_alert: true }).catch(() => {});
+    return;
+  }
+  await editOrSend(bot, chatId, messageId, "🧪 <b>تست ماک</b>\n\n⏳ در حال اجرای سناریوها در محیط ایزوله…", { inline_keyboard: [] });
+  let report;
+  try {
+    report = await runMockTests({ actorId: String(query.from.id), trigger: "telegram", scenarios });
+  } catch (error) {
+    const reason = error instanceof AdminServiceError || error?.safeMessage ? error.safeMessage : "اجرای تست ماک انجام نشد.";
+    await editOrSend(bot, chatId, messageId, `🧪 <b>تست ماک</b>\n\n❌ ${esc(reason)}`, { inline_keyboard: [[{ text: "⬅️ تست ماک", callback_data: "adm:mock" }, HOME_BTN]] });
+    return;
+  }
+  await editOrSend(bot, chatId, messageId, formatReportForTelegram(report, { escape: esc }), {
+    inline_keyboard: [
+      [{ text: "📄 جزئیات", callback_data: "adm:mockrep" }, { text: "🔁 اجرای مجدد", callback_data: `adm:mockrun:${target}` }],
+      [{ text: "⬅️ تست ماک", callback_data: "adm:mock" }, HOME_BTN],
+    ],
+  });
+}
+
+async function screenMockReport(bot, chatId, messageId) {
+  const latest = (await listMockRuns({ actorId: bot.__adminActorId, limit: 1 })).items[0];
+  if (!latest) return screenMockTests(bot, chatId, messageId);
+  const report = await getMockRun({ actorId: bot.__adminActorId, runId: latest.runId });
+  const blocks = report.scenarios.map((scenario) => {
+    const failed = (scenario.assertions || []).filter((entry) => entry.status !== "pass").slice(0, 6);
+    const detail = failed.map((entry) => `   ${entry.status === "skipped" ? "↷" : "✗"} ${esc(entry.name)}${entry.detail ? ` — <i>${esc(entry.detail)}</i>` : ""}`).join("\n");
+    const window = scenario.startedAt ? `\n   ${when(scenario.startedAt)} → ${when(scenario.completedAt)}` : "";
+    return `${MOCK_ICON[scenario.status] || "•"} <b>${esc(scenario.titleFa)}</b>: ${esc(scenario.status)} (${scenario.counts?.passed ?? 0}/${scenario.counts?.total ?? 0})${window}` +
+      (scenario.explanation && scenario.status !== "PASS" ? `\n   ${esc(scenario.explanation)}` : "") +
+      (detail ? `\n${detail}` : "");
+  });
+  const text = (`📄 <b>گزارش تست ماک</b>\n<code>${esc(report.runId)}</code>\nاجراکننده: <code>${esc(report.actorTelegramId)}</code> · ${esc(report.trigger)}\n\n` + blocks.join("\n\n")).slice(0, 3900);
+  await editOrSend(bot, chatId, messageId, text, { inline_keyboard: [[{ text: "⬅️ تست ماک", callback_data: "adm:mock" }, HOME_BTN]] });
+}
+
+/** Reply-keyboard entry ("🧪 تست ماک"); the caller has already verified admin access. */
+export async function handleMockTestEntry(bot, msg) {
+  ensureActorAccessor(bot);
+  return actorContext.run({ actorId: String(msg?.from?.id), chatType: msg?.chat?.type }, async () => {
+    if (!isAdminUser(msg?.from?.id) || msg?.chat?.type !== "private") return false;
+    await screenMockTests(bot, msg.chat.id, null);
+    return true;
+  });
+}
+
 // ── Router ───────────────────────────────────────────────────────────────────
 
 export async function handleAdminPanelCommand(bot, msg) {
@@ -705,6 +794,15 @@ async function handleAdminCallbackInner(bot, query) {
           });
         break;
       }
+      case "mock":
+        await screenMockTests(bot, chatId, messageId);
+        break;
+      case "mockrun":
+        await runMockFromTelegram(bot, query, chatId, messageId, String(arg1 || ""));
+        break;
+      case "mockrep":
+        await screenMockReport(bot, chatId, messageId);
+        break;
       case "x":
         await bot.answerCallbackQuery(query.id).catch(() => {});
         break;

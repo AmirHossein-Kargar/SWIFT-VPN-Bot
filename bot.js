@@ -12,7 +12,8 @@ import handleGuide from "./handlers/message/handleGuide.js";
 import handleMessage from "./handlers/onMessage.js";
 import handleProfile from "./handlers/message/handleProfile.js";
 import handleSupport from "./handlers/message/handleSupport.js";
-import keyboard from "./keyboards/mainKeyboard.js";
+import { keyboardFor, MOCK_TEST_BUTTON } from "./keyboards/mainKeyboard.js";
+import { parseStartPayload, handleStartPayload } from "./handlers/message/handleStartPayload.js";
 import sendServiceSelectionMenu from "./services/manageServices/sendServiceSelectionMenu.js";
 import showPaymentMethods from "./handlers/message/showPaymentMethods.js";
 import supportMessageHandler from "./handlers/supportMessageHandler.js";
@@ -48,7 +49,7 @@ async function showUnsupportedMediaNotice(bot, chatId, session) {
 
 // * 📦 API
 import showStatusApi from "./handlers/admin/showStatusApi.js";
-import { handleAdminPanelCommand } from "./handlers/admin/panel.js";
+import { handleAdminPanelCommand, handleMockTestEntry } from "./handlers/admin/panel.js";
 import { isAdminUser } from "./utils/auth.js";
 import { touchUserActivity } from "./services/admin/users.js";
 import { ensureTelegramUser } from "./services/users/ensureTelegramUser.js";
@@ -109,9 +110,27 @@ bot.on("message", async (msg) => {
       return;
     }
 
+    // Storefront deep link: /start plan_<id> opens the standard order
+    // confirmation for that server-side plan (price is re-read at checkout).
+    const startPayload = parseStartPayload(userText);
+    if (startPayload && msg.chat?.type === "private") {
+      await bot.sendMessage(chatId, WELCOME_MESSAGE, keyboardFor(userId, msg.chat.type));
+      await handleStartPayload(bot, chatId, startPayload);
+      return;
+    }
+
     switch (userText) {
       case "/start": {
-        await bot.sendMessage(chatId, WELCOME_MESSAGE, keyboard);
+        await bot.sendMessage(chatId, WELCOME_MESSAGE, keyboardFor(userId, msg.chat?.type));
+        break;
+      }
+      case MOCK_TEST_BUTTON: {
+        // Admin-only; for anyone else the text is handled like any other input.
+        if (msg.chat?.type === "private" && isAdminUser(userId)) {
+          await handleMockTestEntry(bot, msg);
+        } else {
+          await handleMessage(bot, msg);
+        }
         break;
       }
       case "/panel":
