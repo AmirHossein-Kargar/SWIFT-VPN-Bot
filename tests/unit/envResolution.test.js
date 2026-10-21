@@ -207,7 +207,8 @@ describe("inspectEnv", () => {
     process.env.NOWPAYMENTS_IPN_SECRET = "n".repeat(48);
     process.env.WEBHOOK_BASE_URL = "https://webhook.example.test";
     process.env.CARD_NUMBER = "6219861000000000";
-    process.env.TRX_WALLET = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
+    // Synthetic TRON address (hash-derived, valid checksum): not a real wallet.
+    process.env.TRX_WALLET = "TPwiFFVSCTJR5aMfnJMc4nsWRm7H3SKGpu";
     process.env.NODE_ENV = "production";
 
     const { missing, invalid, fatalCount } = inspectEnv();
