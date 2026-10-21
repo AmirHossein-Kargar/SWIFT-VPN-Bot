@@ -52,6 +52,7 @@ malformed.
 |---|---|---|
 | `OWNER_TELEGRAM_ID` | first `ADMINS` entry | Owner of the multi-admin registry. Only the owner can add or remove other admins; owners cannot be removed from the panel |
 | `ADMIN_CACHE_TTL_SECONDS` | `60` | How long the admin allowlist (environment + database admins) is cached |
+| `ADMIN_PENDING_DELETE_MIN_HOURS` | `72` (minimum `24`) | Minimum age before the admin panel may delete a still-pending or expired top-up record; see [Deleting payment records](admin.md#deleting-payment-records-admin-panel) |
 | `SUPPORT_CONTACT` | empty | Support contact shown to users (`@username` or numeric ID). If empty, the direct-support buttons are hidden |
 | `BOT_USERNAME` | from Telegram `getMe()` | Bot username (no `@`) for storefront checkout deep links |
 | `MOCK_TESTS_ENABLED` | `false` | Must be exactly `true` to let admins run the isolated [mock-test harness](admin.md#mock-tests) |

@@ -9,6 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { PaginationNav } from "@/components/shared/pagination-nav";
 import { TicketsFilters } from "@/components/tickets/tickets-filters";
 import { TicketStatusBadge } from "@/components/tickets/ticket-thread";
+import { LiveRefresh } from "@/components/tickets/live-refresh";
 
 export const metadata: Metadata = { title: "تیکت‌ها" };
 export const dynamic = "force-dynamic";
@@ -31,6 +32,7 @@ export default async function TicketsPage({ searchParams }: { searchParams: Prom
 
   return (
     <div className="space-y-4" dir="rtl" lang="fa">
+      <LiveRefresh />
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-lg font-semibold">تیکت‌های پشتیبانی</h1>
         {result.needsAttention > 0 ? <Badge variant="warning">{result.needsAttention.toLocaleString("fa-IR")} تیکت نیازمند پاسخ</Badge> : null}

@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { TicketStatusBadge } from "@/components/tickets/ticket-thread";
+import { LiveRefresh } from "@/components/tickets/live-refresh";
 
 export const metadata: Metadata = { title: "تیکت‌های من" };
 export const dynamic = "force-dynamic";
@@ -16,6 +17,7 @@ export default async function SupportHomePage() {
 
   return (
     <div className="space-y-4">
+      <LiveRefresh />
       <div className="flex items-center justify-between gap-2">
         <h1 className="text-lg font-semibold">تیکت‌های من</h1>
         <Link href="/support/new" className={buttonVariants({ size: "sm" })}>تیکت جدید</Link>

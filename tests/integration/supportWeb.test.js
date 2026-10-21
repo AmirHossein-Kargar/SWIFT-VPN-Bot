@@ -93,7 +93,7 @@ describe("customer authentication", () => {
     const { code } = await issueCustomerLoginCode("1001", redis);
     const first = await call("POST", "/api/support/auth/verify", { body: { code } });
     assert.equal(first.status, 200);
-    assert.ok(cookieFor(first, "/api/support") && cookieFor(first, "/next-panel"), "api + panel scoped cookies");
+    assert.ok(cookieFor(first, "/api/support") && cookieFor(first, "/panel"), "api + panel scoped cookies");
     assert.ok(first.headers.getSetCookie().every((c) => /HttpOnly/i.test(c) && /Secure/i.test(c) && /SameSite=Lax/i.test(c)));
     assert.equal((await call("POST", "/api/support/auth/verify", { body: { code } })).status, 401, "single use");
     assert.equal((await call("POST", "/api/support/auth/verify", { body: { code: "x".repeat(32) } })).status, 401);
@@ -352,13 +352,33 @@ describe("attachment streaming", () => {
 });
 
 describe("canonical panel route", () => {
-  test("the previous /panel-next path permanently redirects to /next-panel, preserving the sub-path", async () => {
-    const root = await fetch(`${baseUrl}/panel-next`, { redirect: "manual" });
-    assert.equal(root.status, 308);
-    assert.equal(root.headers.get("location"), "/next-panel");
-    const nested = await fetch(`${baseUrl}/panel-next/tickets?status=open`, { redirect: "manual" });
-    assert.equal(nested.headers.get("location"), "/next-panel/tickets?status=open");
-    const evil = await fetch(`${baseUrl}/panel-next//example.org`, { redirect: "manual" });
-    assert.equal(evil.headers.get("location"), "/next-panel/example.org", "never an off-site redirect");
+  test("the previous /panel-next and /next-panel paths permanently redirect to /panel, preserving the sub-path and query", async () => {
+    for (const previous of ["/panel-next", "/next-panel"]) {
+      const root = await fetch(`${baseUrl}${previous}`, { redirect: "manual" });
+      assert.equal(root.status, 308, previous);
+      assert.equal(root.headers.get("location"), "/panel", previous);
+      const nested = await fetch(`${baseUrl}${previous}/tickets?status=open`, { redirect: "manual" });
+      assert.equal(nested.headers.get("location"), "/panel/tickets?status=open", previous);
+      const evil = await fetch(`${baseUrl}${previous}//example.org`, { redirect: "manual" });
+      assert.equal(evil.headers.get("location"), "/panel/example.org", `${previous}: never an off-site redirect`);
+    }
+  });
+
+  test("an old customer login link keeps working: /next-panel/support/login redirects to /panel/support/login", async () => {
+    const response = await fetch(`${baseUrl}/next-panel/support/login`, { redirect: "manual" });
+    assert.equal(response.status, 308);
+    assert.equal(response.headers.get("location"), "/panel/support/login");
+  });
+
+  test("/admin pages redirect temporarily to /panel while /api/admin is untouched", async () => {
+    for (const path of ["/admin", "/admin/", "/admin/users?x=1"]) {
+      const response = await fetch(`${baseUrl}${path}`, { redirect: "manual" });
+      assert.equal(response.status, 307, path);
+      assert.equal(response.headers.get("location"), "/panel", path);
+    }
+    const api = await fetch(`${baseUrl}/api/admin/auth/session`, { redirect: "manual" });
+    assert.equal(api.status, 200, "the admin API is not redirected");
+    const lookalike = await fetch(`${baseUrl}/administrator`, { redirect: "manual" });
+    assert.notEqual(lookalike.status, 307, "only /admin itself is redirected");
   });
 });

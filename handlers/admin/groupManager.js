@@ -6,6 +6,7 @@ import { sumAmount, sumUserBalances } from "../../services/admin/collectionStats
 import { estimateCatalogConsumption } from "../../services/admin/reportMath.js";
 import { isAdmin } from "../../utils/auth.js";
 import { handleAdminPanelCommand } from "./panel.js";
+import hideKeyboard from "../../utils/hideKeyboard.js";
 
 // ارسال پیام به گروه ادمین
 const sendToAdminGroup = async (bot, message, keyboard = null) => {
@@ -33,22 +34,24 @@ const sendToAdminGroup = async (bot, message, keyboard = null) => {
   }
 };
 
-// کیبورد گروه ادمین
-const getGroupKeyboard = () => {
-  const keyboard = {
-    reply_markup: {
-      keyboard: [
-        ["🔍 اسکن ولت TRX", "📊 وضعیت سیستم"],
-        ["📋 سفارشات جدید", "💰 گزارش مالی"],
-        ["⚙️ تنظیمات", "🆘 پشتیبانی"],
-      ],
-      resize_keyboard: true,
-      one_time_keyboard: false,
-    },
-  };
-
-  return keyboard;
-};
+// منوی گروه ادمین — Inline Keyboard. Every callback re-checks isAdmin(chatId, userId)
+// server-side; showing the buttons grants nothing.
+const getGroupKeyboard = () => ({
+  inline_keyboard: [
+    [
+      { text: "🔍 اسکن ولت TRX", callback_data: "admin_scan_trx_wallet" },
+      { text: "📊 وضعیت سیستم", callback_data: "admin_status" },
+    ],
+    [
+      { text: "📋 سفارشات جدید", callback_data: "adm:pay:recovery-required:1" },
+      { text: "💰 گزارش مالی", callback_data: "admin_financial_report" },
+    ],
+    [
+      { text: "⚙️ تنظیمات", callback_data: "adm:sys" },
+      { text: "👑 پنل مدیریت", callback_data: "adm:home" },
+    ],
+  ],
+});
 
 // ارسال پیام خوش‌آمدگویی به گروه
 const sendWelcomeMessage = async (bot) => {
@@ -63,8 +66,10 @@ const sendWelcomeMessage = async (bot) => {
 • ⚙️ تنظیمات سیستم
 
 💡 <b>راهنما:</b>
-برای استفاده از کیبورد، روی دکمه‌های زیر کلیک کنید.`;
+برای استفاده از منو، روی دکمه‌های زیر کلیک کنید.`;
 
+    // Clear the old persistent group keyboard once, then show the inline menu.
+    await hideKeyboard(bot, process.env.GROUP_ID);
     await sendToAdminGroup(bot, message, getGroupKeyboard());
   } catch (error) {
     console.error("❌ Error sending welcome message:", error.message);

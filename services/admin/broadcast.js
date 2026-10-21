@@ -133,7 +133,14 @@ export async function createBroadcast({ actorId, operationId, message, audience,
       if (resumed && runningBroadcasts.has(operationId)) return { broadcast, alreadyRunning: true, auditSummary: { status: broadcast.status } };
       if (runningBroadcasts.has(operationId)) return { broadcast, alreadyRunning: true, auditSummary: { status: broadcast.status } };
 
-      const lease = await acquireRedisLease(ACTIVE_BROADCAST_LOCK, 300).catch(() => null);
+      // Two different situations must not look alike: Redis being unreachable (the lock service is down) and the lock
+      // being held by another broadcast. Both fail closed (nothing is sent), but each is reported truthfully.
+      let lease;
+      try {
+        lease = await acquireRedisLease(ACTIVE_BROADCAST_LOCK, 300);
+      } catch {
+        throw new AdminServiceError("سرویس قفل ارسال همگانی (Redis) در دسترس نیست؛ برای ایمنی ارسال شروع نشد. کمی بعد دوباره تلاش کنید.", { status: 503, code: "broadcast_lock_unavailable" });
+      }
       if (!lease) throw new AdminServiceError("یک ارسال همگانی دیگر هنوز در حال انجام است. ابتدا پایان آن را منتظر بمانید یا آن را لغو کنید.", { status: 409, code: "broadcast_already_running" });
 
       await AdminBroadcast.updateOne({ _id: broadcast._id }, { $set: { status: "running", startedAt: new Date() } });

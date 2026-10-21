@@ -14,6 +14,7 @@ import { PaymentStatusBadge } from "@/components/payments/status-badge";
 import { BalanceDialog } from "@/components/users/balance-dialog";
 import { BlockDialog } from "@/components/users/block-dialog";
 import { MessageDialog } from "@/components/users/message-dialog";
+import { UserAvatar } from "@/components/users/user-avatar";
 import { ResetEligibilityDialog } from "@/components/users/reset-eligibility-dialog";
 import { adminGet } from "@/lib/adminApi.client";
 import { describeError } from "@/lib/errors";
@@ -78,8 +79,13 @@ export function UserDetailSheet({ telegramId, open, onOpenChange }: { telegramId
       <Sheet open={open} onOpenChange={onOpenChange}>
         <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
           <SheetHeader>
-            <SheetTitle>{user ? user.name ?? (user.username ? `@${user.username}` : user.telegramId) : "User detail"}</SheetTitle>
-            <SheetDescription>Telegram ID {telegramId}{user?.username ? ` · @${user.username}` : ""}</SheetDescription>
+            <div className="flex items-center gap-3">
+              {telegramId ? <UserAvatar key={telegramId} telegramId={telegramId} label={user ? user.name ?? user.username ?? telegramId : telegramId} /> : null}
+              <div className="min-w-0 space-y-1 text-left">
+                <SheetTitle className="break-words">{user ? user.name ?? (user.username ? `@${user.username}` : user.telegramId) : "User detail"}</SheetTitle>
+                <SheetDescription className="break-all">Telegram ID {telegramId}{user?.username ? ` · @${user.username}` : ""}</SheetDescription>
+              </div>
+            </div>
           </SheetHeader>
 
           {loading && !detail ? (

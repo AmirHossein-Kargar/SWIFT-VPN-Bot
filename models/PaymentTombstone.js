@@ -15,7 +15,7 @@ const lateEventSchema = new mongoose.Schema({
 }, { _id: false });
 
 const paymentTombstoneSchema = new mongoose.Schema({
-  provider: { type: String, enum: ["hooshpay", "nowpayments"], required: true },
+  provider: { type: String, enum: ["hooshpay", "nowpayments", "bank", "trx"], required: true },
   // Provider-independent local reference (orderId for both providers).
   orderId: { type: String, required: true, maxlength: 80 },
   uid: { type: String, default: null, maxlength: 80 },

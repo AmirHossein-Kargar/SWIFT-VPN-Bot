@@ -8,7 +8,7 @@
 import { default as botInstance } from "../../config/botInstance.js";
 import { assertAdminUser } from "./authorization.js";
 import { runAuditedAction } from "./audit.js";
-import { listAdminTickets, getAdminTicket } from "../support/tickets.js";
+import { listAdminTickets, getAdminTicket, getTicketUpdates } from "../support/tickets.js";
 import { adminReply, adminSetStatus } from "../support/workflow.js";
 
 export async function listSupportTickets({ actorId, status, query, unreadOnly, page, pageSize }) {
@@ -19,6 +19,11 @@ export async function listSupportTickets({ actorId, status, query, unreadOnly, p
 export async function getSupportTicket({ actorId, ticketId }) {
   assertAdminUser(actorId);
   return getAdminTicket({ ticketId });
+}
+
+export async function getSupportTicketUpdates({ actorId, ticketId, afterId, markRead }) {
+  assertAdminUser(actorId);
+  return getTicketUpdates({ audience: "admin", ticketId, afterId, markRead: markRead === true || markRead === "1" });
 }
 
 export async function replyToSupportTicket({ actorId, operationId, ticketId, text, ipAddress, bot = botInstance.bot, auditModel }) {

@@ -43,6 +43,7 @@ export function CustomerTicketActions({ ticketId, status }: { ticketId: string; 
       operationId.current = newOperationId();
       setText("");
       toast.success("پیام شما ارسال شد.");
+      window.dispatchEvent(new Event("swift:ticket-sync"));
       router.refresh();
     } catch (sendError) {
       setError(ticketErrorMessage(sendError));

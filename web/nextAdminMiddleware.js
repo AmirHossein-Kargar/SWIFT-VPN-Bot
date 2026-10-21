@@ -1,9 +1,16 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const ADMIN_PANEL_NEXT_BASE_PATH = "/next-panel";
-/** Earlier name of the same panel; kept as a permanent redirect so bookmarks keep working. */
-export const PREVIOUS_PANEL_PATH = "/panel-next";
+/** Canonical public path of the admin panel (and of the customer support area under it). */
+export const ADMIN_PANEL_NEXT_BASE_PATH = "/panel";
+/**
+ * Earlier names of this same panel. Both are permanent (308) redirects so
+ * bookmarks, deep links and one-time login links already sent by the bot keep
+ * working; the URL fragment (#code=...) survives a redirect in the browser.
+ */
+export const PREVIOUS_PANEL_PATHS = Object.freeze(["/next-panel", "/panel-next"]);
+/** The original vanilla-JS panel's URL. Temporary (307) redirect: the legacy files stay on disk and the move is reversible. */
+export const LEGACY_ADMIN_PATH = "/admin";
 
 const adminPanelDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "admin-panel");
 
@@ -16,7 +23,7 @@ let handlerPromise = null;
  * Next would bundle its own copy of them, splitting the Mongo/Redis/bot
  * singletons — so it only ever talks to the existing /api/admin REST surface,
  * same as a browser would. Preparing Next is deferred to the first request so
- * importing this module has no cost for requests that never touch /next-panel.
+ * importing this module has no cost for requests that never touch /panel.
  */
 function getHandler() {
   if (!handlerPromise) {
@@ -46,12 +53,20 @@ export function applyNextPanelHeaders(res) {
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
 }
 
-/** `/panel-next/<rest>` -> `/next-panel/<rest>`; null when the path is not the old panel path. */
+/** `/next-panel/<rest>` or `/panel-next/<rest>` -> `/panel/<rest>`; null when the path is neither. */
 export function previousPanelRedirectTarget(path) {
-  if (path !== PREVIOUS_PANEL_PATH && !path.startsWith(`${PREVIOUS_PANEL_PATH}/`)) return null;
-  const rest = path.slice(PREVIOUS_PANEL_PATH.length);
-  // Only the fixed prefix is rewritten; a protocol-relative "//host" tail can never become the target.
-  return `${ADMIN_PANEL_NEXT_BASE_PATH}${rest.replace(/^\/{2,}/, "/")}`;
+  for (const previous of PREVIOUS_PANEL_PATHS) {
+    if (path !== previous && !path.startsWith(`${previous}/`)) continue;
+    const rest = path.slice(previous.length);
+    // Only the fixed prefix is rewritten; a protocol-relative "//host" tail can never become the target.
+    return `${ADMIN_PANEL_NEXT_BASE_PATH}${rest.replace(/^\/{2,}/, "/")}`;
+  }
+  return null;
+}
+
+/** `/admin` and `/admin/<anything>` (page URLs only; the API lives under /api/admin) -> the panel root. */
+export function legacyAdminRedirectTarget(path) {
+  return path === LEGACY_ADMIN_PATH || path.startsWith(`${LEGACY_ADMIN_PATH}/`) ? ADMIN_PANEL_NEXT_BASE_PATH : null;
 }
 
 export function nextAdminMiddleware(req, res, next) {
@@ -60,6 +75,7 @@ export function nextAdminMiddleware(req, res, next) {
     const query = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
     return res.redirect(308, `${redirectTo}${query}`);
   }
+  if (legacyAdminRedirectTarget(req.path)) return res.redirect(307, ADMIN_PANEL_NEXT_BASE_PATH);
   if (req.path !== ADMIN_PANEL_NEXT_BASE_PATH && !req.path.startsWith(`${ADMIN_PANEL_NEXT_BASE_PATH}/`)) {
     return next();
   }

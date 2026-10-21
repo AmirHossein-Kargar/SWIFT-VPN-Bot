@@ -83,18 +83,24 @@ export const SESSION_COOKIE_PATH = "/api/admin";
 /**
  * The Next.js admin panel verifies the session server-side on every page
  * request (app/(app)/layout.tsx), which requires the browser to attach the
- * cookie to /next-panel/* requests directly — a server-to-server loopback
+ * cookie to /panel/* requests directly — a server-to-server loopback
  * fetch cannot forward a cookie the browser never sent it in the first
- * place. /api/admin and /next-panel are sibling paths with no shared
+ * place. /api/admin and /panel are sibling paths with no shared
  * non-root prefix, so a single Set-Cookie Path cannot cover both without
  * widening to "/"; instead the same session is issued as a second cookie
- * scoped to this path, keeping each narrower than "/" (the legacy /panel
- * and /admin shells are unauthenticated static shells that only ever read
- * the session via their own /api/admin fetches, so they need neither path).
+ * scoped to this path, keeping each narrower than "/" (the legacy shell,
+ * still on disk as /index.html, is an unauthenticated static page that only
+ * ever reads the session via its own /api/admin fetches).
  */
 export const NEXT_PANEL_SESSION_COOKIE_PATH = ADMIN_PANEL_NEXT_BASE_PATH;
 /** Path used by releases before the storefront shared this origin. */
 export const LEGACY_SESSION_COOKIE_PATH = "/";
+/**
+ * Where the panel cookie lived before the /panel cutover. Browsers keep sending
+ * it to /next-panel (now only a redirect) until it expires, so login and logout
+ * expire it explicitly. Old sessions are NOT migrated: one re-login is expected.
+ */
+export const RETIRED_PANEL_COOKIE_PATH = "/next-panel";
 
 export function sessionCookieOptions(maxAgeSeconds, path = SESSION_COOKIE_PATH) {
   return {
@@ -203,7 +209,12 @@ export function adminApiErrorHandler(error, req, res, _next) {
   // AdminServiceError and the auth module's HTTP-mapped errors (status + code +
   // safeMessage) are returned as structured responses; anything else is masked.
   if (error instanceof AdminServiceError || (Number.isInteger(error?.status) && typeof error?.code === "string" && typeof error?.safeMessage === "string")) {
-    return res.status(error.status || 400).json({ ok: false, error: error.code || "admin_request_failed", message: error.safeMessage });
+    return res.status(error.status || 400).json({
+      ok: false,
+      error: error.code || "admin_request_failed",
+      message: error.safeMessage,
+      ...(Array.isArray(error.details) ? { details: error.details } : {}),
+    });
   }
   if (error?.type === "entity.parse.failed" || error instanceof SyntaxError) {
     return res.status(400).json({ ok: false, error: "invalid_json" });

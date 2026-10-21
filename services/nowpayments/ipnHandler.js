@@ -3,6 +3,26 @@ import { notifyNowPaymentsCredit } from "./notify.js";
 import { verifyNowPaymentsSignature } from "./signature.js";
 import { findTombstone, recordLateEvent } from "../payments/invoiceCleanup.js";
 
+const LATE_MONEY_STATUSES = new Set(["confirming", "confirmed", "sending", "partially_paid", "finished"]);
+
+/** Best-effort: the response to the provider must never depend on the alert succeeding. */
+async function alertLatePayment({ bot, orderId, status }) {
+  const groupId = process.env.GROUP_ID;
+  if (!groupId) return;
+  try {
+    const notifier = bot || await defaultBot();
+    await notifier?.sendMessage?.(
+      groupId,
+      `🚨 <b>NOWPayments Alert</b>
+
+⚠️ پرداخت دیرهنگام (${String(status).slice(0, 20)}) برای فاکتور پاک‌شده دریافت شد. Order: <code>${String(orderId).replace(/[^A-Za-z0-9_.-]/g, "")}</code>. اعتبار خودکار ثبت نشد؛ بررسی دستی لازم است.`,
+      { parse_mode: "HTML" },
+    );
+  } catch (error) {
+    log("warn", "Late-payment alert failed", { errorType: error?.name || "Error" });
+  }
+}
+
 function send(res, status, body) {
   if (res.headersSent) return;
   res.status(status).json(body);
@@ -71,6 +91,11 @@ export async function handleNowPaymentsIpn(req, res, {
       if (tombstone) {
         await recordLate({ tombstone, status: payload.payment_status });
         log("warn", "Signed IPN for an invoice removed by cleanup; ignored", { requestId });
+        // Money may really have arrived for a removed invoice: it is never credited
+        // automatically, so a human must be told (same as the HooshPay webhook).
+        if (LATE_MONEY_STATUSES.has(String(payload.payment_status || "").toLowerCase())) {
+          await alertLatePayment({ bot, orderId: tombstone.orderId, status: payload.payment_status });
+        }
         return send(res, 200, { ok: true, received: true, ignored: "invoice_removed", request_id: requestId });
       }
     } catch {

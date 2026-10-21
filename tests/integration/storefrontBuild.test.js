@@ -149,7 +149,12 @@ describe("storefront build output is compatible with the strict CSP", { skip: SK
   });
 
   test("routing around the storefront is intact: panel, direct file names, 404s, API and traversal", async () => {
-    const panel = await get("/panel");
+    // /panel is the Next.js app since the cutover (requesting it would boot Next): /admin redirects there,
+    // and the legacy shell kept on disk is still served, still no-store, as /index.html.
+    const admin = await get("/admin");
+    assert.equal(admin.status, 307);
+    assert.equal(admin.headers.location, "/panel");
+    const panel = await get("/index.html");
     assert.equal(panel.status, 200);
     assert.match(text(panel), /SWIFT Admin/);
     assert.equal(panel.headers["cache-control"], "no-store");

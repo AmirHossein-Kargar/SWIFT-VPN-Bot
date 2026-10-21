@@ -40,6 +40,8 @@ const MESSAGES: Record<string, string> = {
   telegram_rejected: "Telegram rejected the message.",
   delivery_unknown: "The delivery outcome is unknown (network error). Check with the user before sending again.",
   bot_unavailable: "The Telegram bot is not running on this server.",
+  broadcast_already_running: "Another broadcast is still sending. Wait for it to finish or cancel it first.",
+  broadcast_lock_unavailable: "The broadcast lock service (Redis) is unavailable, so nothing was sent. Try again shortly.",
   mock_run_in_progress: "A mock-test run is already in progress. Wait for it to finish.",
   mock_run_rate_limited: "A run just finished. Wait a few seconds before starting another.",
   invalid_mock_scenario: "Unknown mock-test scenario.",

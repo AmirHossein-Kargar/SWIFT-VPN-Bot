@@ -82,6 +82,23 @@ export interface AdminPayment {
   lastError: string | null;
   recoveryStatus: string;
   recoveryReason: string | null;
+  /** Server-computed hint only; the delete endpoint re-validates every record. */
+  deletion?: { eligible: boolean; code: string; reason: string | null };
+}
+
+export interface PaymentDeletionPreview {
+  requested: number;
+  eligible: number;
+  ineligible: number;
+  minPendingAgeHours: number;
+  items: { key: string; eligible: boolean; class: "rejected" | "stale" | null; code: string; reason: string | null }[];
+}
+
+export interface PaymentDeletionResult {
+  requested: number;
+  deleted: number;
+  skipped: { key: string; code: string; reason: string | null }[];
+  deletedKeys?: string[];
 }
 
 export interface PaymentDetail extends AdminPayment {
@@ -499,9 +516,11 @@ export interface CustodyReconcileResult {
 export class AdminApiError extends Error {
   status: number;
   code: string;
-  constructor(message: string, status: number, code: string) {
+  details?: { key: string; code: string; reason: string | null }[];
+  constructor(message: string, status: number, code: string, details?: { key: string; code: string; reason: string | null }[]) {
     super(message);
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }

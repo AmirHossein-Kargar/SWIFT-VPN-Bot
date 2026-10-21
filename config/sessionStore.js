@@ -51,7 +51,12 @@ export const getSession = async (userId) => {
 export const setSession = async (userId, sessionData) => {
   if (!redis() || !online()) return;
   try {
-    await redis().set(prefix + userId, JSON.stringify(sessionData), {
+    // Stamp input-step sessions so a stale prompt can expire (see
+    // utils/inputExpiry.js) instead of swallowing a much later message.
+    const stored = sessionData && typeof sessionData === "object" && sessionData.step
+      ? { ...sessionData, updatedAt: Date.now() }
+      : sessionData;
+    await redis().set(prefix + userId, JSON.stringify(stored), {
       EX: SESSION_TTL_SECONDS,
     });
   } catch (err) {

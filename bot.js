@@ -6,21 +6,15 @@ import startBot from "./startBot.js";
 import handleCallbackQuery from "./handlers/handleCallbackQuery.js";
 
 // * 📦 Services & Handlers
-import createTestService from "./services/createTestService.js";
-import handleBuyService from "./services/buyService/buyService.js";
-import handleGuide from "./handlers/message/handleGuide.js";
 import handleMessage from "./handlers/onMessage.js";
-import handleProfile from "./handlers/message/handleProfile.js";
-import handleSupport from "./handlers/message/handleSupport.js";
 import { handleSupportGroupReply } from "./handlers/support/groupReply.js";
-import { keyboardFor, MOCK_TEST_BUTTON } from "./keyboards/mainKeyboard.js";
+import { keyboardFor, MOCK_TEST_BUTTON, ADMIN_PANEL_BUTTON } from "./keyboards/mainKeyboard.js";
+import { legacyMenuAction, runMenuAction } from "./handlers/menuActions.js";
 import { parseStartPayload, handleStartPayload } from "./handlers/message/handleStartPayload.js";
-import sendServiceSelectionMenu from "./services/manageServices/sendServiceSelectionMenu.js";
-import showPaymentMethods from "./handlers/message/showPaymentMethods.js";
 import supportMessageHandler from "./handlers/supportMessageHandler.js";
 
 // * 📦 Utilities & Config
-import { getSession } from "./config/sessionStore.js";
+import { getSession, clearSession } from "./config/sessionStore.js";
 import hideKeyboard from "./utils/hideKeyboard.js";
 import { WELCOME_MESSAGE } from "./messages/staticMessages.js";
 import { getUnsupportedMediaMessage, getSupportDirectButton } from "./messages/supportContact.js";
@@ -119,6 +113,7 @@ bot.on("message", async (msg) => {
     // confirmation for that server-side plan (price is re-read at checkout).
     const startPayload = parseStartPayload(userText);
     if (startPayload && msg.chat?.type === "private") {
+      await hideKeyboard(bot, chatId); // drop any Reply Keyboard left by older versions
       await bot.sendMessage(chatId, WELCOME_MESSAGE, keyboardFor(userId, msg.chat.type));
       await handleStartPayload(bot, chatId, startPayload);
       return;
@@ -126,12 +121,18 @@ bot.on("message", async (msg) => {
 
     switch (userText) {
       case "/start": {
+        // Opening the main menu also clears a persistent Reply Keyboard that an
+        // older version left in this user's client (private chats only).
+        if (msg.chat?.type === "private") await hideKeyboard(bot, chatId);
+        // /start is an explicit reset: abandon any half-finished text input.
+        if (session?.step) await clearSession(chatId);
         await bot.sendMessage(chatId, WELCOME_MESSAGE, keyboardFor(userId, msg.chat?.type));
         break;
       }
       case MOCK_TEST_BUTTON: {
         // Admin-only; for anyone else the text is handled like any other input.
         if (msg.chat?.type === "private" && isAdminUser(userId)) {
+          await hideKeyboard(bot, chatId);
           await handleMockTestEntry(bot, msg);
         } else {
           await handleMessage(bot, msg);
@@ -152,9 +153,10 @@ bot.on("message", async (msg) => {
         break;
       }
       case "/admin":
-      case "👑 SWIFT ADMIN": {
+      case ADMIN_PANEL_BUTTON: {
         // New SWIFT admin panel — private chat for allowlisted admins.
         if (isAdminUser(userId)) {
+          if (userText === ADMIN_PANEL_BUTTON) await hideKeyboard(bot, chatId);
           await handleAdminPanelCommand(bot, msg);
         } else {
           await bot.sendMessage(chatId, "⛔️ این دستور فقط برای ادمین‌های مجاز فعال است.");
@@ -165,31 +167,18 @@ bot.on("message", async (msg) => {
         await showStatusApi(bot, msg);
         break;
       }
-      case "🎁 سرویس تست":
-        await createTestService(bot, msg);
-        break;
-      case "🛒 خرید سرویس":
-        await handleBuyService(bot, chatId);
-        break;
-      case "💰 افزایش موجودی": {
-        await hideKeyboard(bot, chatId);
-        await showPaymentMethods(bot, chatId);
-        break;
+      default: {
+        // Legacy Reply Keyboard taps from clients that still show the old
+        // keyboard: remove it once, then route to the same action the inline
+        // button runs. Private chats only; everything else is ordinary input.
+        const legacyAction = msg.chat?.type === "private" ? legacyMenuAction(userText) : null;
+        if (legacyAction) {
+          await hideKeyboard(bot, chatId);
+          await runMenuAction(bot, { action: legacyAction, chatId, userId, chat: msg.chat, from: msg.from });
+        } else {
+          await handleMessage(bot, msg);
+        }
       }
-      case "👤 پروفایل من":
-        await handleProfile(bot, chatId, userId);
-        break;
-      case "📖 راهنما":
-        await handleGuide(bot, chatId);
-        break;
-      case "🛠 پشتیبانی":
-        await handleSupport(bot, chatId, userId);
-        break;
-      case "📦 سرویس‌های من":
-        await sendServiceSelectionMenu(bot, chatId, userId);
-        break;
-      default:
-        await handleMessage(bot, msg);
     }
   } catch (err) {
     console.error(

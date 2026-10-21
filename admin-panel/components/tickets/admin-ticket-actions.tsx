@@ -54,6 +54,7 @@ export function AdminTicketActions({ ticketId, status }: { ticketId: string; sta
       else toast.success(result.replayed ? "این پاسخ قبلاً ارسال شده بود؛ دوباره ارسال نشد." : "پاسخ ارسال شد.");
       reply.rotate();
       setText("");
+      window.dispatchEvent(new Event("swift:ticket-sync"));
       router.refresh();
     } catch (sendError) {
       // The same operationId is kept, so a retry cannot deliver the reply twice.

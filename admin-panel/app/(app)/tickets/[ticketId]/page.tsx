@@ -6,7 +6,8 @@ import { adminApiGet } from "@/lib/adminApi.server";
 import { AdminApiError } from "@/lib/types";
 import { formatTicketDate, type TicketDetail } from "@/lib/tickets";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { TicketStatusBadge, TicketThread } from "@/components/tickets/ticket-thread";
+import { TicketStatusBadge } from "@/components/tickets/ticket-thread";
+import { LiveTicketThread } from "@/components/tickets/live-ticket-thread";
 import { AdminTicketActions } from "@/components/tickets/admin-ticket-actions";
 
 export const metadata: Metadata = { title: "جزئیات تیکت" };
@@ -40,7 +41,16 @@ export default async function TicketDetailPage({ params }: { params: Promise<{ t
           </dl>
         </CardHeader>
         <CardContent className="space-y-6">
-          <TicketThread messages={messages} attachmentBase="/api/admin/tickets/attachments" viewer="admin" />
+          <LiveTicketThread
+            ticketId={ticket.ticketId}
+            endpoint={`/api/admin/tickets/${encodeURIComponent(ticket.ticketId)}/updates`}
+            attachmentBase="/api/admin/tickets/attachments"
+            viewer="admin"
+            initialMessages={messages}
+            initialCursor={detail.cursor ?? null}
+            initialStatus={ticket.status}
+            initialMessageCount={ticket.messageCount}
+          />
           <AdminTicketActions ticketId={ticket.ticketId} status={ticket.status} />
         </CardContent>
       </Card>

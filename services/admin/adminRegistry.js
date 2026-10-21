@@ -192,16 +192,32 @@ export async function addAdmin({ actorId, operationId, telegramId, displayName =
     metadata: { telegramId: id, displayName: safeName },
     resumeStarted: true,
     execute: async () => {
-      const existing = await model().findOne({ telegramId: id }).lean();
-      if (existing?.removedAt == null) {
-        return { ok: true, alreadyPresent: true, auditSummary: { alreadyPresent: true } };
+      // One atomic upsert decides all three cases; there is no read-then-write window.
+      // The filter matches ONLY a removed record, so:
+      //   - no record at all   -> nothing matches, the upsert inserts a fresh active admin;
+      //   - a removed record   -> it is re-activated in place (history fields rewritten);
+      //   - an ACTIVE record   -> nothing matches, the upsert tries to insert and the unique
+      //     telegramId index rejects it (E11000), which means "already an admin".
+      // The same unique index makes two concurrent adds of the same new id collapse to one row
+      // (the loser also gets E11000), so a duplicate active admin cannot exist.
+      let outcome;
+      try {
+        outcome = await model().updateOne(
+          { telegramId: id, removedAt: { $ne: null } },
+          { $set: { role: "admin", displayName: safeName, addedBy: owner, addedAt: new Date(), removedAt: null, removedBy: null } },
+          { upsert: true }
+        );
+      } catch (error) {
+        if (error?.code === 11000) {
+          return { ok: true, alreadyPresent: true, auditSummary: { alreadyPresent: true } };
+        }
+        throw error;
       }
-      await model().updateOne(
-        { telegramId: id },
-        { $set: { role: "admin", displayName: safeName, addedBy: owner, addedAt: new Date(), removedAt: null, removedBy: null } }
-      );
       await refreshAdminCache();
-      return { ok: true, auditSummary: { telegramId: id } };
+      const reactivated = Number(outcome?.upsertedCount || 0) === 0 && Number(outcome?.modifiedCount || 0) > 0;
+      return reactivated
+        ? { ok: true, reactivated: true, auditSummary: { telegramId: id, reactivated: true } }
+        : { ok: true, auditSummary: { telegramId: id } };
     },
   });
   return result;

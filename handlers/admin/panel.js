@@ -118,6 +118,7 @@ function mainMenuKeyboard() {
       [{ text: "🎁 معرفی‌ها", callback_data: "adm:ref" }, { text: "📋 بازیابی پرداخت‌ها", callback_data: "adm:rec" }],
       [{ text: "📜 گزارش عملیات", callback_data: "adm:audit:1" }, { text: "⚙️ وضعیت سیستم", callback_data: "adm:sys" }],
       [{ text: "🛡 مدیریت مدیران", callback_data: "adm:admins" }, { text: "🧪 تست ماک", callback_data: "adm:mock" }],
+      ...(actorContext.getStore()?.chatType === "private" ? [[{ text: "🏠 منوی اصلی ربات", callback_data: "back_to_home" }]] : []),
     ],
   };
 }
@@ -571,7 +572,9 @@ export async function handleAdminPanelCommand(bot, msg) {
   const chatId = msg.chat.id;
   const text =
     "👑 <b>پنل مدیریت سویفت</b>\n\nبه مرکز کنترل مدیریت خوش آمدید. همه بخش‌ها از همان سرویس‌های امن و گزارش عملیات پنل وب استفاده می‌کنند.";
-  await bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: mainMenuKeyboard() });
+  await actorContext.run({ actorId: String(msg?.from?.id), chatType: msg?.chat?.type }, () =>
+    bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: mainMenuKeyboard() })
+  );
 }
 
 export function handleAdminCallback(bot, query) {

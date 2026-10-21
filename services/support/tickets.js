@@ -317,6 +317,22 @@ export async function changeStatus({ ticketId, status, actor }, deps = {}) {
   return { ticket: publicTicket(updated, audience), changed: true, previous: ticket.status, customerId: updated.userTelegramId };
 }
 
+const MESSAGE_PAGE = 500;
+
+/**
+ * Messages in insertion order (_id), which is also the cursor order used by the
+ * live-update endpoint. Without a cursor the NEWEST `limit` messages are
+ * returned (oldest-first); with one, the next `limit` after it.
+ */
+async function loadMessages(Message, ticketId, { afterId = null, limit = MESSAGE_PAGE } = {}) {
+  if (afterId) {
+    const rows = await Message.find({ ticketId, _id: { $gt: afterId } }).sort({ _id: 1 }).limit(limit + 1).lean();
+    return { rows: rows.slice(0, limit), hasMore: rows.length > limit };
+  }
+  const rows = await Message.find({ ticketId }).sort({ _id: -1 }).limit(limit).lean();
+  return { rows: rows.reverse(), hasMore: false };
+}
+
 export async function listCustomerTickets({ userId, limit = 20 }, deps = {}) {
   const { Ticket } = models(deps);
   const owner = normalizeUserId(userId);
@@ -336,8 +352,8 @@ export async function getCustomerTicket({ userId, ticketId, markRead = true }, d
     await Ticket.updateOne({ ticketId, userTelegramId: owner }, { $set: { unreadForCustomer: 0 } });
     ticket.unreadForCustomer = 0;
   }
-  const messages = await Message.find({ ticketId }).sort({ createdAt: 1 }).limit(500).lean();
-  return { ticket: publicTicket(ticket, "customer"), messages: messages.map(publicMessage) };
+  const { rows } = await loadMessages(Message, ticketId);
+  return { ticket: publicTicket(ticket, "customer"), messages: rows.map(publicMessage), cursor: rows.length ? String(rows[rows.length - 1]._id) : null };
 }
 
 function escapeRegex(text) {
@@ -377,8 +393,46 @@ export async function getAdminTicket({ ticketId, markRead = true }, deps = {}) {
     await Ticket.updateOne({ ticketId }, { $set: { unreadForAdmin: 0 } });
     ticket.unreadForAdmin = 0;
   }
-  const messages = await Message.find({ ticketId }).sort({ createdAt: 1 }).limit(500).lean();
-  return { ticket: publicTicket(ticket, "admin"), messages: messages.map(publicMessage) };
+  const { rows } = await loadMessages(Message, ticketId);
+  return { ticket: publicTicket(ticket, "admin"), messages: rows.map(publicMessage), cursor: rows.length ? String(rows[rows.length - 1]._id) : null };
+}
+
+/**
+ * Incremental read for live views (polled by the web panel and customer area).
+ *
+ * - Ownership: a customer only ever reaches their own ticket; anything else is
+ *   the same "not found" as a missing ticket.
+ * - `afterId` is the id of the last message the client already has. Replaying
+ *   the same cursor returns the same rows, so a repeated or retried poll can
+ *   never duplicate or skip messages.
+ * - Read state is only written when something is actually unread AND the
+ *   caller says the ticket is on screen. The write is compare-and-set on
+ *   messageCount, so a message that arrives mid-poll stays unread.
+ */
+export async function getTicketUpdates({ audience, userId = null, ticketId, afterId = null, markRead = false, limit = 100 }, deps = {}) {
+  const { Ticket, Message } = models(deps);
+  if (!isValidTicketId(ticketId)) throw ERRORS.notFound();
+  const customer = audience === "customer";
+  const filter = customer ? { ticketId, userTelegramId: normalizeUserId(userId) } : { ticketId };
+  const ticket = await Ticket.findOne(filter).lean();
+  if (!ticket) throw ERRORS.notFound();
+
+  const cursor = typeof afterId === "string" && /^[a-f0-9]{24}$/i.test(afterId) ? afterId : null;
+  const size = Math.min(Math.max(Number(limit) || 100, 1), 200);
+  const { rows, hasMore } = await loadMessages(Message, ticketId, { afterId: cursor, limit: size });
+
+  const unreadField = customer ? "unreadForCustomer" : "unreadForAdmin";
+  if (markRead && ticket[unreadField] && !hasMore) {
+    const cleared = await Ticket.updateOne({ ...filter, messageCount: ticket.messageCount }, { $set: { [unreadField]: 0 } });
+    if (cleared?.matchedCount !== 0 && cleared?.modifiedCount !== 0) ticket[unreadField] = 0;
+  }
+  return {
+    ticket: publicTicket(ticket, customer ? "customer" : "admin"),
+    messages: rows.map(publicMessage),
+    cursor: rows.length ? String(rows[rows.length - 1]._id) : cursor,
+    hasMore,
+    serverTime: new Date().toISOString(),
+  };
 }
 
 /** Attachment reference for a download. Pass `ownerId` for customers: other users' messages resolve to not-found. */

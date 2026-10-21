@@ -6,7 +6,7 @@ everything from Telegram or a web dashboard. A public storefront shows live plan
 over to the bot.
 
 > The customer-facing bot and storefront are in **Persian (RTL)**. The Next.js admin dashboard
-> (`/panel-next`) is English; the original `/panel` dashboard has Persian and English.
+> (`/panel`) is English; the original vanilla-JS dashboard (files kept on disk, still served as `/index.html`) has Persian and English.
 
 ## Features
 
@@ -34,7 +34,7 @@ over to the bot.
 flowchart LR
     C["Customers<br/>Telegram"] -->|long polling| BOT["bot.js<br/>handlers · payment flows"]
     A["Admins<br/>Telegram or web"] --> BOT
-    A --> API["Express server.js<br/>/api/admin · /panel · /panel-next"]
+    A --> API["Express server.js<br/>/api/admin · /api/support · /panel"]
     V["Visitors"] --> API
     PP["HooshPay · NOWPayments<br/>webhooks"] --> API
     BOT --> SVC["services/*"]
@@ -65,7 +65,7 @@ callback is verified.
 extend time or data, enable/disable or delete it. `🎁 سرویس تست` gives one free trial per account.
 
 **Admin.** Send `/admin` (or `/panel`) as an allow-listed admin, or open
-`<WEBHOOK_BASE_URL>/panel-next` and sign in with your Telegram ID; the bot sends a one-time code.
+`<WEBHOOK_BASE_URL>/panel` (`/next-panel`, `/panel-next` and `/admin` redirect there) and sign in with your Telegram ID; the bot sends a one-time code.
 
 ## Quick start
 
@@ -77,11 +77,11 @@ cd SWIFT-VPN-Bot
 npm install
 cp .env.example .env      # fill in every required value
 npm run preflight         # validates configuration and probes the services
-npm run build             # builds the /panel-next dashboard and the storefront
+npm run build             # builds the /panel dashboard and the storefront
 npm start                 # bot + web server
 ```
 
-For production run `npm run build` first: `/panel-next` is served from that build, and without the
+For production run `npm run build` first: `/panel` is served from that build, and without the
 storefront build `/` falls back to a static page. The bot itself does not depend on the build.
 
 ### Configuration
@@ -111,7 +111,7 @@ The full reference, with defaults and optional settings, is in
 | `npm start` | Run the bot and web server (`node bot.js`) |
 | `npm run preflight` | Validate configuration and connectivity |
 | `npm test` | Unit and integration suites (`node --test`) |
-| `npm run build` | Build `/panel-next` and the storefront |
+| `npm run build` | Build `/panel` and the storefront |
 | `npm run admin:dev` / `npm run storefront:dev` | Next.js dev servers (ports 3100 / 3101) |
 | `npm run test:e2e` / `npm run test:e2e:store` | Browser suites (need Chrome) |
 
@@ -161,7 +161,7 @@ are in [docs/operations.md](docs/operations.md).
 | `paymentHandlers/`, `services/` | Payment flows and domain logic (`services/admin`, `hooshpay`, `nowpayments`, `buyService`, …) |
 | `models/`, `config/`, `utils/`, `api/` | Mongoose models, environment and Redis setup, helpers, provider clients |
 | `web/` | Admin router, middleware, static dashboard, storefront assets and serving |
-| `admin-panel/` | Next.js admin dashboard served at `/panel-next` |
+| `admin-panel/` | Next.js admin dashboard served at `/panel` |
 | `storefront/` | Next.js static export of the public storefront |
 | `scripts/` | `preflight.js`, `build-storefront.mjs` |
 | `tests/` | Unit, integration and browser tests |

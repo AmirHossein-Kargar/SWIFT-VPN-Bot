@@ -10,6 +10,7 @@ import { reconcileNowPaymentsPayment } from "../nowpayments/recovery.js";
 import { confirmBankPayment } from "../payments/confirmBankPayment.js";
 import { commitProvisionedPurchase, deliverPurchaseNotification } from "../buyService/purchaseLedger.js";
 import trxScanner from "../trxWalletScanner.js";
+import { explainDeletion } from "./paymentDeletion.js";
 import { assertAdminUser, AdminServiceError } from "./authorization.js";
 import { runAuditedAction } from "./audit.js";
 import { escapeRegex, parsePagination, requireReason } from "./validation.js";
@@ -82,6 +83,11 @@ function normalizePayment(provider, record) {
     lastError: record.lastErrorCode || record.errorCode || null,
     recoveryStatus: record.recoveryStatus || "none",
     recoveryReason: record.recoveryReason || null,
+    deletion: (() => {
+      if (provider === "wallet") return { eligible: false, code: "wallet_order", reason: null };
+      const verdict = explainDeletion(provider, record);
+      return { eligible: verdict.eligible, code: verdict.code, reason: verdict.reason };
+    })(),
   };
 }
 
@@ -267,12 +273,9 @@ export async function getPaymentDetail({ actorId, key } = {}) {
       refundedAt: record.refundedAt || null,
     } : null,
     actions: {
-      retryVerification: provider === "hooshpay" && record.status === "pending",
-      retryFulfillment: (provider === "hooshpay" && record.status === "paid" && !record.balanceCredited)
-        || (provider === "nowpayments" && Boolean(record.paymentId) && !record.balanceCredited && !["failed", "expired", "refunded"].includes(record.status))
-        || (provider === "bank" && record.status === "confirmed" && !record.balanceCredited && record.creditLedgerVersion === 2)
-        || (provider === "trx" && record.status === "paid" && !record.balanceCredited && record.creditLedgerVersion === 2)
-        || (provider === "wallet" && ["provisioned", "completed"].includes(record.status)),
+      // Derived from retryPlan(), the exact rule retryPayment() enforces, so the UI never offers a retry that is refused.
+      retryVerification: retryPlan(provider, record).action === "verify",
+      retryFulfillment: (() => { const plan = retryPlan(provider, record); return plan.kind === "attempt" && plan.action !== "verify"; })(),
       manualResolve: normalized.status === "recovery-required" || record.recoveryStatus === "required",
     },
   };
@@ -302,11 +305,61 @@ async function updateRetryResult(provider, id, { ok, errorCode = null, recoveryR
   });
 }
 
-async function safeRetry({ provider, id, record, actorId, operationId }) {
-  await stampRetry(provider, id, operationId);
+/**
+ * What may a retry do to this record? A pure function of the record, evaluated BEFORE any write:
+ *   settled  - the money/order is already settled; a retry is an idempotent no-op (no stamp, no flag, no provider call);
+ *   refuse   - the record is not in a state a retry can act on; the established conflict response, again with no writes;
+ *   attempt  - a genuine recovery attempt is possible.
+ * Only an attempt may stamp retry bookkeeping or (on a real failure) mark recovery as required.
+ */
+const SETTLED_RETRY_STATUS = Object.freeze({
+  hooshpay: "already-fulfilled",
+  nowpayments: "already_credited",
+  bank: "already_confirmed",
+  trx: "already-fulfilled",
+  wallet: "already-completed",
+});
+
+export function retryPlan(provider, record) {
+  const settled = () => ({ kind: "settled", status: SETTLED_RETRY_STATUS[provider] });
+  const refuse = (message, code, status = 409) => ({ kind: "refuse", error: { message, status, code } });
+  const attempt = (action) => ({ kind: "attempt", action });
+  if (provider === "hooshpay") {
+    if (record.balanceCredited) return settled();
+    if (record.status === "pending") return attempt("verify");
+    if (record.status === "paid") return attempt("fulfill");
+    return refuse("فقط فاکتور HooshPay در انتظار بررسی یا پرداخت‌شده بدون شارژ قابل تلاش مجدد است.", "payment_not_retryable");
+  }
+  if (provider === "nowpayments") {
+    if (record.balanceCredited) return settled();
+    if (record.paymentId && !["failed", "expired", "refunded"].includes(record.status)) return attempt("reconcile");
+    return refuse("این پرداخت NOWPayments شناسه قابل بررسی ندارد یا در وضعیت پایانی ناموفق است.", "payment_not_retryable");
+  }
+  if (provider === "bank") {
+    if (record.balanceCredited) return settled();
+    if (record.status === "confirmed" && record.creditLedgerVersion === 2) return attempt("recover");
+    return refuse("پرداخت بانکی به صورت خودکار تأیید نمی‌شود؛ رسید را از مسیر تأیید موجود بررسی کنید.", "bank_auto_verify_unavailable");
+  }
+  if (provider === "trx") {
+    if (record.balanceCredited) return settled();
+    if (record.status === "paid" && record.creditLedgerVersion === 2) return attempt("recover");
+    return refuse("فقط فاکتور TRX پرداخت‌شده با دفتر نسخه‌دار قابل تلاش مجدد است.", "payment_not_retryable");
+  }
+  if (provider === "wallet") {
+    if (record.status === "provisioned") return attempt("commit");
+    if (record.status === "completed") return record.notificationPending ? attempt("deliver") : settled();
+    return refuse("درخواست‌های ساخت در WizardXray به صورت خودکار تکرار نمی‌شوند. وضعیت پنل را بررسی و ساخت نامشخص را دستی تعیین تکلیف کنید.", "non_idempotent_provisioning_blocked");
+  }
+  return refuse("درگاه پرداخت پشتیبانی نشده است.", "invalid_payment_provider", 400);
+}
+
+/** Failures of an eligible attempt that say nothing about the payment itself must not flag it for manual recovery. */
+const BENIGN_RETRY_FAILURES = new Set(["payment_processing"]);
+
+async function attemptRetry({ provider, plan, record, actorId }) {
   const bot = botInstance.bot;
   if (provider === "hooshpay") {
-    if (record.status === "pending") {
+    if (plan.action === "verify") {
       const result = await verifyHooshPayment(record.uid, bot, record.userId);
       if (result.locked) throw new AdminServiceError("بررسی دیگری برای این پرداخت در حال انجام است.", { status: 409, code: "payment_processing" });
       if (result.notPaid) return { ok: true, status: "not-paid", auditSummary: { status: "not-paid" } };
@@ -315,60 +368,43 @@ async function safeRetry({ provider, id, record, actorId, operationId }) {
       }
       return { ok: true, status: result.alreadyCredited ? "already-fulfilled" : "verified", auditSummary: { status: result.alreadyCredited ? "already-fulfilled" : "verified" } };
     }
-    if (record.status === "paid" && !record.balanceCredited) {
-      const result = await fulfillHooshOrder({ invoice: record, bot, chatId: record.userId });
-      if (result.manualReviewRequired) throw new AdminServiceError("این پرداخت قدیمی نیاز به تطبیق دستی دفتر دارد؛ موجودی اعمال نشد.", { status: 409, code: "legacy_payment_manual_review" });
-      if (!(result.credited || result.alreadyCredited || result.notified)) throw new AdminServiceError("تسویه HooshPay همچنان ناقص است.", { status: 503, code: "hooshpay_fulfillment_incomplete" });
-      await HooshPayInvoice.updateOne({ _id: record._id }, { $set: { recoveryStatus: "none", recoveryReason: null } });
-      return { ok: true, status: "fulfilled", auditSummary: { status: "fulfilled" } };
-    }
-    throw new AdminServiceError("فقط فاکتور HooshPay در انتظار بررسی یا پرداخت‌شده بدون شارژ قابل تلاش مجدد است.", { status: 409, code: "payment_not_retryable" });
+    const result = await fulfillHooshOrder({ invoice: record, bot, chatId: record.userId });
+    if (result.manualReviewRequired) throw new AdminServiceError("این پرداخت قدیمی نیاز به تطبیق دستی دفتر دارد؛ موجودی اعمال نشد.", { status: 409, code: "legacy_payment_manual_review" });
+    if (!(result.credited || result.alreadyCredited || result.notified)) throw new AdminServiceError("تسویه HooshPay همچنان ناقص است.", { status: 503, code: "hooshpay_fulfillment_incomplete" });
+    await HooshPayInvoice.updateOne({ _id: record._id }, { $set: { recoveryStatus: "none", recoveryReason: null } });
+    return { ok: true, status: "fulfilled", auditSummary: { status: "fulfilled" } };
   }
   if (provider === "nowpayments") {
-    if (record.paymentId && !record.balanceCredited && !["failed", "expired", "refunded"].includes(record.status)) {
-      const result = await reconcileNowPaymentsPayment({ invoice: record });
-      if (["finished", "already_credited"].includes(result.outcome)) {
-        await NowPaymentsInvoice.updateOne({ _id: record._id }, { $set: { recoveryStatus: "none", recoveryReason: null } });
-        return { ok: true, status: result.outcome, auditSummary: { status: result.outcome } };
-      }
-      if (["waiting", "pending", "confirming", "confirmed", "sending", "partially_paid"].includes(result.outcome)) {
-        return { ok: true, status: result.outcome, auditSummary: { status: result.outcome } };
-      }
-      throw new AdminServiceError("بازیابی NOWPayments کامل نشد.", { status: 503, code: `nowpayments_${result.outcome}` });
+    const result = await reconcileNowPaymentsPayment({ invoice: record });
+    if (["finished", "already_credited"].includes(result.outcome)) {
+      await NowPaymentsInvoice.updateOne({ _id: record._id }, { $set: { recoveryStatus: "none", recoveryReason: null } });
+      return { ok: true, status: result.outcome, auditSummary: { status: result.outcome } };
     }
-    throw new AdminServiceError("این پرداخت NOWPayments شناسه قابل بررسی ندارد یا در وضعیت پایانی ناموفق است.", { status: 409, code: "payment_not_retryable" });
+    if (["waiting", "pending", "confirming", "confirmed", "sending", "partially_paid"].includes(result.outcome)) {
+      return { ok: true, status: result.outcome, auditSummary: { status: result.outcome } };
+    }
+    throw new AdminServiceError("بازیابی NOWPayments کامل نشد.", { status: 503, code: `nowpayments_${result.outcome}` });
   }
   if (provider === "bank") {
-    if (record.status === "confirmed" && !record.balanceCredited && record.creditLedgerVersion === 2) {
-      const result = await confirmBankPayment({ paymentId: record.paymentId, adminId: actorId, bot });
-      if (!["credited", "recovered", "already_confirmed"].includes(result.status)) throw new AdminServiceError("بازیابی پرداخت بانکی کامل نشد.", { status: 409, code: `bank_${result.status}` });
-      await bankInvoice.updateOne({ _id: record._id }, { $set: { recoveryStatus: "none", recoveryReason: null } });
-      return { ok: true, status: result.status, auditSummary: { status: result.status } };
-    }
-    throw new AdminServiceError("پرداخت بانکی به صورت خودکار تأیید نمی‌شود؛ رسید را از مسیر تأیید موجود بررسی کنید.", { status: 409, code: "bank_auto_verify_unavailable" });
+    const result = await confirmBankPayment({ paymentId: record.paymentId, adminId: actorId, bot });
+    if (!["credited", "recovered", "already_confirmed"].includes(result.status)) throw new AdminServiceError("بازیابی پرداخت بانکی کامل نشد.", { status: 409, code: `bank_${result.status}` });
+    await bankInvoice.updateOne({ _id: record._id }, { $set: { recoveryStatus: "none", recoveryReason: null } });
+    return { ok: true, status: result.status, auditSummary: { status: result.status } };
   }
   if (provider === "trx") {
-    if (record.status === "paid" && !record.balanceCredited && record.creditLedgerVersion === 2) {
-      const recovered = await trxScanner.recoverInvoice(record.invoiceId);
-      if (!recovered) throw new AdminServiceError("بازیابی TRX کامل نشد.", { status: 503, code: "trx_recovery_incomplete" });
-      await CryptoInvoice.updateOne({ _id: record._id }, { $set: { recoveryStatus: "none", recoveryReason: null } });
-      return { ok: true, status: "fulfilled", auditSummary: { status: "fulfilled" } };
-    }
-    throw new AdminServiceError("فقط فاکتور TRX پرداخت‌شده با دفتر نسخه‌دار قابل تلاش مجدد است.", { status: 409, code: "payment_not_retryable" });
+    const recovered = await trxScanner.recoverInvoice(record.invoiceId);
+    if (!recovered) throw new AdminServiceError("بازیابی TRX کامل نشد.", { status: 503, code: "trx_recovery_incomplete" });
+    await CryptoInvoice.updateOne({ _id: record._id }, { $set: { recoveryStatus: "none", recoveryReason: null } });
+    return { ok: true, status: "fulfilled", auditSummary: { status: "fulfilled" } };
   }
-  if (provider === "wallet") {
-    if (record.status === "provisioned") {
-      const result = await commitProvisionedPurchase(record, bot);
-      await WalletPurchase.updateOne({ _id: record._id }, { $set: { recoveryStatus: "none", recoveryReason: null } });
-      return { ok: true, status: "fulfilled", notified: Boolean(result?.notified), auditSummary: { status: "fulfilled" } };
-    }
-    if (record.status === "completed" && record.notificationPending) {
-      const notified = await deliverPurchaseNotification(record, bot);
-      return { ok: true, status: notified ? "notification-sent" : "notification-pending", auditSummary: { status: notified ? "notification-sent" : "notification-pending" } };
-    }
-    throw new AdminServiceError("درخواست‌های ساخت در WizardXray به صورت خودکار تکرار نمی‌شوند. وضعیت پنل را بررسی و ساخت نامشخص را دستی تعیین تکلیف کنید.", { status: 409, code: "non_idempotent_provisioning_blocked" });
+  // wallet
+  if (plan.action === "commit") {
+    const result = await commitProvisionedPurchase(record, bot);
+    await WalletPurchase.updateOne({ _id: record._id }, { $set: { recoveryStatus: "none", recoveryReason: null } });
+    return { ok: true, status: "fulfilled", notified: Boolean(result?.notified), auditSummary: { status: "fulfilled" } };
   }
-  throw new AdminServiceError("درگاه پرداخت پشتیبانی نشده است.", { status: 400, code: "invalid_payment_provider" });
+  const notified = await deliverPurchaseNotification(record, bot);
+  return { ok: true, status: notified ? "notification-sent" : "notification-pending", auditSummary: { status: notified ? "notification-sent" : "notification-pending" } };
 }
 
 export async function retryPayment({ actorId, operationId, key, ipAddress } = {}) {
@@ -385,12 +421,21 @@ export async function retryPayment({ actorId, operationId, key, ipAddress } = {}
     resumeStarted: true,
     execute: async () => {
       const { record } = await findPayment(key);
+      // Decide BEFORE touching anything. A settled record is an idempotent no-op and an ineligible one is refused with the
+      // established conflict response; neither stamps retry bookkeeping, calls a provider, or flags the record for recovery.
+      const plan = retryPlan(provider, record);
+      if (plan.kind === "settled") return { ok: true, status: plan.status, noop: true, auditSummary: { status: plan.status, noop: true } };
+      if (plan.kind === "refuse") throw new AdminServiceError(plan.error.message, { status: plan.error.status, code: plan.error.code });
+
+      await stampRetry(provider, id, operationId);
       try {
-        const result = await safeRetry({ provider, id, record, actorId, operationId });
+        const result = await attemptRetry({ provider, plan, record, actorId });
         await updateRetryResult(provider, id, { ok: true });
         return result;
       } catch (error) {
-        await updateRetryResult(provider, id, { ok: false, errorCode: error?.code || "RETRY_FAILED", recoveryRequired: true }).catch(() => {});
+        // Only a genuine, eligible attempt that failed in a way that concerns the payment itself warrants manual recovery.
+        const recoveryRequired = !BENIGN_RETRY_FAILURES.has(error?.code);
+        await updateRetryResult(provider, id, { ok: false, errorCode: error?.code || "RETRY_FAILED", recoveryRequired }).catch(() => {});
         throw error;
       }
     },

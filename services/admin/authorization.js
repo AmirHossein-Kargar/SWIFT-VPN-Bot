@@ -1,8 +1,9 @@
 import { isAdmin, isAdminUser } from "../../utils/auth.js";
 
 export class AdminServiceError extends Error {
-  constructor(message, { status = 400, code = "admin_request_failed" } = {}) {
+  constructor(message, { status = 400, code = "admin_request_failed", details = null } = {}) {
     super(message);
+    if (details) this.details = details;
     this.name = "AdminServiceError";
     this.status = status;
     this.code = code;

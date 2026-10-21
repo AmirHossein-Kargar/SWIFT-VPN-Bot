@@ -350,7 +350,7 @@ describe("Telegram subscription duration selection UI and navigation", () => {
     // Verify back navigation returns to the 4-duration menu
     const backBot = makeBotStub();
     await handleCallbackQuery(backBot, makeQuery("buy_service_back"));
-    const durationMenuMsg = backBot.sent.find((e) => e.kind === "message");
+    const durationMenuMsg = backBot.sent.find((e) => e.kind === "edit" || e.kind === "message");
     assert.ok(durationMenuMsg);
     const durationCallbacks = durationMenuMsg.opts.reply_markup.inline_keyboard.map((r) => r[0].callback_data);
     assert.deepEqual(durationCallbacks, [

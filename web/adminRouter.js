@@ -8,6 +8,7 @@ import { listUsers, getUserDetail, changeUserBalance, setUserBlocked, getReferra
 import { listVpns, getVpnDetail, performVpnAction, listRemoteClients } from "../services/admin/vpns.js";
 import { listProducts, createProduct, updateProduct, duplicateProduct, reorderProducts } from "../services/admin/products.js";
 import { listPayments, getPaymentDetail, retryPayment, markPaymentRecoveryRequired, resolvePaymentRecovery, confirmBankInvoice, rejectBankInvoice } from "../services/admin/payments.js";
+import { previewPaymentDeletion, deletePayments } from "../services/admin/paymentDeletion.js";
 import { getRecoveryQueue, retrySafeRecoveryItems } from "../services/admin/recovery.js";
 import {
   getCustodyOverview,
@@ -29,13 +30,14 @@ import { getAnalyticsReport, reportToCsv } from "../services/admin/analyticsRepo
 import { getSystemHealth } from "../services/admin/monitoring.js";
 import { listAuditLogs } from "../services/admin/audit.js";
 import { listAdmins, addAdmin, removeAdmin } from "../services/admin/adminRegistry.js";
+import { getUserProfilePhoto } from "../services/admin/userPhoto.js";
 import { sendUserMessage } from "../services/admin/userMessaging.js";
 import { getSettingsOverview } from "../services/admin/settings.js";
-import { listSupportTickets, getSupportTicket, replyToSupportTicket, setSupportTicketStatus } from "../services/admin/tickets.js";
+import { listSupportTickets, getSupportTicket, getSupportTicketUpdates, replyToSupportTicket, setSupportTicketStatus } from "../services/admin/tickets.js";
 import { getMessageAttachment } from "../services/support/tickets.js";
 import { streamAttachment } from "../services/support/attachments.js";
 import { default as botInstance } from "../config/botInstance.js";
-import { attachAdminSession, requireAdminSession, requireCsrfToken, requireSameOrigin, adminApiHeaders, rateLimitMiddleware, clientIp, sessionCookieOptions, clearSessionCookieOptions, LEGACY_SESSION_COOKIE_PATH, NEXT_PANEL_SESSION_COOKIE_PATH, adminApiErrorHandler } from "./adminMiddleware.js";
+import { attachAdminSession, requireAdminSession, requireCsrfToken, requireSameOrigin, adminApiHeaders, rateLimitMiddleware, clientIp, sessionCookieOptions, clearSessionCookieOptions, LEGACY_SESSION_COOKIE_PATH, NEXT_PANEL_SESSION_COOKIE_PATH, RETIRED_PANEL_COOKIE_PATH, adminApiErrorHandler } from "./adminMiddleware.js";
 import { runMockTests, listMockRuns, getMockRun } from "../services/mockTests/runner.js";
 
 const router = express.Router();
@@ -122,12 +124,13 @@ router.post("/auth/verify", rateLimitMiddleware({ limit: 10 }), requireBody(), a
       metadata: { channel: "web" },
     });
     // Issued twice, at two disjoint, narrow paths: /api/admin (both panels'
-    // own fetches) and /next-panel (so the Next.js admin panel can verify
+    // own fetches) and /panel (so the Next.js admin panel can verify
     // the session server-side on its own page requests — see
     // NEXT_PANEL_SESSION_COOKIE_PATH for why one cookie cannot cover both).
     res.cookie(ADMIN_SESSION_COOKIE, token, sessionCookieOptions(ttlSeconds));
     res.cookie(ADMIN_SESSION_COOKIE, token, sessionCookieOptions(ttlSeconds, NEXT_PANEL_SESSION_COOKIE_PATH));
     res.clearCookie(ADMIN_SESSION_COOKIE, clearSessionCookieOptions(LEGACY_SESSION_COOKIE_PATH));
+    res.clearCookie(ADMIN_SESSION_COOKIE, clearSessionCookieOptions(RETIRED_PANEL_COOKIE_PATH));
     res.json({ ok: true, actorTelegramId: session.actorTelegramId, csrfToken: session.csrfToken, expiresInSeconds: ttlSeconds });
   } catch (error) { next(error); }
 });
@@ -140,6 +143,7 @@ router.post("/auth/logout", requireBody(), (req, res, next) => {
     res.clearCookie(ADMIN_SESSION_COOKIE, clearSessionCookieOptions());
     res.clearCookie(ADMIN_SESSION_COOKIE, clearSessionCookieOptions(NEXT_PANEL_SESSION_COOKIE_PATH));
     res.clearCookie(ADMIN_SESSION_COOKIE, clearSessionCookieOptions(LEGACY_SESSION_COOKIE_PATH));
+    res.clearCookie(ADMIN_SESSION_COOKIE, clearSessionCookieOptions(RETIRED_PANEL_COOKIE_PATH));
     if (actorId) {
       await auditAuthEvent({
         actorTelegramId: actorId,
@@ -256,6 +260,21 @@ router.get("/users", async (req, res, next) => {
 router.get("/users/:telegramId", async (req, res, next) => {
   try { res.json({ ok: true, data: await getUserDetail({ actorId: req.adminActorId, telegramId: req.params.telegramId }) }); }
   catch (error) { next(error); }
+});
+
+router.get("/users/:telegramId/photo", async (req, res, next) => {
+  try {
+    const photo = await getUserProfilePhoto({ actorId: req.adminActorId, telegramId: req.params.telegramId, ifNoneMatch: req.get("if-none-match") });
+    if (photo.status === "ok" || photo.status === "not_modified") {
+      // private: this is a user's personal image behind admin auth, never for shared caches.
+      res.set({ "Cache-Control": "private, max-age=3600", ETag: photo.etag, "X-Content-Type-Options": "nosniff" });
+      if (photo.status === "not_modified") return res.status(304).end();
+      res.set("Content-Type", photo.contentType);
+      return res.status(200).send(photo.body);
+    }
+    res.set("Cache-Control", "private, max-age=300");
+    return res.status(photo.status === "none" ? 404 : 502).json({ ok: false, error: photo.status === "none" ? "no_photo" : "photo_unavailable" });
+  } catch (error) { next(error); }
 });
 
 router.post("/users/:telegramId/balance", requireBody(), async (req, res, next) => {
@@ -376,6 +395,24 @@ router.get("/payments", async (req, res, next) => {
       query: { status: req.query.status, search: req.query.search, provider: req.query.provider, page: req.query.page, pageSize: req.query.pageSize },
     });
     res.json({ ok: true, data });
+  } catch (error) { next(error); }
+});
+
+router.post("/payments/delete-preview", requireBody(), async (req, res, next) => {
+  try { res.json({ ok: true, data: await previewPaymentDeletion({ actorId: req.adminActorId, keys: req.body?.keys }) }); }
+  catch (error) { next(error); }
+});
+
+router.post("/payments/delete", requireBody(), async (req, res, next) => {
+  try {
+    const result = await deletePayments({
+      actorId: req.adminActorId,
+      operationId: parseOperationId(req.body),
+      keys: req.body?.keys,
+      confirmCount: req.body?.confirmCount,
+      ipAddress: clientIp(req),
+    });
+    res.json({ ok: true, data: result });
   } catch (error) { next(error); }
 });
 
@@ -692,6 +729,12 @@ router.get("/tickets/attachments/:messageId", async (req, res, next) => {
     assertAdminUser(req.adminActorId);
     const attachment = await getMessageAttachment({ messageId: req.params.messageId });
     await streamAttachment({ bot: botInstance.bot, attachment, res });
+  } catch (error) { next(error); }
+});
+
+router.get("/tickets/:ticketId/updates", async (req, res, next) => {
+  try {
+    res.json({ ok: true, data: await getSupportTicketUpdates({ actorId: req.adminActorId, ticketId: req.params.ticketId, afterId: req.query.after, markRead: req.query.markRead }) });
   } catch (error) { next(error); }
 });
 

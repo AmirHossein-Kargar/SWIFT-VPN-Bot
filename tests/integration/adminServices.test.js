@@ -7,6 +7,7 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { connectTestDB, disconnectTestDB } from "../helpers/db.js";
 import { waitFor } from "../helpers/util.js";
+import { redisTestsConfigured } from "../helpers/redisRequirement.js";
 
 process.env.ADMINS = "424242";
 process.env.GROUP_ID = "";
@@ -17,7 +18,7 @@ const skip = (name, fn) => test(name, { skip: dbAvailable ? false : "MongoDB una
 const ADMIN = "424242";
 
 let User, WalletPurchase, HooshPayInvoice, NowPaymentsInvoice, CryptoInvoice, bankInvoice, AdminProduct;
-let users, vpns, payments, products, recovery, dashboard, analytics, broadcast, plans, audit;
+let users, vpns, payments, products, recovery, dashboard, analytics, broadcast, plans, audit, seedDefaultProducts;
 
 if (dbAvailable) {
   ({ default: User } = await import("../../models/User.js"));
@@ -198,7 +199,8 @@ describe("product catalog", () => {
     assert.equal(reordered[0].id, ids[1]);
     await assert.rejects(
       () => products.reorderProducts({ actorId: ADMIN, operationId: opId(), productIds: [ids[0], ids[0]] }),
-      /duplicates/
+      // The message is localized (Persian) by design; the stable contract is the error code.
+      (error) => error.code === "duplicate_product_id" && error.status === 400
     );
   });
 
@@ -356,9 +358,9 @@ describe("VPN registry", () => {
     await User.create({ telegramId: id, username: `vpnuser_${id}` });
     await WalletPurchase.create({
       purchaseId, telegramId: id, planId: "plan30_50", planName: "50GB 30d", gig: 50, days: 30,
-      amount: 42_000, status: "completed", completedAt: new Date(), expiresAt: new Date(Date.now() + 15 * 24 * 3600 * 1000),
+      amount: 42_000, status: "completed", completedAt: new Date(), expiresAt: new Date(Date.now() + 5 * 24 * 3600 * 1000),
     });
-    await User.updateOne({ telegramId: id }, { $push: { services: { username: `svc_vpn_${id}`, purchaseId, trafficGb: 50, expiresAt: new Date(Date.now() + 15 * 24 * 3600 * 1000) } } });
+    await User.updateOne({ telegramId: id }, { $push: { services: { username: `svc_vpn_${id}`, purchaseId, trafficGb: 50, expiresAt: new Date(Date.now() + 5 * 24 * 3600 * 1000) } } });
 
     const list = await vpns.listVpns({ actorId: ADMIN, query: { search: id, status: "active" } });
     assert.equal(list.total, 1);
@@ -378,7 +380,12 @@ describe("VPN registry", () => {
     assert.equal(detail.wizardXray.status, "unavailable");
     assert.ok(detail.wizardXray.error.length > 0);
     assert.equal(detail.availableActions.changeLink, false);
-    assert.ok(detail.unavailableActions.extendTime.includes("no safe"));
+    // extend-time / increase-traffic are supported provider actions now, so while WizardXray is down they are just unavailable
+    // (the old "no safe endpoint" text described a limitation that no longer exists); regenerate-config stays explained.
+    assert.equal(detail.availableActions.extendTime, false);
+    assert.equal(detail.availableActions.increaseTraffic, false);
+    assert.equal(detail.availableActions.revoke, false);
+    assert.match(detail.unavailableActions.regenerateConfig, /regenerate-config/);
 
     await assert.rejects(
       () => vpns.performVpnAction({ actorId: ADMIN, operationId: opId(), username: `svc_det_${id}`, action: "change-link", reason: "test action" }),
@@ -388,13 +395,33 @@ describe("VPN registry", () => {
 
   skip("unsupported WizardXray actions are refused, not faked", async () => {
     await assert.rejects(
-      () => vpns.performVpnAction({ actorId: ADMIN, operationId: opId(), username: "svc_x", action: "extend-time", reason: "test" }),
+      () => vpns.performVpnAction({ actorId: ADMIN, operationId: opId(), username: "svc_x", action: "regenerate-config", reason: "unsupported action test" }),
       (error) => error.status === 501
     );
   });
 });
 
 describe("broadcast", () => {
+  // The one-active-broadcast lease lives in Redis. config/redisClient.js reads REDIS_URL when it is first imported and the
+  // shared client must be connected explicitly (nothing else in the test suite does that). Run this block against a
+  // DISPOSABLE loopback Redis only, e.g. REDIS_URL=redis://127.0.0.1:6390 (see docs/admin.md). Without REDIS_URL the
+  // lease test below is reported as skipped with that reason; it is never counted as passed.
+  const redisConfigured = redisTestsConfigured(); // throws under REQUIRE_REDIS_TESTS=1 when REDIS_URL is missing
+  const BROADCAST_LEASE_KEY = "admin:broadcast:active";
+  let redis = null;
+
+  before(async () => {
+    if (!dbAvailable || !redisConfigured) return;
+    redis = await import("../../config/redisClient.js");
+    await redis.connectRedis(); // a configured-but-unreachable Redis is a setup error: fail loudly, never skip
+    await redis.default.del(BROADCAST_LEASE_KEY); // start from a clean lease (disposable Redis only)
+  });
+
+  after(async () => {
+    if (!redis) return;
+    try { await redis.default.del(BROADCAST_LEASE_KEY); } finally { await redis.closeRedis(); }
+  });
+
   skip("preview validates message and buttons", async () => {
     const ok = await broadcast.previewBroadcast({ actorId: ADMIN, message: "Hello everyone", buttons: [] });
     assert.equal(ok.preview.characterCount, 14);
@@ -408,7 +435,12 @@ describe("broadcast", () => {
     );
   });
 
-  skip("custom broadcast records per-recipient results without a bot (fails safely)", async () => {
+  test("custom broadcast records per-recipient results without a bot (fails safely)", {
+    skip: !dbAvailable ? "MongoDB unavailable" : (redisConfigured ? false : "Redis not configured: set REDIS_URL to a disposable loopback Redis (docs/admin.md)"),
+  }, async () => {
+    // Safety guard: no Telegram bot instance exists in tests, so nothing can be sent to anyone.
+    assert.equal((await import("../../config/botInstance.js")).default.bot, null, "a real bot instance must never exist in this test");
+    assert.equal(redis.isRedisReady(), true, "the shared Redis client is connected before the broadcast starts");
     const id = tid();
     await User.create({ telegramId: id });
     const operation = opId();
@@ -430,5 +462,9 @@ describe("broadcast", () => {
 
     const cancel = await broadcast.requestBroadcastCancel({ actorId: ADMIN, operationId: operation });
     assert.equal(cancel.alreadyFinished, true);
+
+    // The lease taken for this run is released when it finishes (the release is asynchronous), so a later broadcast can start.
+    const released = await waitFor(() => redis.default.get(BROADCAST_LEASE_KEY).then((value) => (value === null ? true : null)), { timeoutMs: 5000 });
+    assert.equal(released, true, "the active-broadcast lease is released after the broadcast finishes");
   });
 });

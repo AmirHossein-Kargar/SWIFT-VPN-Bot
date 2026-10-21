@@ -1,4 +1,5 @@
-import { getSession, setSession } from "../config/sessionStore.js";
+import { clearSession, getSession, setSession } from "../config/sessionStore.js";
+import { isInputStepExpired } from "../utils/inputExpiry.js";
 import User from "../models/User.js";
 import payBank from "../paymentHandlers/payBank.js";
 import handleTrxAmount from "../paymentHandlers/handleTrxAmount.js";
@@ -63,6 +64,16 @@ async function handleSendConfig(bot, msg, session) {
 async function handleMessage(bot, msg) {
   const chatId = msg.chat.id;
   const session = await getSession(chatId);
+
+  // An abandoned input prompt must not capture this message: drop the stale
+  // state and send the user back to the menu with an inline button.
+  if (isInputStepExpired(session)) {
+    await clearSession(chatId);
+    await bot.sendMessage(chatId, "⌛ مهلت ورود اطلاعات به پایان رسید. لطفاً از منو دوباره شروع کنید.", {
+      reply_markup: { inline_keyboard: [[{ text: "🏠 منوی اصلی", callback_data: "back_to_home" }]] },
+    });
+    return;
+  }
 
   // SWIFT admin panel multi-step inputs (search, balance, broadcast, …).
   // Returns true only when the message belonged to an admin panel flow.

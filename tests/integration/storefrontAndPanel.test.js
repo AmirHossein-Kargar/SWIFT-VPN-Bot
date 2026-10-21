@@ -76,8 +76,12 @@ describe("routing", () => {
     assert.ok(!page.text.includes("SWIFT Admin"), "the admin shell is not served at /");
   });
 
-  test("/panel and /admin serve the admin app (no-store, noindex)", async () => {
-    for (const path of ["/panel", "/panel/", "/admin"]) {
+  test("/admin redirects to the Next.js panel at /panel; the legacy shell stays served as /index.html (no-store, noindex)", async () => {
+    // /panel itself is the Next.js app now; requesting it here would boot Next (covered by nextPanelHeaders / e2e).
+    const moved = await fetch(`${baseUrl}/admin`, { redirect: "manual" });
+    assert.equal(moved.status, 307);
+    assert.equal(moved.headers.get("location"), "/panel");
+    for (const path of ["/index.html"]) {
       const page = await call("GET", path);
       assert.equal(page.status, 200, path);
       assert.match(page.text, /SWIFT Admin/);
@@ -124,7 +128,10 @@ function assertNotFramable(headers, label) {
 
 describe("HTML security headers (clickjacking and caching)", () => {
   test("the admin sign-in shell is never framable or publicly cached, by any URL", async () => {
-    for (const path of ["/panel", "/admin", "/panel/x", "/index.html"]) {
+    // /panel and /panel/* are the Next.js app since the cutover (its headers are covered by
+    // nextPanelHeaders.test.js, and requesting it here would boot Next); /admin now redirects.
+    // The legacy shell files stay on disk and remain reachable, with the same protections, as /index.html.
+    for (const path of ["/index.html"]) {
       const page = await call("GET", path);
       assert.equal(page.status, 200, path);
       assert.match(page.text, /SWIFT Admin/, path);
@@ -250,7 +257,7 @@ describe("Telegram integration", () => {
   });
 
   test("the mock-test button is offered only to admins in private chats", () => {
-    const rows = (kb) => kb.reply_markup.keyboard.flat();
+    const rows = (kb) => kb.reply_markup.inline_keyboard.flat().map((b) => b.text);
     assert.ok(rows(keyboardFor(ADMIN, "private")).includes(MOCK_TEST_BUTTON));
     assert.ok(!rows(keyboardFor("999", "private")).includes(MOCK_TEST_BUTTON));
     assert.ok(!rows(keyboardFor(ADMIN, "supergroup")).includes(MOCK_TEST_BUTTON));
@@ -266,28 +273,29 @@ describe("admin session hardening", () => {
     const issued = setCookies.filter((entry) => /swift_admin_session=(?!;)[^;]+/.test(entry));
     assert.equal(issued.length, 2, "one issued cookie per consumer, not a single Path=/ cookie");
     const apiCookie = setCookies.find((entry) => /Path=\/api\/admin(;|$)/i.test(entry));
-    const panelCookie = setCookies.find((entry) => /Path=\/next-panel(;|$)/i.test(entry));
+    const panelCookie = setCookies.find((entry) => /Path=\/panel(;|$)/i.test(entry));
     assert.ok(apiCookie, "a cookie scoped to /api/admin");
-    assert.ok(panelCookie, "a cookie scoped to /next-panel");
+    assert.ok(panelCookie, "a cookie scoped to /panel");
     for (const entry of [apiCookie, panelCookie]) {
       assert.match(entry, /swift_admin_session=[^;]+/);
       assert.match(entry, /HttpOnly/i);
       assert.match(entry, /Secure/i);
       assert.match(entry, /SameSite=Lax/i);
     }
+    assert.ok(setCookies.some((entry) => /swift_admin_session=;[^]*Path=\/next-panel(;|$)/i.test(entry)), "login expires the pre-cutover /next-panel cookie");
     // Same underlying session (and therefore the same revocation) either way.
     assert.equal(apiCookie.match(/swift_admin_session=([^;]+)/)[1], panelCookie.match(/swift_admin_session=([^;]+)/)[1]);
   });
 
-  test("a request carrying only the /next-panel-scoped cookie is still recognized as authenticated", async () => {
+  test("a request carrying only the /panel-scoped cookie is still recognized as authenticated", async () => {
     // This is exactly what the Next.js SSR layer does: it forwards whatever
-    // cookie header the browser attached to a /next-panel/* page request to
+    // cookie header the browser attached to a /panel/* page request to
     // a server-to-server loopback call against /api/admin/auth/session. A
-    // browser visiting /next-panel only ever attaches the /next-panel cookie
+    // browser visiting /panel only ever attaches the /panel cookie
     // (never the /api/admin one), so this is the real-world shape of that
     // forwarded header, not the combined pair a same-path request would see.
     const { verify } = await signIn();
-    const panelCookie = verify.headers.getSetCookie().find((entry) => /Path=\/next-panel(;|$)/i.test(entry));
+    const panelCookie = verify.headers.getSetCookie().find((entry) => /Path=\/panel(;|$)/i.test(entry));
     const cookie = panelCookie.split(";")[0];
     const session = await call("GET", "/api/admin/auth/session", { cookie });
     assert.equal(session.data.authenticated, true);
@@ -296,13 +304,14 @@ describe("admin session hardening", () => {
 
   test("logout clears the session everywhere: both current cookie paths and the pre-hardening legacy path", async () => {
     const { verify, cookie, csrf } = await signIn();
-    const panelCookie = verify.headers.getSetCookie().find((entry) => /Path=\/next-panel(;|$)/i.test(entry)).split(";")[0];
+    const panelCookie = verify.headers.getSetCookie().find((entry) => /Path=\/panel(;|$)/i.test(entry)).split(";")[0];
 
     const logout = await call("POST", "/api/admin/auth/logout", { cookie, csrf });
     const cleared = logout.headers.getSetCookie();
     assert.ok(cleared.some((entry) => /Path=\/api\/admin(;|$)/i.test(entry)), "clears the /api/admin cookie");
-    assert.ok(cleared.some((entry) => /Path=\/next-panel(;|$)/i.test(entry)), "clears the /next-panel cookie");
+    assert.ok(cleared.some((entry) => /Path=\/panel(;|$)/i.test(entry)), "clears the /panel cookie");
     assert.ok(cleared.some((entry) => /Path=\/(;|,|$)/.test(entry)), "clears the legacy root-path cookie");
+    assert.ok(cleared.some((entry) => /Path=\/next-panel(;|$)/i.test(entry)), "also expires the retired /next-panel cookie");
 
     // The underlying session is gone, so neither cookie copy still works.
     assert.equal((await call("GET", "/api/admin/auth/session", { cookie })).data.authenticated, false);
