@@ -12,6 +12,7 @@ import handleGuide from "./handlers/message/handleGuide.js";
 import handleMessage from "./handlers/onMessage.js";
 import handleProfile from "./handlers/message/handleProfile.js";
 import handleSupport from "./handlers/message/handleSupport.js";
+import { handleSupportGroupReply } from "./handlers/support/groupReply.js";
 import { keyboardFor, MOCK_TEST_BUTTON } from "./keyboards/mainKeyboard.js";
 import { parseStartPayload, handleStartPayload } from "./handlers/message/handleStartPayload.js";
 import sendServiceSelectionMenu from "./services/manageServices/sendServiceSelectionMenu.js";
@@ -103,6 +104,8 @@ bot.on("message", async (msg) => {
 
     // بررسی اینکه آیا پیام از گروه ادمین است
     if (process.env.GROUP_ID && chatId.toString() === process.env.GROUP_ID) {
+      // Replies to a ticket message are delivered to that ticket's customer.
+      if (msg.reply_to_message && (await handleSupportGroupReply(bot, msg))) return;
       // اگر در این چت گروهی فرآیند فعالی وجود دارد (برای ادمین)، همان هندلر عمومی را صدا بزن
       if (session?.step) {
         await handleMessage(bot, msg);
@@ -222,6 +225,8 @@ bot.on("photo", async (msg) => {
   try {
     const userId = msg.from?.id;
     const chatId = msg.chat?.id;
+    // Admin-group photos are ticket replies, handled by the "message" event.
+    if (msg.chat?.type !== "private" && process.env.GROUP_ID && String(chatId) === process.env.GROUP_ID) return;
     if (await refuseIfBlocked({ bot, userId, chatType: msg.chat?.type, silent: true })) return;
     // Support sessions are keyed by user id. Payment sessions are keyed by
     // chat id. Those are the same in private chats; in a group they are not.
@@ -251,6 +256,7 @@ bot.on("photo", async (msg) => {
 bot.on("video", async (msg) => {
   try {
     const userId = msg.from?.id;
+    if (msg.chat?.type !== "private") return;
     if (await refuseIfBlocked({ bot, userId, chatType: msg.chat?.type, silent: true })) return;
     const session = await getSession(userId);
 

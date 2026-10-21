@@ -15,6 +15,7 @@ import {
 } from "./services/hooshpay/paymentValidation.js";
 import { recordWebhookOutcome } from "./services/admin/monitoring.js";
 import adminRouter from "./web/adminRouter.js";
+import supportRouter from "./web/supportRouter.js";
 import storeRouter from "./web/storeRouter.js";
 import { serveAdminSpa, notFoundHandler } from "./web/spa.js";
 import { nextAdminMiddleware } from "./web/nextAdminMiddleware.js";
@@ -360,6 +361,7 @@ app.get("/ready", (_req, res) => {
 // Admin Panel API + web dashboard (mounted after the webhook route so the
 // payment webhook path is untouched).
 app.use("/api/admin", adminRouter);
+app.use("/api/support", supportRouter);
 app.use("/api/store", storeRouter);
 // The in-progress Next.js admin panel (see README for scope); the legacy
 // vanilla-JS panel below still serves everything else at /panel.

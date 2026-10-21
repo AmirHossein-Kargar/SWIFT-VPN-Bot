@@ -8,7 +8,7 @@ business rules are implemented once.
 flowchart TD
     TG["Telegram admin panel<br/>(handlers/admin)"] --> S
     LEG["Web dashboard /panel<br/>(static SPA, Persian + English)"] --> API["/api/admin/*<br/>(web/adminRouter.js)"]
-    NEXT["Web dashboard /panel-next<br/>(Next.js, English)"] --> API
+    NEXT["Web dashboard /next-panel<br/>(Next.js, English)"] --> API
     API --> S["services/admin/*<br/>authorization · audit · users · vpns · payments<br/>recovery · products · broadcast · analytics · health"]
     S --> M[("MongoDB")]
     S --> R[("Redis<br/>sessions · locks · rate limits")]
@@ -20,7 +20,7 @@ flowchart TD
 | Surface | How to open it | Notes |
 |---|---|---|
 | Telegram panel | Send `/admin`, `/panel`, `پنل` or the **👑 SWIFT ADMIN** button | Allow-listed admins in a private chat, or the admin group (`GROUP_ID`). Every callback is re-authorized on the server |
-| Web `/panel-next` | `<WEBHOOK_BASE_URL>/panel-next` | Next.js dashboard, English only, light/dark/system theme. Needs `npm run build` (see [storefront and build](storefront.md#build-and-serving)) |
+| Web `/next-panel` | `<WEBHOOK_BASE_URL>/next-panel` | Next.js dashboard, English only, light/dark/system theme. Needs `npm run build` (see [storefront and build](storefront.md#build-and-serving)) |
 | Web `/panel` (alias `/admin`) | `<WEBHOOK_BASE_URL>/panel` | Original static dashboard, Persian (RTL) and English, hash-routed |
 
 ### Web sign-in
@@ -29,7 +29,7 @@ flowchart TD
 2. The bot sends a one-time code by direct message (valid 5 minutes, single use, stored as SHA-256).
 3. The server issues a Redis-backed session: `HttpOnly`, `Secure`, `SameSite=Lax` cookie, a
    double-submit CSRF token, and a lifetime of `ADMIN_SESSION_TTL_SECONDS`.
-   The cookie is scoped to `/api/admin` and `/panel-next` only. Signing in again rotates the session.
+   The cookie is scoped to `/api/admin` and `/next-panel` only. Signing in again rotates the session.
 
 Mutating requests need the session, a valid CSRF token and a same-origin request, and are
 rate-limited. Sign-in requests are rate-limited per Telegram ID and per IP.
@@ -162,4 +162,5 @@ after they first entered that state**.
 - Activity and referral tracking start when a user first interacts after the feature shipped;
   older accounts appear on their next interaction. Services registered before purchase tracking
   existed show an unknown expiry until looked up individually.
-- The legacy `/panel` and the new `/panel-next` run side by side; both use the same API.
+- The legacy `/panel` and the new `/next-panel` run side by side; both use the same API. `/panel-next` (the previous name of `/next-panel`) redirects permanently.
+- Support tickets live in `/next-panel/tickets` (admins) and `/next-panel/support` (customers); see [support](support.md).

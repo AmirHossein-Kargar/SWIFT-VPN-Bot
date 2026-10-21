@@ -1,60 +1,21 @@
-import { getSession, setSession } from "../../config/sessionStore.js";
-import { getSupportMessage, getSupportDirectButton } from "../../messages/supportContact.js";
+import hideKeyboard from "../../utils/hideKeyboard.js";
+import { showSupportMenu, logSupportError } from "../support/supportFlow.js";
 
+/**
+ * "🛠 پشتیبانی" button. The support menu is a single message that is edited in
+ * place by the sup_* callbacks. There is deliberately no temporary "loading"
+ * message and no delayed follow-up: the old two-step flow (placeholder, then a
+ * 1s timer that replaced it) left the placeholder on screen whenever the user
+ * navigated away, tapped twice, or the process restarted before the timer ran.
+ */
 const handleSupport = async (bot, chatId, userId) => {
-  const supportMessage = getSupportMessage();
-
-  const supportKeyboard = {
-    reply_markup: {
-      inline_keyboard: [
-        ...getSupportDirectButton(),
-        [{ text: "🏠 بازگشت به منوی اصلی", callback_data: "back_to_home" }],
-      ],
-    },
-  };
-
-  const tempMsg = await bot.sendMessage(chatId, "⌛ در حال بارگذاری...", {
-    reply_markup: { remove_keyboard: true },
-  });
-
-  const session = (await getSession(userId)) || {};
-  session.support = true;
-  session.supportMessageId = tempMsg.message_id;
-  await setSession(userId, session);
-
-  setTimeout(async () => {
-    try {
-      // Check if session still exists and support is still active
-      const currentSession = await getSession(userId);
-      if (!currentSession?.support) {
-        // User has already left support mode, don't proceed
-        return;
-      }
-
-      // Try to delete the temp message
-      try {
-        await bot.deleteMessage(chatId, tempMsg.message_id);
-      } catch (error) {
-        console.log("❗️خطا در حذف پیام موقت:", error.message);
-        // Continue even if temp message deletion fails
-      }
-
-      const sentMessage = await bot.sendMessage(
-        chatId,
-        supportMessage,
-        supportKeyboard
-      );
-
-      // Update session with the actual support message ID
-      const updatedSession = await getSession(userId);
-      if (updatedSession?.support) {
-        updatedSession.supportMessageId = sentMessage.message_id;
-        await setSession(userId, updatedSession);
-      }
-    } catch (error) {
-      console.error("❌ خطا در handleSupport setTimeout:", error);
-    }
-  }, 1000);
+  try {
+    await hideKeyboard(bot, chatId);
+    await showSupportMenu(bot, chatId, userId);
+  } catch (error) {
+    logSupportError("support_entry_failed", error);
+    await bot.sendMessage(chatId, "❌ خطایی رخ داد. لطفاً دوباره تلاش کنید.").catch(() => {});
+  }
 };
 
 export default handleSupport;

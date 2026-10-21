@@ -10,7 +10,7 @@
 cp .env.example .env     # then fill in every required value (see docs/configuration.md)
 npm install
 npm run preflight        # must report 0 failures
-npm run build            # builds /panel-next and the public storefront
+npm run build            # builds /next-panel and the public storefront
 npm start
 ```
 
@@ -97,7 +97,7 @@ Warnings about probes that "did not complete" are expected before the first depl
 
 ### 4.6 Admin dashboards
 
-- [ ] `https://your-domain.com/panel-next` (or `/panel`) shows the sign-in page
+- [ ] `https://your-domain.com/next-panel` (or `/panel`) shows the sign-in page
 - [ ] A Telegram ID from `ADMINS` receives the one-time code from the bot and can sign in
 - [ ] `GET /api/admin/dashboard` without a session returns `401`
 - [ ] Signing out clears the session cookie
@@ -271,7 +271,7 @@ migration.
 
 | Topic | Notes |
 |---|---|
-| URLs | `<WEBHOOK_BASE_URL>/panel-next` (Next.js) and `/panel` (alias `/admin`); served by the same process, nothing extra to deploy |
+| URLs | `<WEBHOOK_BASE_URL>/next-panel` (Next.js) and `/panel` (alias `/admin`); served by the same process, nothing extra to deploy |
 | Auth | Telegram allow-list (`ADMINS`) + one-time code by direct message + Redis session (HttpOnly cookie, CSRF token) |
 | Session lifetime | `ADMIN_SESSION_TTL_SECONDS` (default 8 h, min 15 min, max 24 h) |
 | Telegram panel | `/admin`, `/panel` or `پنل`; in private chat for allow-listed admins, or in the group set by `GROUP_ID` |

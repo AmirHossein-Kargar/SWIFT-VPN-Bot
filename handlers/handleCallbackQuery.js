@@ -1,4 +1,5 @@
 import handleTrxWalletScan from "./admin/handleTrxWalletScan.js";
+import { handleSupportCallback } from "./support/supportFlow.js";
 import showTrxBalance from "./admin/showTrxBalance.js";
 import showTrxStats from "./admin/showTrxStats.js";
 import showTrxRecent from "./admin/showTrxRecent.js";
@@ -137,6 +138,9 @@ const handleCallbackQuery = async (bot, query) => {
     } catch { /* ignore */ }
     return;
   }
+
+  // ── Support tickets (sup_*) — answers its own callback query ──────────────
+  if (data.startsWith("sup_") && (await handleSupportCallback(bot, query))) return;
 
   // ── SWIFT Admin Panel (adm:*) — shared services, audited actions ──────────
   if (data.startsWith("adm:") ) {

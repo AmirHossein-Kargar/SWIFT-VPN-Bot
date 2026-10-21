@@ -1,159 +1,103 @@
 import { getSession, setSession } from "../config/sessionStore.js";
-import User from "../models/User.js";
-import keyboard from "../keyboards/mainKeyboard.js";
-import { getUnsupportedMediaMessage, getSupportDirectButton } from "../messages/supportContact.js";
+import { getUnsupportedMediaMessage } from "../messages/supportContact.js";
+import { SupportError } from "../services/support/tickets.js";
+import { customerOpenTicket, customerReply } from "../services/support/workflow.js";
+import { statusLabel } from "../services/support/delivery.js";
+import escapeHtml from "../utils/escapeHtml.js";
+import { isComposing, withUserLock, logSupportError, menuKeyboard } from "./support/supportFlow.js";
 
-const unsupportedMediaKeyboard = {
-  inline_keyboard: [
-    ...getSupportDirectButton(),
-    [{ text: "🏠 بازگشت به منوی اصلی", callback_data: "back_to_home" }],
-  ],
-};
+function extractContent(msg) {
+  if (typeof msg.text === "string" && msg.text) return { text: msg.text, attachment: null, label: "📝 پیام" };
+  if (msg.photo?.length) {
+    const photo = msg.photo[msg.photo.length - 1];
+    return { text: msg.caption || "", attachment: { kind: "photo", fileId: photo.file_id, fileSize: photo.file_size }, label: "🖼 عکس" };
+  }
+  if (msg.video) {
+    return { text: msg.caption || "", attachment: { kind: "video", fileId: msg.video.file_id, fileSize: msg.video.file_size }, label: "🎥 فیلم" };
+  }
+  return null;
+}
 
+/** Edits the flow's standing message, sending a new one only if Telegram cannot edit it. */
+async function confirm(bot, chatId, session, text, reply_markup) {
+  const options = { parse_mode: "HTML", reply_markup };
+  if (session.supportMessageId) {
+    try {
+      await bot.editMessageText(text, { chat_id: chatId, message_id: session.supportMessageId, ...options });
+      return session.supportMessageId;
+    } catch (error) {
+      if (/message is not modified/i.test(String(error?.message))) return session.supportMessageId;
+    }
+  }
+  const sent = await bot.sendMessage(chatId, text, options);
+  return sent?.message_id ?? null;
+}
+
+/**
+ * Customer message while in support compose mode. The message is stored as a
+ * ticket message (new ticket, or the ticket opened from the list), then
+ * forwarded to the admin group. Replays of the same Telegram message are
+ * absorbed by the dedupe key.
+ */
 const supportMessageHandler = async (bot, msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  const session = await getSession(userId);
-  if (!session?.support) return;
 
-  // * GET USER INFO
-  const user = await User.findOne({ telegramId: String(userId) });
-  const groupId = process.env.GROUP_ID;
+  return withUserLock(userId, async () => {
+    const session = await getSession(userId);
+    if (!isComposing(session)) return;
 
-  const userInfo =
-    `👤 کاربر: ${msg.from.first_name || "نامشخص"}\n` +
-    `🔗 یوزرنیم: @${msg.from.username || "ندارد"}\n` +
-    ` آیدی عددی: <code>${userId}</code>` +
-    (user?.balance !== undefined
-      ? `\n💰 موجودی: <code>${user.balance.toLocaleString()} تومان</code>`
-      : "");
+    const content = extractContent(msg);
+    if (!content) {
+      try { await bot.deleteMessage(chatId, msg.message_id); } catch { /* best effort */ }
+      await confirm(bot, chatId, session, getUnsupportedMediaMessage(), menuKeyboard()).catch(() => {});
+      return;
+    }
 
-  let mediaType = "";
-  let mediaContent = "";
-  let mediaFile = null;
-
-  // * CHECK MESSAGE TYPE
-  if (msg.text) {
-    mediaType = "📝 متن";
-    mediaContent = msg.text;
-  } else if (msg.photo && msg.photo.length > 0) {
-    mediaType = "🖼 عکس";
-    mediaContent = msg.caption || "";
-    mediaFile = msg.photo[msg.photo.length - 1]; // Get the largest photo
-  } else if (msg.video) {
-    mediaType = "🎥 فیلم";
-    mediaContent = msg.caption || "";
-    mediaFile = msg.video;
-  } else {
-    // Unknown media type - delete the message and edit previous message
+    const dedupeKey = `tg:${chatId}:${msg.message_id}`;
     try {
-      // Delete the unsupported message
-      try {
-        await bot.deleteMessage(chatId, msg.message_id);
-      } catch (error) {
-        console.log("❗️خطا در حذف پیام نامعتبر:", error.message);
-        // Continue even if message deletion fails
-      }
+      const input = { bot, from: msg.from, userId, text: content.text, attachment: content.attachment, dedupeKey };
+      const result = session.supportTicketId
+        ? await customerReply({ ...input, ticketId: session.supportTicketId })
+        : await customerOpenTicket({ ...input, channel: "telegram" });
 
-      // Edit the previous support message to show error
-      if (session.supportMessageId) {
-        try {
-          await bot.editMessageText(getUnsupportedMediaMessage(), {
-            chat_id: chatId,
-            message_id: session.supportMessageId,
-            reply_markup: unsupportedMediaKeyboard,
-          });
-        } catch (editError) {
-          console.log("❗️خطا در ویرایش پیام پشتیبانی:", editError.message);
-          // Send a new message if editing fails
-          await bot.sendMessage(
-            chatId,
-            getUnsupportedMediaMessage(),
-            { reply_markup: unsupportedMediaKeyboard }
-          );
-        }
-      }
-    } catch (error) {
-      console.error("❌ Error deleting unsupported message:", error);
-    }
-    return;
-  }
-
-  try {
-    // * SEND TO SUPPORT GROUP
-    if (mediaFile) {
-      // Send media with caption
-      const mediaOptions = {
-        caption: `📩 <b>پیام جدید پشتیبانی</b>\n\n${userInfo}${
-          mediaContent ? `\n\n${mediaType}:\n${mediaContent}` : ""
-        }`,
-        parse_mode: "HTML",
-      };
-
-      if (mediaType === "🖼 عکس") {
-        await bot.sendPhoto(groupId, mediaFile.file_id, mediaOptions);
-      } else if (mediaType === "🎥 فیلم") {
-        await bot.sendVideo(groupId, mediaFile.file_id, mediaOptions);
-      }
-    } else {
-      // Send text message
-      await bot.sendMessage(
-        groupId,
-        `📩 <b>پیام جدید پشتیبانی</b>\n\n${userInfo}\n\n${mediaType}:\n${mediaContent}`,
-        { parse_mode: "HTML" }
-      );
-    }
-
-    // * SEND CONFIRMATION TO USER
-    if (session.supportMessageId) {
-      try {
-        await bot.editMessageText(
-          `✅ ${mediaType} شما با موفقیت برای پشتیبانی ارسال شد`,
-          {
-            chat_id: chatId,
-            message_id: session.supportMessageId,
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  {
-                    text: "🏠 بازگشت به منوی اصلی",
-                    callback_data: "back_to_home",
-                  },
-                ],
-              ],
-            },
-          }
-        );
-      } catch (editError) {
-        console.log("❗️خطا در ویرایش پیام پشتیبانی:", editError.message);
-        // اگر ادیت نشد، پیام جدید ارسال کن
-        await bot.sendMessage(
-          chatId,
-          `✅ ${mediaType} شما با موفقیت برای پشتیبانی ارسال شد`,
-          keyboard
-        );
-      }
-    } else {
-      // اگر messageId نبود، پیام جدید ارسال کن
-      await bot.sendMessage(
+      const { ticket } = result;
+      const warning = result.forwarded === false
+        ? "\n⚠️ ارسال فوری به تیم پشتیبانی با تأخیر مواجه شد؛ پیام شما ثبت شده و بررسی می‌شود."
+        : "";
+      const liveId = await confirm(
+        bot,
         chatId,
-        `✅ ${mediaType} شما با موفقیت برای پشتیبانی ارسال شد`,
-        keyboard
+        session,
+        `✅ ${content.label} شما در تیکت <b>${escapeHtml(ticket.ticketId)}</b> ثبت شد.\n${statusLabel(ticket.status)}${warning}\n\nمی‌توانید پیام دیگری برای همین تیکت بفرستید.`,
+        {
+          inline_keyboard: [
+            [{ text: "🔒 بستن تیکت", callback_data: `sup_close:${ticket.ticketId}` }, { text: "📂 تیکت‌های من", callback_data: "sup_list" }],
+            [{ text: "🏠 بازگشت به منوی اصلی", callback_data: "back_to_home" }],
+          ],
+        },
       );
+      await setSession(userId, {
+        ...session,
+        support: true,
+        supportTicketId: ticket.ticketId,
+        supportAt: Date.now(),
+        supportMessageId: liveId,
+      });
+    } catch (error) {
+      if (error instanceof SupportError) {
+        if (error.code === "ticket_closed" || error.code === "ticket_not_found") {
+          await setSession(userId, { ...session, support: false, supportTicketId: null, supportAt: null });
+        }
+        await bot.sendMessage(chatId, `⚠️ ${error.safeMessage}`, { reply_markup: menuKeyboard() }).catch(() => {});
+        return;
+      }
+      logSupportError("support_message_failed", error);
+      await bot.sendMessage(chatId, "❌ مشکلی در ثبت پیام رخ داد. لطفاً دوباره تلاش کنید.", {
+        reply_markup: { inline_keyboard: [[{ text: "🏠 بازگشت به منوی اصلی", callback_data: "back_to_home" }]] },
+      }).catch(() => {});
     }
-
-    // * CLEAR THE SUPPORT SESSION
-    session.support = false;
-    session.supportMessageId = null;
-    await setSession(userId, session);
-  } catch (error) {
-    console.error("❌ Error in supportMessageHandler:", error);
-    await bot.sendMessage(
-      chatId,
-      "❌ مشکلی در ارسال پیام به پشتیبانی رخ داد. لطفاً دوباره تلاش کنید.",
-      keyboard
-    );
-  }
+  });
 };
 
 export default supportMessageHandler;

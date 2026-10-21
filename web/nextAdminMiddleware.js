@@ -1,7 +1,9 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const ADMIN_PANEL_NEXT_BASE_PATH = "/panel-next";
+export const ADMIN_PANEL_NEXT_BASE_PATH = "/next-panel";
+/** Earlier name of the same panel; kept as a permanent redirect so bookmarks keep working. */
+export const PREVIOUS_PANEL_PATH = "/panel-next";
 
 const adminPanelDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "admin-panel");
 
@@ -14,7 +16,7 @@ let handlerPromise = null;
  * Next would bundle its own copy of them, splitting the Mongo/Redis/bot
  * singletons — so it only ever talks to the existing /api/admin REST surface,
  * same as a browser would. Preparing Next is deferred to the first request so
- * importing this module has no cost for requests that never touch /panel-next.
+ * importing this module has no cost for requests that never touch /next-panel.
  */
 function getHandler() {
   if (!handlerPromise) {
@@ -44,7 +46,20 @@ export function applyNextPanelHeaders(res) {
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
 }
 
+/** `/panel-next/<rest>` -> `/next-panel/<rest>`; null when the path is not the old panel path. */
+export function previousPanelRedirectTarget(path) {
+  if (path !== PREVIOUS_PANEL_PATH && !path.startsWith(`${PREVIOUS_PANEL_PATH}/`)) return null;
+  const rest = path.slice(PREVIOUS_PANEL_PATH.length);
+  // Only the fixed prefix is rewritten; a protocol-relative "//host" tail can never become the target.
+  return `${ADMIN_PANEL_NEXT_BASE_PATH}${rest.replace(/^\/{2,}/, "/")}`;
+}
+
 export function nextAdminMiddleware(req, res, next) {
+  const redirectTo = previousPanelRedirectTarget(req.path);
+  if (redirectTo) {
+    const query = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
+    return res.redirect(308, `${redirectTo}${query}`);
+  }
   if (req.path !== ADMIN_PANEL_NEXT_BASE_PATH && !req.path.startsWith(`${ADMIN_PANEL_NEXT_BASE_PATH}/`)) {
     return next();
   }
