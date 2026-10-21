@@ -3,7 +3,7 @@ import { Users, UserCheck, Wallet, Clock, AlertTriangle, ShoppingCart } from "lu
 import { adminApiGet } from "@/lib/adminApi.server";
 import type { AdminPayment, DashboardMetrics, PagedResult } from "@/lib/types";
 import { MetricCard } from "@/components/dashboard/metric-card";
-import { RevenueChart } from "@/components/dashboard/revenue-chart";
+import { RevenueCard } from "@/components/dashboard/revenue-card";
 import { PaymentStatusBadge } from "@/components/payments/status-badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -41,7 +41,7 @@ export default async function DashboardPage() {
         <MetricCard label="Orders this month" value={formatNumber(metrics.orders.month)} icon={ShoppingCart} hint={`${formatToman(metrics.averageOrderValueMonth)} average order`} />
       </div>
 
-      <RevenueChart data={dashboard.charts.revenue} />
+      <RevenueCard data={dashboard.charts.revenue} />
 
       <Card>
         <CardHeader>

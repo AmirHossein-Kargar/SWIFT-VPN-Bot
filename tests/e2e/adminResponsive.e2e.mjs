@@ -302,32 +302,37 @@ for (const [width, height] of VIEWPORTS) {
 }
 
 
-// Storefront (/): real catalog API, responsive cards, tabs, review dialog.
+// Storefront (/): real catalog API, responsive cards, tabs, review dialog. (Selectors follow the Next.js/shadcn
+// storefront; the deeper storefront checks live in tests/e2e/storefront.e2e.mjs.)
+const PLAN_BUTTON = 'button[aria-label^="انتخاب پلن"]';
 for (const [width, height] of VIEWPORTS) {
   for (const theme of ["dark", "light"]) {
     const { page, context } = await newPage({ width, height }, { lang: "fa", theme, mobile: width < 900 });
     const tag = `store ${width}px/${theme}`;
     await page.goto(`${base}/`);
-    await page.waitForSelector(".plan-card:not(.skeleton)");
+    await page.waitForSelector(PLAN_BUTTON);
     check(await page.evaluate(() => document.documentElement.dir) === "rtl", `${tag}: storefront is RTL`);
     check(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), `${tag}: no horizontal overflow`);
-    const inside = await page.$$eval(".plan-card", (els) => els.length > 0 && els.every((el) => { const r = el.getBoundingClientRect(); return r.left >= -1 && r.right <= window.innerWidth + 1; }));
+    const inside = await page.$$eval(".card-shadow-hover", (els) => els.length > 0 && els.every((el) => { const r = el.getBoundingClientRect(); return r.left >= -1 && r.right <= window.innerWidth + 1; }));
     check(inside, `${tag}: cards inside viewport`);
-    const ctaHeights = await page.$$eval(".plan-card .btn", (els) => els.map((el) => el.getBoundingClientRect().height));
+    const ctaHeights = await page.$$eval(PLAN_BUTTON, (els) => els.map((el) => el.getBoundingClientRect().height));
     check(ctaHeights.every((h) => h >= 43), `${tag}: plan buttons are touch-sized`);
-    check(/[۰-۹]/.test(await page.locator(".plan-price").first().innerText()), `${tag}: prices use Persian digits`);
+    check(/[۰-۹]/.test(await page.locator(".card-shadow-hover").first().innerText()), `${tag}: prices use Persian digits`);
     if (theme === "dark") {
-      await page.locator('.tab[aria-selected="true"]').focus();
+      await page.locator('[role="tab"][aria-selected="true"]').focus();
       await page.keyboard.press("ArrowLeft");
-      check(await page.evaluate(() => document.activeElement?.getAttribute("aria-selected") === "true" && document.activeElement?.dataset.days !== "30"), `${tag}: arrow keys move between duration tabs`);
-      await page.locator("[data-plan]").first().click();
-      await page.waitForSelector('.sheet a[href^="https://t.me/Swift_servicebot?start=plan_"]');
+      // Radix moves focus in a timeout after the keydown.
+      await page.waitForFunction(() => { const tabs = [...document.querySelectorAll('[role="tab"]')]; return document.activeElement?.getAttribute("aria-selected") === "true" && tabs.indexOf(document.activeElement) > 0; });
+      check(true, `${tag}: arrow keys move between duration tabs`);
+      await page.locator(PLAN_BUTTON).first().click();
+      await page.waitForSelector('[role="dialog"] a[href^="https://t.me/Swift_servicebot?start=plan_"]');
       await page.waitForTimeout(350);
-      const sheet = await page.locator(".sheet").boundingBox();
+      const sheet = await page.locator('[role="dialog"]').boundingBox();
       check(sheet && sheet.x >= -1 && sheet.x + sheet.width <= width + 1 && sheet.y + sheet.height <= height + 1, `${tag}: review dialog fits viewport`);
       await page.keyboard.press("Escape");
-      check(await page.locator("#sheet-backdrop").isHidden(), `${tag}: Escape closes the dialog`);
-      check(await page.evaluate(() => document.activeElement?.hasAttribute("data-plan")), `${tag}: focus returns to the plan button`);
+      check(await page.locator('[role="dialog"]').count() === 0, `${tag}: Escape closes the dialog`);
+      await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label")?.startsWith("انتخاب پلن"));
+      check(true, `${tag}: focus returns to the plan button`);
     }
     if (width === 390) await page.screenshot({ path: join(shots, `store-${width}-${theme}.png`), fullPage: true });
     await context.close();

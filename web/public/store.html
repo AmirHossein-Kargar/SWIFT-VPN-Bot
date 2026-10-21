@@ -7,13 +7,20 @@
   <script src="/store/theme-init.js"></script>
   <title>SWIFT VPN — خرید اشتراک VPN پرسرعت و پایدار</title>
   <meta name="description" content="خرید اشتراک اختصاصی SWIFT VPN با اتصال نامحدود کاربر، تحویل خودکار در تلگرام و پرداخت آنلاین. پلن‌های یک‌ماهه تا یک‌ساله با قیمت شفاف به تومان." />
-  <meta name="theme-color" content="#0B0D10" />
+  <meta name="theme-color" content="#0B0F0D" />
   <!--canonical-->
   <meta property="og:type" content="website" />
   <meta property="og:locale" content="fa_IR" />
   <meta property="og:title" content="SWIFT VPN — اشتراک VPN پرسرعت و پایدار" />
   <meta property="og:description" content="پلن‌های اختصاصی با اتصال نامحدود کاربر و تحویل خودکار در تلگرام." />
+  <meta property="og:image" content="/og-image.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <link rel="icon" href="/favicon.ico" sizes="any" />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="manifest" href="/site.webmanifest" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -43,9 +50,10 @@
 
   <header class="site-header" id="top">
     <div class="container header-row">
-      <a class="brand" href="/" aria-label="SWIFT VPN — صفحه اصلی">
-        <span class="brand-mark"><svg><use href="#s-shield"/></svg></span>
-        <span class="brand-text"><span class="brand-name">SWIFT VPN</span><span class="brand-tag">اینترنت سریع و پایدار</span></span>
+      <a class="brand" href="/" aria-label="Swift VPN — صفحه اصلی">
+        <img class="logo logo-light" src="/brand/logo-horizontal.svg" alt="" width="74" height="28" />
+        <img class="logo logo-dark" src="/brand/logo-horizontal-on-dark.svg" alt="" width="74" height="28" />
+        <span class="brand-tag">اینترنت سریع و پایدار</span>
       </a>
       <nav class="site-nav" aria-label="بخش‌های صفحه">
         <a href="#plans">پلن‌ها</a>
@@ -77,15 +85,10 @@
           </ul>
         </div>
         <div class="hero-visual" aria-hidden="true">
-          <div class="orb"></div>
-          <div class="glass-card">
-            <div class="glass-head"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
-            <div class="glass-body">
-              <div class="glass-shield"><svg><use href="#s-shield"/></svg></div>
-              <div class="glass-title">اتصال امن</div>
-              <div class="glass-sub">VLESS</div>
-              <div class="glass-bar"><span></span></div>
-            </div>
+          <div class="brand-card">
+            <img class="logo-light" src="/brand/logo-stacked.svg" alt="" width="128" height="160" />
+            <img class="logo-dark" src="/brand/logo-stacked-on-dark.svg" alt="" width="128" height="160" />
+            <div class="brand-card-meta"><span class="status-dot"></span><span>اتصال امن</span><span class="ltr">VLESS</span></div>
           </div>
         </div>
       </div>
@@ -153,17 +156,17 @@
 
   <footer class="site-footer">
     <div class="container footer-row">
-      <div class="footer-brand">
-        <span class="brand-mark sm"><svg><use href="#s-shield"/></svg></span>
-        <span>SWIFT VPN</span>
-      </div>
+      <a class="footer-brand" href="#top" aria-label="Swift VPN — بازگشت به بالا">
+        <img class="logo logo-light" src="/brand/logo-horizontal.svg" alt="" width="58" height="22" />
+        <img class="logo logo-dark" src="/brand/logo-horizontal-on-dark.svg" alt="" width="58" height="22" />
+      </a>
       <nav class="footer-links" aria-label="پیوندهای پایانی">
         <a href="#plans">پلن‌ها</a>
         <a href="#faq">سوالات متداول</a>
         <a id="footer-bot" href="#" target="_blank" rel="noopener" hidden>ربات تلگرام</a>
         <a id="footer-support" href="#" target="_blank" rel="noopener" hidden>پشتیبانی</a>
       </nav>
-      <p class="footer-note">© <span id="year"></span> SWIFT VPN · قیمت‌ها به تومان</p>
+      <p class="footer-note">© <span id="year"></span> Swift VPN · قیمت‌ها به تومان</p>
     </div>
   </footer>
 

@@ -29,6 +29,8 @@ import { getAnalyticsReport, reportToCsv } from "../services/admin/analyticsRepo
 import { getSystemHealth } from "../services/admin/monitoring.js";
 import { listAuditLogs } from "../services/admin/audit.js";
 import { listAdmins, addAdmin, removeAdmin } from "../services/admin/adminRegistry.js";
+import { sendUserMessage } from "../services/admin/userMessaging.js";
+import { getSettingsOverview } from "../services/admin/settings.js";
 import { default as botInstance } from "../config/botInstance.js";
 import { attachAdminSession, requireAdminSession, requireCsrfToken, requireSameOrigin, adminApiHeaders, rateLimitMiddleware, clientIp, sessionCookieOptions, clearSessionCookieOptions, LEGACY_SESSION_COOKIE_PATH, NEXT_PANEL_SESSION_COOKIE_PATH, adminApiErrorHandler } from "./adminMiddleware.js";
 import { runMockTests, listMockRuns, getMockRun } from "../services/mockTests/runner.js";
@@ -302,6 +304,19 @@ router.post("/users/:telegramId/test-eligibility", requireBody(), async (req, re
       operationId: parseOperationId(req.body),
       telegramId: req.params.telegramId,
       reason: req.body.reason,
+      ipAddress: clientIp(req),
+    });
+    res.json({ ok: true, data: result });
+  } catch (error) { next(error); }
+});
+
+router.post("/users/:telegramId/message", rateLimitMiddleware({ limit: 20 }), requireBody(), async (req, res, next) => {
+  try {
+    const result = await sendUserMessage({
+      actorId: req.adminActorId,
+      operationId: parseOperationId(req.body),
+      telegramId: req.params.telegramId,
+      message: req.body.message,
       ipAddress: clientIp(req),
     });
     res.json({ ok: true, data: result });
@@ -658,6 +673,12 @@ router.get("/audit", async (req, res, next) => {
 // System health
 router.get("/system/health", async (req, res, next) => {
   try { res.json({ ok: true, data: await getSystemHealth({ actorId: req.adminActorId, fresh: req.query.fresh === "1" }) }); }
+  catch (error) { next(error); }
+});
+
+// Settings (read-only diagnostics; no secret or raw environment value leaves the server)
+router.get("/settings/overview", (req, res, next) => {
+  try { res.json({ ok: true, data: getSettingsOverview({ actorId: req.adminActorId }) }); }
   catch (error) { next(error); }
 });
 

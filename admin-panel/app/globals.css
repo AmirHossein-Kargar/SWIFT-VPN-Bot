@@ -3,12 +3,13 @@
 @tailwind utilities;
 
 /*
- * Strict monochrome palette: white / near-white / light gray / black /
- * near-black only for chrome, buttons, charts, nav and focus states. The
- * only intentional departures from pure grayscale are destructive (red),
- * warning (amber) and success (green) — used exclusively for semantic
- * status (failed/pending/paid payments, destructive-action confirmation,
- * error toasts) and nowhere else. No blue, purple, or cyan anywhere.
+ * Neutral palette for chrome, buttons, nav, charts and focus states, with the
+ * Swift brand green (Emerald on light, Mint on dark — the brand guide's rule)
+ * reserved for the logo, the success semantic and a few brand accents.
+ * Destructive (red) and warning (amber) are semantic-only. Semantic text
+ * colors are chosen to reach WCAG AA (4.5:1) on their own 15% tinted badge
+ * backgrounds in both themes (verified with axe-core in a real browser). No blue, purple,
+ * or cyan anywhere. Dark surfaces are layered on the brand's Vault Black.
  */
 @layer base {
   :root {
@@ -23,19 +24,51 @@
     --secondary: 0 0% 96%;
     --secondary-foreground: 0 0% 9%;
     --muted: 0 0% 96%;
-    --muted-foreground: 0 0% 45%;
+    --muted-foreground: 0 0% 42%;
     --accent: 0 0% 94%;
     --accent-foreground: 0 0% 9%;
     --destructive: 0 65% 42%;
     --destructive-foreground: 0 0% 100%;
-    --success: 142 40% 32%;
+    --success: 162 93% 24%;
     --success-foreground: 0 0% 100%;
-    --warning: 38 65% 40%;
+    --warning: 26 83% 30%;
     --warning-foreground: 0 0% 100%;
+    --brand: 161 94% 30%;
     --border: 0 0% 89%;
     --input: 0 0% 85%;
     --ring: 0 0% 9%;
+    --chart-1: 0 0% 9%;
+    --chart-2: 0 0% 55%;
     --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 150 15% 5%;
+    --foreground: 0 0% 95%;
+    --card: 150 8% 8%;
+    --card-foreground: 0 0% 95%;
+    --popover: 150 8% 9%;
+    --popover-foreground: 0 0% 95%;
+    --primary: 0 0% 95%;
+    --primary-foreground: 150 15% 6%;
+    --secondary: 150 5% 14%;
+    --secondary-foreground: 0 0% 95%;
+    --muted: 150 5% 13%;
+    --muted-foreground: 0 0% 65%;
+    --accent: 150 5% 15%;
+    --accent-foreground: 0 0% 95%;
+    --destructive: 0 91% 71%;
+    --destructive-foreground: 150 15% 5%;
+    --success: 160 84% 39%;
+    --success-foreground: 150 15% 5%;
+    --warning: 38 85% 58%;
+    --warning-foreground: 150 15% 5%;
+    --brand: 160 84% 39%;
+    --border: 150 5% 17%;
+    --input: 150 5% 22%;
+    --ring: 0 0% 80%;
+    --chart-1: 0 0% 92%;
+    --chart-2: 0 0% 50%;
   }
 }
 
@@ -46,6 +79,9 @@
   html {
     color-scheme: light;
   }
+  html.dark {
+    color-scheme: dark;
+  }
   body {
     @apply bg-background text-foreground antialiased;
   }
@@ -53,6 +89,13 @@
     @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
   }
 }
+
+/* Brand lockups ship as separate light/dark SVGs; CSS picks one so the server
+   render and the hydrated client always agree (no theme-dependent JSX). */
+.brand-on-light { display: inline-block; }
+.brand-on-dark { display: none; }
+.dark .brand-on-light { display: none; }
+.dark .brand-on-dark { display: inline-block; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

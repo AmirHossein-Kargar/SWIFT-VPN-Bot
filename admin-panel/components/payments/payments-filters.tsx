@@ -59,7 +59,7 @@ export function PaymentsFilters({
         <Input value={search} onChange={(event) => onSearchChange(event.target.value)} placeholder="Search by ID, order, or tracking code" className="pl-8" />
       </div>
       <Select value={status} onValueChange={(value) => update({ status: value })}>
-        <SelectTrigger className="w-44">
+        <SelectTrigger className="w-44" aria-label="Filter by status">
           <SelectValue placeholder="Status" />
         </SelectTrigger>
         <SelectContent>
@@ -71,7 +71,7 @@ export function PaymentsFilters({
         </SelectContent>
       </Select>
       <Select value={provider} onValueChange={(value) => update({ provider: value })}>
-        <SelectTrigger className="w-44">
+        <SelectTrigger className="w-44" aria-label="Filter by provider">
           <SelectValue placeholder="Provider" />
         </SelectTrigger>
         <SelectContent>

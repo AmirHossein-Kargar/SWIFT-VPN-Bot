@@ -174,6 +174,23 @@ describe("HTML security headers (clickjacking and caching)", () => {
     }
   });
 
+  test("the storefront uses the official brand kit and no off-brand blue/purple palette", async () => {
+    for (const path of ["/brand/logo-horizontal.svg", "/brand/logo-horizontal-on-dark.svg", "/brand/logo-stacked.svg", "/favicon.ico", "/apple-touch-icon.png", "/og-image.png", "/site.webmanifest"]) {
+      assert.equal((await call("GET", path)).status, 200, path);
+    }
+    const page = await call("GET", "/");
+    assert.match(page.text, /src="\/brand\/logo-horizontal\.svg"/);
+    assert.match(page.text, /src="\/brand\/logo-horizontal-on-dark\.svg"/);
+    assert.match(page.text, /property="og:image" content="\/og-image\.png"/);
+    assert.match(page.text, /rel="manifest" href="\/site\.webmanifest"/);
+    // Judge the stylesheet(s) the live page really links (hashed when the Next.js build is installed).
+    const hrefs = [...page.text.matchAll(/<link[^>]+rel="stylesheet"[^>]+href="(\/[^"]+\.css)"/g)].map((match) => match[1]);
+    assert.ok(hrefs.length > 0, "the page links a local stylesheet");
+    const css = (await Promise.all(hrefs.map((href) => call("GET", href)))).map((response) => response.text).join("\n");
+    assert.doesNotMatch(css, /#3B82F6|#2563EB|#1E40AF|#60A5FA|#818CF8|#4F46E5|#1D4ED8/i, "legacy blue/indigo palette");
+    assert.match(css, /#10B981|160 84% 39%/i, "brand Mint on dark");
+  });
+
   test("any HTML file served by the static middleware gets the safety-net headers", () => {
     const headers = {};
     const res = { setHeader: (name, value) => { headers[name.toLowerCase()] = value; } };
@@ -305,6 +322,29 @@ describe("admin session hardening", () => {
     const current = await signIn();
     const combined = `${current.cookie}; swift_admin_session=${"x".repeat(43)}`;
     assert.equal((await call("GET", "/api/admin/auth/session", { cookie: combined })).data.authenticated, true);
+  });
+});
+
+describe("new admin endpoints: authorization", () => {
+  test("individual message: unauthenticated, missing-CSRF and cross-origin requests are refused", async () => {
+    const body = { operationId: "a".repeat(24), message: "hello" };
+    assert.equal((await call("POST", "/api/admin/users/5001/message", { body })).status, 401);
+    const { cookie, csrf } = await signIn();
+    assert.equal((await call("POST", "/api/admin/users/5001/message", { cookie, body })).status, 403, "missing CSRF");
+    assert.equal((await call("POST", "/api/admin/users/5001/message", { cookie, csrf, origin: "https://evil.example", body })).status, 403, "foreign origin");
+    const invalid = await call("POST", "/api/admin/users/5001/message", { cookie, csrf, body: { operationId: "b".repeat(24), message: "" } });
+    assert.equal(invalid.status, 400);
+    assert.equal(invalid.data.error, "invalid_message");
+  });
+
+  test("settings overview: requires a session and never exposes secret values", async () => {
+    assert.equal((await call("GET", "/api/admin/settings/overview")).status, 401);
+    const { cookie } = await signIn();
+    const result = await call("GET", "/api/admin/settings/overview", { cookie });
+    assert.equal(result.status, 200);
+    assert.equal(result.data.data.account.telegramId, ADMIN);
+    assert.equal(typeof result.data.data.payments.hooshpay.apiKey, "boolean");
+    assert.ok(!/BOT_TOKEN|mongodb:\/\/|password/i.test(result.text));
   });
 });
 

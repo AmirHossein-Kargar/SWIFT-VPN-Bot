@@ -47,7 +47,7 @@
     button.setAttribute("aria-label", light ? "پوسته تیره" : "پوسته روشن");
     button.setAttribute("title", light ? "پوسته تیره" : "پوسته روشن");
     var meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute("content", light ? "#F6F8FB" : "#0B0D10");
+    if (meta) meta.setAttribute("content", light ? "#FAFAFA" : "#0B0F0D");
   }
   $("#theme-toggle").addEventListener("click", function () {
     var next = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";

@@ -1,0 +1,114 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Swift brand palette (brand kit "Lockform S") expressed as shadcn tokens.
+ * Vault Black surfaces in dark, neutral surfaces in light; Emerald (light) /
+ * Mint (dark) is the single brand accent, used for text on tinted surfaces,
+ * focus rings and status. Primary actions are high-contrast neutral so button
+ * text always reaches WCAG AA. No blue/purple/cyan anywhere.
+ * The theme class (`dark`) and `data-theme` are set before first paint by the
+ * external /store/theme-init.js (the storefront CSP forbids inline scripts).
+ */
+@layer base {
+  :root {
+    --background: 0 0% 98%;
+    --foreground: 150 15% 5%;
+    --card: 0 0% 100%;
+    --card-foreground: 150 15% 5%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 150 15% 5%;
+    --primary: 150 15% 5%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 120 3% 96%;
+    --secondary-foreground: 150 15% 5%;
+    --muted: 120 3% 96%;
+    --muted-foreground: 150 6% 31%;
+    --accent: 120 3% 94%;
+    --accent-foreground: 150 15% 5%;
+    --destructive: 0 76% 42%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 140 5% 90%;
+    --border-strong: 140 5% 83%;
+    --input: 140 5% 83%;
+    --ring: 162 93% 24%;
+    --success: 162 93% 24%;
+    --brand: 162 93% 24%;
+    --faint: 150 5% 39%;
+    --alt: 140 8% 96%;
+    --radius: 0.75rem;
+    --shadow-card: 0 1px 2px rgb(11 15 13 / 0.05), 0 12px 28px rgb(11 15 13 / 0.06);
+    --shadow-card-hover: 0 2px 4px rgb(11 15 13 / 0.08), 0 20px 40px rgb(11 15 13 / 0.1);
+    color-scheme: light;
+  }
+
+  .dark {
+    --background: 150 15% 5%;
+    --foreground: 150 20% 94%;
+    --card: 150 13% 8%;
+    --card-foreground: 150 20% 94%;
+    --popover: 150 13% 8%;
+    --popover-foreground: 150 20% 94%;
+    --primary: 152 81% 96%;
+    --primary-foreground: 150 15% 5%;
+    --secondary: 150 12% 11%;
+    --secondary-foreground: 150 20% 94%;
+    --muted: 150 12% 11%;
+    --muted-foreground: 150 8% 68%;
+    --accent: 150 12% 13%;
+    --accent-foreground: 150 20% 94%;
+    --destructive: 0 91% 71%;
+    --destructive-foreground: 150 15% 5%;
+    --border: 150 13% 14%;
+    --border-strong: 150 11% 20%;
+    --input: 150 11% 20%;
+    --ring: 160 84% 39%;
+    --success: 160 84% 39%;
+    --brand: 160 84% 39%;
+    --faint: 150 7% 56%;
+    --alt: 150 14% 6%;
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4), 0 14px 34px rgb(0 0 0 / 0.28);
+    --shadow-card-hover: 0 2px 4px rgb(0 0 0 / 0.45), 0 22px 48px rgb(0 0 0 / 0.36);
+    color-scheme: dark;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+  html, body { overflow-x: hidden; }
+  body {
+    @apply bg-background font-sans text-[15.5px] leading-[1.75] text-foreground antialiased;
+    min-height: 100vh;
+  }
+  img, svg { display: block; }
+  :focus-visible { @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background; }
+}
+
+@layer components {
+  /* Official lockups ship as separate light/dark files; show the matching one. */
+  .logo-dark { display: none; }
+  .dark .logo-light { display: none; }
+  .dark .logo-dark { display: block; }
+  .card-shadow { box-shadow: var(--shadow-card); }
+  .card-shadow-hover:hover { box-shadow: var(--shadow-card-hover); }
+}
+
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes shimmer { to { background-position: -200% 0; } }
+.animate-rise { animation: rise 0.35s ease both; }
+.skeleton-shimmer {
+  background: linear-gradient(90deg, hsl(var(--muted)), hsl(var(--accent)), hsl(var(--muted)));
+  background-size: 200% 100%;
+  animation: shimmer 1.3s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

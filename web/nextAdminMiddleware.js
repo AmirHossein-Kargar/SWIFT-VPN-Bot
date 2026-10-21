@@ -29,10 +29,26 @@ function getHandler() {
   return handlerPromise;
 }
 
+/**
+ * Anti-framing and sniffing protection for the admin UI, matching what the
+ * legacy /panel shell already sends. Deliberately NOT a script-src policy:
+ * Next.js and next-themes emit inline bootstrap scripts, so restricting
+ * scripts would need per-request nonces. frame-ancestors alone closes
+ * clickjacking, which is the relevant risk for a CSRF-protected admin UI.
+ */
+export function applyNextPanelHeaders(res) {
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "same-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+}
+
 export function nextAdminMiddleware(req, res, next) {
   if (req.path !== ADMIN_PANEL_NEXT_BASE_PATH && !req.path.startsWith(`${ADMIN_PANEL_NEXT_BASE_PATH}/`)) {
     return next();
   }
+  applyNextPanelHeaders(res);
   getHandler().then((handle) => handle(req, res)).catch((error) => {
     console.error(JSON.stringify({
       ts: new Date().toISOString(),

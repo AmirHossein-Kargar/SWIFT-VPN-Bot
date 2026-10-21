@@ -406,7 +406,7 @@ Service → **Variables** → add every **Required** variable from
 | Setting | Value |
 |---|---|
 | Start command | `npm start` (equivalent to `node bot.js`) |
-| Build command | *(default)* `npm install` |
+| Build command | `npm install && npm run build` — builds the Next.js admin panel (`/panel-next`) and the public storefront. If the storefront build is missing, `/` falls back to the static `web/public/store.html`, so the site stays up. |
 | Node version | `>=20` (declared in `package.json` → `engines`) |
 
 ### 6.6 Public domain
@@ -534,6 +534,8 @@ npm test
 | `tests/integration/adminTelegramPanel.test.js` | Telegram panel authorization, navigation, safe failures | no (data screens: yes) |
 | `tests/unit/mockTests.test.js` | Mock-test harness: in-memory store, isolation guards on the real models/network, server gate, run lock, all four scenarios against the real services | no |
 | `tests/integration/storefrontAndPanel.test.js` | Real HTTP: `/` storefront, `/panel`, 404, public catalog API, mock-test API gate, session rotation and cookie scope, deep links | no |
+| `tests/integration/storefrontBuild.test.js` | Real HTTP against the built storefront: CSP unchanged and satisfied (no inline scripts), routing, immutable caching, br/gzip negotiation, SEO tags, build gate | no (skipped, with a reason, if `npm run build:storefront` has not run) |
+| `tests/unit/storefrontLogic.test.js` | Plan/duration selection, hand-off URL safety, review-dialog failure classification, formatting | no |
 | `tests/integration/adminTelegramMock.test.js` | Telegram `adm:mock*` authorization and gating | no |
 
 Without MongoDB the DB-backed suites **skip** by design; a green run with skips
@@ -779,6 +781,22 @@ and no destructive migration is run.
 | any other non-API path | 404 page (previously every unknown path served the admin shell). |
 
 Webhook (`/api/hooshpay/webhook`, `/api/nowpayments/ipn`), health and admin API routes are unchanged.
+
+### 13.1.1 How the storefront is built and served
+
+`/` is a **Next.js Pages Router static export** (`storefront/`, shadcn/ui + Tailwind, Persian/RTL,
+light/dark). It is deliberately the *Pages* Router: its export has no executable inline scripts, so
+it runs under the unchanged storefront CSP (`script-src 'self'`). The App Router export inlines
+`self.__next_f.push(...)` scripts and renders a blank page under that policy — do not switch to it.
+
+| Step | What happens |
+|---|---|
+| `npm run build:storefront` (also part of `npm run build`) | `scripts/build-storefront.mjs` runs `next build storefront`, **refuses** output containing executable inline scripts, inline event handlers or `javascript:` URLs, then installs `storefront.html` and `_next/` into `web/public` (git-ignored build output) with pre-compressed `.br`/`.gz` copies, and deletes the storefront build cache. |
+| Serving (`web/spa.js`) | `/` serves `storefront.html` (else the static `store.html`), injects the canonical link from `WEBHOOK_BASE_URL`, compresses the HTML once per encoding, and sends `/_next/static/**` pre-compressed with `Cache-Control: public, max-age=31536000, immutable`. |
+| Plan loading | `pages/index.tsx` preloads `/api/store/catalog` in `<head>` (`<link rel="preload" as="fetch">`), so the request overlaps the JavaScript download and the app's `fetch()` reuses it (one request). Retries and the refresh after "plan no longer sold" use `cache: "reload"`. The order dialog (Radix Dialog) is a separate chunk fetched on pointer/focus/touch intent over a plan. Tabs are a small in-repo implementation (Radix Tabs cost ~7 kB on the wire, paid before any plan can render). Remaining JavaScript is mostly the React + Next runtime (~90 kB brotli); going lower would mean replacing it (e.g. Preact), which is not supported by Next 15 / React 19 without risk and was deliberately not done. |
+| Theme | The external `web/public/store/theme-init.js` sets `data-theme` and the `dark` class before first paint (no inline script, so no CSP change). |
+| Development | `npm run storefront:dev` (port 3101). Remove `storefront/.next` afterwards (the module smoke test imports stray `.js` files). |
+| Verification | `npm test` (build-dependent tests are skipped with a reason if the build is missing) and `npm run test:e2e:store` (real Chrome under the real CSP: hydration, themes, ordering and failure paths, RTL, accessibility, SEO). |
 
 ### 13.2 Storefront and checkout
 

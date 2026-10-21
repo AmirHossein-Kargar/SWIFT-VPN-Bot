@@ -110,8 +110,29 @@ export interface UserDetail {
     trackingAvailable: boolean;
   };
   payments: { id: string; provider: string; status: string; amount: number; createdAt: string | null; paidAt: string | null; trackingCode: string | null }[];
-  orders: Record<string, unknown>[];
-  services: Record<string, unknown>[];
+  untrackedServiceCount?: number;
+  orders: {
+    id: string;
+    productId: string | null;
+    product: string;
+    amount: number;
+    status: string;
+    createdAt: string | null;
+    completedAt: string | null;
+    expiresAt: string | null;
+    serviceUsername: string | null;
+    walletDebitStatus: string;
+    refundStatus: string;
+  }[];
+  services: {
+    username: string;
+    productId: string | null;
+    purchaseId: string | null;
+    createdAt: string | null;
+    expiresAt: string | null;
+    revokedAt: string | null;
+    tracked: boolean;
+  }[];
 }
 
 export interface AdminProduct {
@@ -220,18 +241,45 @@ export interface SystemHealth {
   notes: Record<string, string>;
 }
 
-export interface MockScenarioResult {
+export type MockScenarioStatus = "PASS" | "FAIL" | "BLOCKED" | "NOT RUN";
+
+/** A scenario as returned in the run LIST (services/mockTests/runner.js listMockRuns). */
+export interface MockScenarioSummary {
   id: string;
   title: string;
   titleFa: string;
-  status: "PASS" | "FAIL" | "BLOCKED" | "NOT RUN";
+  status: MockScenarioStatus;
+  counts: { total: number; passed: number; failed: number; skipped: number };
+  explanation: string | null;
+}
+
+/** A scenario as returned by GET /mock-tests/:runId (full report, report.js finalizeScenario). */
+export interface MockScenarioResult extends MockScenarioSummary {
   startedAt: string | null;
   completedAt: string | null;
   durationMs: number;
-  counts: { total: number; passed: number; failed: number; skipped: number };
+  assertions?: { name: string; status: "pass" | "fail" | "skipped"; detail: string }[];
   notes: string[];
-  explanation: string | null;
-  errorDetail?: string | null;
+  error: string | null;
+  isolationViolations?: string[];
+}
+
+export interface MockTestsListing {
+  enabled: boolean;
+  running: boolean;
+  source: "database" | "memory";
+  scenarios: { id: string; title: string; titleFa: string }[];
+  items: MockTestRunSummary[];
+}
+
+export interface MockTestRunSummary {
+  runId: string;
+  trigger: "telegram" | "web" | "test";
+  requestedScenarios: string[];
+  startedAt: string;
+  completedAt: string;
+  summary: MockTestSummary;
+  scenarios: MockScenarioSummary[];
 }
 
 export interface MockTestSummary {
@@ -269,6 +317,33 @@ export interface AuditLogEntry {
   errorCode: string | null;
   createdAt: string | null;
   completedAt: string | null;
+}
+
+/** GET /settings/overview — booleans and non-sensitive constants only (services/admin/settings.js). */
+export interface SettingsOverview {
+  generatedAt: string;
+  account: { telegramId: string; isOwner: boolean; environmentAdminCount: number };
+  application: { name: string; version: string; environment: "production" | "test" | "development"; nodeVersion: string; startedAt: string; uptimeSeconds: number };
+  security: {
+    sessionTtlSeconds: number;
+    loginCodeTtlSeconds: number;
+    sessionStore: string;
+    cookie: { httpOnly: boolean; secure: boolean; sameSite: string; paths: string[] };
+    csrfProtection: boolean;
+    originCheck: boolean;
+    loginRateLimitPerMinute: number;
+    codeVerifyRateLimitPerMinute: number;
+    ownerConfigured: boolean;
+  };
+  payments: {
+    hooshpay: { apiKey: boolean; webhookSecret: boolean };
+    nowpayments: { apiKey: boolean; ipnVerification: boolean; custodyAuth: boolean; valid: boolean };
+    trxWallet: boolean;
+    webhookBaseUrl: boolean;
+  };
+  vpn: { wizardApiUrl: boolean; wizardApiKey: boolean };
+  telegram: { botToken: boolean; adminGroup: boolean; supportContact: boolean };
+  features: { mockTests: boolean };
 }
 
 export interface AuditLogPage {
