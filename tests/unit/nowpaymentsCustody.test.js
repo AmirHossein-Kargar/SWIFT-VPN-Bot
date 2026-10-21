@@ -202,7 +202,7 @@ function makeMockProviderTransport(calls = []) {
         data: {
           payment_id: "PAY-7001",
           payment_status: "waiting",
-          pay_address: "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+          pay_address: "TFQKE7G33sc7XgKLsYhAW4obcMQTbpux54",
           price_amount: options.data.price_amount,
           price_currency: options.data.price_currency,
           pay_amount: 12.5,
@@ -218,7 +218,7 @@ function makeMockProviderTransport(calls = []) {
         data: {
           payment_id: "PAY-7002",
           payment_status: "waiting",
-          pay_address: "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+          pay_address: "TFQKE7G33sc7XgKLsYhAW4obcMQTbpux54",
           pay_amount: 8.25,
           pay_currency: options.data.pay_currency,
         },
@@ -297,7 +297,7 @@ function makeMockProviderTransport(calls = []) {
               id: "WD-501",
               batch_withdrawal_id: "BATCH-500",
               currency: "trx",
-              address: "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+              address: "TFQKE7G33sc7XgKLsYhAW4obcMQTbpux54",
               amount: "50",
               fee: "1.1",
               status: "waiting",
@@ -629,7 +629,7 @@ describe("Dynamic pricing with Gheymat Online, min-amount enforcement, and immut
       request,
     });
     assert.equal(direct.paymentId, "PAY-7001");
-    assert.equal(direct.payAddress, "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb");
+    assert.equal(direct.payAddress, "TFQKE7G33sc7XgKLsYhAW4obcMQTbpux54");
 
     const refreshed = await refreshNowPaymentsMerchantEstimate({
       paymentId: "PAY-7001",
@@ -885,7 +885,7 @@ describe("Custody service, RBAC, CSRF, idempotency, and secret redaction", () =>
         actorId: "1002",
         operationId: "op-payout-non-owner-123456",
         currency: "trx",
-        address: "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+        address: "TFQKE7G33sc7XgKLsYhAW4obcMQTbpux54",
         amount: 20,
         reason: "Attempt by non-owner",
         env: TEST_ENV,
@@ -930,7 +930,7 @@ describe("Custody service, RBAC, CSRF, idempotency, and secret redaction", () =>
     const addrCheck = await validateCustodyPayoutAddress({
       actorId: "1001",
       currency: "trx",
-      address: "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+      address: "TFQKE7G33sc7XgKLsYhAW4obcMQTbpux54",
       env: TEST_ENV,
       client,
     });
@@ -949,7 +949,7 @@ describe("Custody service, RBAC, CSRF, idempotency, and secret redaction", () =>
       actorId: "1001",
       operationId: "op-payout-owner-00000001",
       currency: "trx",
-      address: "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+      address: "TFQKE7G33sc7XgKLsYhAW4obcMQTbpux54",
       amount: 50,
       reason: "Treasury withdrawal to cold wallet",
       env: TEST_ENV,

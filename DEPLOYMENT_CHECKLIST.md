@@ -1,240 +1,144 @@
-# SWIFT-VPN-Bot — Production Deployment Checklist
+# Deployment checklist (VPS / PM2 / Nginx)
 
-> **Audience:** Server administrator deploying the bot for the first time, or after a major update.
-> **Last updated:** Based on commit `2833ddd` — HooshPay production-ready integration.
+> **Audience:** an administrator deploying the bot to a server for the first time, or after a
+> major update. For Railway see [docs/deployment.md](docs/deployment.md); for day-two tasks see
+> [docs/operations.md](docs/operations.md).
 
----
-
-## Quick Start
+## Quick start
 
 ```bash
-# 1. Copy and fill in environment variables
-cp .env.example .env
-nano .env          # fill every required value
-
-# 2. Run the automated preflight check
-node scripts/preflight.js
-
-# 3. If all checks pass, start the bot
+cp .env.example .env     # then fill in every required value (see docs/configuration.md)
+npm install
+npm run preflight        # must report 0 failures
+npm run build            # builds /panel-next and the public storefront
 npm start
 ```
 
----
-
-## Section 1 — Server Requirements
+## 1. Server requirements
 
 | Requirement | Minimum | Recommended |
 |---|---|---|
-| Node.js | 18.x LTS | 20.x LTS or 22.x |
-| MongoDB | 6.0 standalone | 7.0 replica set |
+| Node.js | 20 (see `engines` in `package.json`) | Current LTS |
+| MongoDB | A version supported by Mongoose 8 | Replica set |
 | Redis | 6.x | 7.x |
 | RAM | 512 MB | 1 GB |
-| Outbound HTTPS | Required | — |
-| Public HTTPS endpoint | Required (for webhooks) | Behind nginx/Caddy with TLS |
+| Network | Outbound HTTPS; public HTTPS endpoint for webhooks | Reverse proxy (Nginx/Caddy) with TLS |
 
----
+## 2. Environment variables
 
-## Section 2 — Environment Variables
+Copy `.env.example` to `.env` and set every required variable. The complete reference, with
+defaults, aliases and validation rules, is [docs/configuration.md](docs/configuration.md); do
+not duplicate it here. Points that most often go wrong on a VPS:
 
-Copy `.env.example` to `.env` and fill **every field marked REQUIRED**.
+- **`GROUP_ID`** is the admin group's chat ID (a negative number). Read it from the `chat.id`
+  field of a bot update (for example from `getUpdates` after posting in the group). Do **not**
+  add unknown third-party bots to the admin group to discover it.
+- **`WIZARD_API_URL`** is the WizardXray **API v1 base URL** with no trailing slash (the method
+  name is appended), not the panel's web address.
+- **`WEBHOOK_BASE_URL`** is the public HTTPS origin only: no trailing slash, no path.
+- **`CARD_NUMBER`** is optional and legacy (the manual card-to-card flow is no longer offered); it is
+  validated only if set.
+- **NOWPayments** keys and the IPN secret are required; `NOWPAYMENTS_API_KEY` must be the API
+  key, not the public key.
 
-### 2.1 Telegram
+### Configuring the HooshPay webhook
 
-| Variable | Required | Description |
-|---|---|---|
-| `BOT_TOKEN` | ✅ REQUIRED | Get from [@BotFather](https://t.me/BotFather). Format: `123456:ABC-DEF...` |
-| `ADMINS` | ✅ REQUIRED | Comma-separated Telegram **user** IDs of admins. E.g. `123456789,987654321` |
-| `GROUP_ID` | ✅ REQUIRED | Telegram **group/supergroup** chat ID (negative number). E.g. `-100123456789` |
+1. Generate a long random secret and put it in `HOOSHPAY_WEBHOOK_SECRET`:
+   `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`
+2. In the HooshPay dashboard open the webhook settings.
+3. Set the URL to `https://<your-domain>/api/hooshpay/webhook` and the secret to the same value.
+4. Enable the payment events your dashboard offers (paid, reversed, refunded).
 
-**How to get GROUP_ID:** Add [@username_to_id_bot](https://t.me/username_to_id_bot) to your admin group, it will show the group ID.
+Without `HOOSHPAY_WEBHOOK_SECRET` the webhook fails closed and rejects every callback. Configure
+NOWPayments the same way: IPN URL `https://<your-domain>/api/nowpayments/ipn` and the secret in
+`NOWPAYMENTS_IPN_SECRET`. Never share these values or paste them into chats or tickets.
 
-### 2.2 Database
-
-| Variable | Required | Description |
-|---|---|---|
-| `MONGO_URL` | ✅ REQUIRED | MongoDB connection string. E.g. `mongodb://user:pass@host:27017/swiftvpn?authSource=admin` |
-
-### 2.3 Redis
-
-| Variable | Required | Description |
-|---|---|---|
-| `REDIS_HOST` | ✅ REQUIRED | Redis hostname or IP. E.g. `127.0.0.1` |
-| `REDIS_PORT` | ✅ REQUIRED | Redis port. Default: `6379` |
-| `REDIS_PASSWORD` | Optional | Redis AUTH password if configured |
-
-### 2.4 HooshPay — Primary Payment Gateway
-
-| Variable | Required | Description |
-|---|---|---|
-| `HOOSHPAY_API_KEY` | ✅ REQUIRED | Get from [HooshPay dashboard](https://hooshpay.xyz). Used to create invoices. |
-| `HOOSHPAY_WEBHOOK_SECRET` | ✅ REQUIRED | **Must match** the secret configured in HooshPay → Settings → Webhooks. Used for HMAC-SHA256 signature verification. **Never share this.** |
-| `WEBHOOK_BASE_URL` | ✅ REQUIRED | Public HTTPS URL of this server. **No trailing slash.** E.g. `https://bot.yourdomain.com` |
-
-> ⚠️ **Without `HOOSHPAY_WEBHOOK_SECRET`**, the webhook fails closed and rejects every callback. Payment confirmations cannot be processed until the same secret is configured in both places.
-
-#### Generating a strong webhook secret:
-```bash
-node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
-```
-Paste the output into both your `.env` and the HooshPay dashboard.
-
-#### Configuring HooshPay webhook:
-1. Log into [hooshpay.xyz](https://hooshpay.xyz)
-2. Go to **Settings → Webhooks**
-3. Set URL to: `https://your-domain.com/api/hooshpay/webhook`
-4. Set secret to the same value as `HOOSHPAY_WEBHOOK_SECRET`
-5. Enable events: `payment.paid`, `payment.reversed`, `payment.refunded`
-
-### 2.5 VPN Panel API
-
-| Variable | Required | Description |
-|---|---|---|
-| `WIZARD_API_URL` | ✅ REQUIRED | Base URL of the VPN panel. E.g. `https://panel.yourdomain.com` |
-| `VPN_API_KEY` | ✅ REQUIRED | Bearer token for the VPN panel API |
-
-### 2.6 Payment Methods
-
-| Variable | Required | Description |
-|---|---|---|
-| `CARD_NUMBER` | ✅ REQUIRED | 16-digit bank card number shown to users for card-to-card transfers |
-| `TRX_WALLET` | ✅ REQUIRED | Tron (TRC-20) wallet address. Starts with `T`, 34 characters. |
-| `CMC_API_KEY` | Optional | CoinMarketCap API key for the legacy direct TRX quote. If not set, that older flow cannot price invoices. |
-| `NOWPAYMENTS_API_KEY` | Required for TRON top-up | NOWPayments API key. Header `x-api-key` only. Not the public key. |
-| `NOWPAYMENTS_IPN_SECRET` | Required for TRON top-up | IPN secret from the NOWPayments dashboard. Never commit or print it. |
-| `NOWPAYMENTS_IPN_CALLBACK_URL` | Optional override | Defaults to `<WEBHOOK_BASE_URL>/api/nowpayments/ipn`. If overridden, register the identical public HTTPS URL in the dashboard. |
-| `GHEYMAT_API_TOKEN` | Optional | Paid-plan token for the live USDT/IRT quote. Free tier works without it. Never commit the value. |
-
-### 2.7 Profit Calculation
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `COST_PER_DAY` | Optional | `200` | Server cost per day in Toman |
-| `COST_PER_GB` | Optional | `300` | Server cost per GB in Toman |
-
-### 2.8 Server
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `PORT` | Optional | `3000` | Port for the Express webhook server |
-
----
-
-## Section 3 — Pre-Deployment Checks
-
-Run the automated check:
+## 3. Pre-deployment check
 
 ```bash
-node scripts/preflight.js
+npm run preflight
 ```
 
-**Expected output on a correctly configured server:**
+It validates the configuration (naming the variable and rule, never printing values), connects
+to MongoDB and Redis, and probes the public health endpoint, the webhook routes and the
+HooshPay, NOWPayments and WizardXray APIs. It ends with
+`Preflight result: N failure(s), M warning(s).` Fix every `✖ FAIL` before starting the bot.
+Warnings about probes that "did not complete" are expected before the first deploy.
 
-```
-── 1. Required Environment Variables ─────────────────────────
-  ✔ PASS  BOT_TOKEN is set
-  ✔ PASS  ADMINS is set
-  ...
-── Final Result ──────────────────────────────────────────────
-  ✅ ALL CHECKS PASSED — SYSTEM IS GO FOR PRODUCTION
-```
+## 4. Manual verification
 
-**If any check shows `✖ FAIL`**, fix it before starting the bot. Do not ignore failures.
+### 4.1 HooshPay webhook secret
 
----
+- [ ] Set in `.env` and **identical** in the HooshPay dashboard
+- [ ] Generated randomly (not a word or placeholder), at least 32 characters
 
-## Section 4 — Manual Verification Steps
+### 4.2 `WEBHOOK_BASE_URL`
 
-Complete these after the preflight script passes.
-
-### 4.1 HOOSHPAY_WEBHOOK_SECRET
-
-- [ ] Value is set in `.env`
-- [ ] Value is **identical** in HooshPay dashboard webhook settings
-- [ ] Value was generated with `crypto.randomBytes(48)` or equivalent (not a human-readable word)
-- [ ] Value is NOT the placeholder `your_hooshpay_webhook_secret_here`
-
-### 4.2 WEBHOOK_BASE_URL
-
-- [ ] Points to a public IP or domain (not localhost)
-- [ ] Uses HTTPS (valid TLS certificate — not self-signed for production)
-- [ ] No trailing slash
-- [ ] Port 443 (or custom port) is open in firewall
-- [ ] Nginx/Caddy/reverse proxy is routing to `PORT=3000` correctly
-- [ ] Test manually: `curl https://your-domain.com/health` → should return `{"ok":true,...}`
+- [ ] Public domain with HTTPS and a valid certificate (not localhost, not self-signed)
+- [ ] No trailing slash; port 443 open; the proxy forwards to `PORT` (default 3000)
+- [ ] `curl https://your-domain.com/health` returns `{"ok":true,…}`
 
 ### 4.3 MongoDB
 
-- [ ] Service is running: `systemctl status mongod`
-- [ ] Connection string in `MONGO_URL` is correct
-- [ ] Database user has `readWrite` permissions on the target database
-- [ ] If using MongoDB Atlas, IP whitelist includes your server's IP
+- [ ] Service is running (`systemctl status mongod`) and `MONGO_URL` is correct
+- [ ] The database user has `readWrite` on the target database
+- [ ] Atlas: the server's IP is on the access list
 
 ### 4.4 Redis
 
-- [ ] Service is running: `systemctl status redis`
-- [ ] `REDIS_HOST` and `REDIS_PORT` are correct
-- [ ] If `REDIS_PASSWORD` is required, it is set
-- [ ] Test: `redis-cli -h $REDIS_HOST -p $REDIS_PORT ping` → should return `PONG`
+- [ ] Service is running and the host, port and password variables are correct
+- [ ] `redis-cli -h $REDIS_HOST -p $REDIS_PORT ping` returns `PONG`
 
-### 4.5 Webhook Route
+### 4.5 Webhook route
 
-- [ ] Bot server is running (or will start)
-- [ ] `POST https://your-domain.com/api/hooshpay/webhook` returns `200`
-- [ ] Test: `curl -X POST https://your-domain.com/api/hooshpay/webhook -H "Content-Type: application/json" -d '{}'` → `200 OK`
+- [ ] `curl -X POST https://your-domain.com/api/hooshpay/webhook -H "Content-Type: application/json" -d '{}'`
+      returns **`401`** (`invalid_signature`). That proves the route is mounted and rejects unsigned
+      bodies; a `404` means the proxy or URL is wrong.
 
-### 4.6 Web Admin Dashboard (new)
+### 4.6 Admin dashboards
 
-- [ ] Open `https://your-domain.com/admin` — the sign-in page loads
-- [ ] Enter your Telegram ID (must be listed in `ADMINS`)
-- [ ] Receive the one-time code from the bot in a private chat
-- [ ] Sign in — the dashboard loads with live metrics
-- [ ] `/api/admin/dashboard` without a session returns `401`
-- [ ] Sign out works and the session cookie is cleared
+- [ ] `https://your-domain.com/panel-next` (or `/panel`) shows the sign-in page
+- [ ] A Telegram ID from `ADMINS` receives the one-time code from the bot and can sign in
+- [ ] `GET /api/admin/dashboard` without a session returns `401`
+- [ ] Signing out clears the session cookie
 
-### 4.7 Bot Startup
+### 4.7 Bot startup
 
-- [ ] Start with `npm start` and check for errors in console
-- [ ] Confirm `✔ DB Ready` appears
-- [ ] Confirm `✔ Webhook server listening on port 3000` appears
-- [ ] Confirm `✔ HooshPay Recovery Cron Started` appears
-- [ ] Send `/start` to the bot in Telegram — it should respond
-- [ ] Send `پنل` or `/admin` in the admin group — the 👑 SWIFT ADMIN panel should appear
-- [ ] Send `/admin` to the bot in a private chat (as an allowlisted admin) — the panel opens
+- [ ] `npm start` runs without errors; the log shows `✔ DB Ready` and
+      `✔ Webhook server listening on port <PORT>`
+- [ ] The log shows `✔ HooshPay Recovery Cron Started` and `✔ NOWPayments Recovery Cron Started`
+- [ ] `/start` gets a reply
+- [ ] As an allow-listed admin, `/admin` in a private chat (or `/panel` / `پنل` in the admin group)
+      opens the **👑 SWIFT ADMIN** panel
 
-### 4.7 Payment Flow Smoke Test
+### 4.8 Payment smoke test
 
-- [ ] As a test user: tap **💰 افزایش موجودی**
-- [ ] Confirm **💳 پرداخت آنلاین – کارت به کارت (HooshPay)** appears before **₮ پرداخت با ترون (NOWPayments)**
-- [ ] In the NOWPayments dashboard, set the IPN secret and callback URL to `https://<host>/api/nowpayments/ipn`, and enable TRX
-- [ ] Confirm the bot can reach Gheymat `GET /api/prices` for USDT/IRT. Free tier is 250 requests/day; the default quote cache is 10 minutes. Set `GHEYMAT_API_TOKEN` only if a paid plan is used, and do not print it
-- [ ] Enter an amount (e.g. `50,000`)
-- [ ] Confirm an invoice is created (check HooshPay dashboard)
-- [ ] Confirm payment link opens correctly
-- [ ] Confirm **✅ پرداخت کردم** button is present
-- [ ] Complete a real test payment
-- [ ] Confirm balance is credited in the bot
-- [ ] Check MongoDB: `db.hooshpayinvoices.findOne({})` — confirm `fulfilled: true, balanceCredited: true`
+- [ ] As a test user tap **💰 افزایش موجودی**; both **💳 پرداخت آنلاین کارت به کارت** (HooshPay) and
+      **🪙 پرداخت با کریپتو** (NOWPayments) appear
+- [ ] In the NOWPayments dashboard the IPN secret and callback URL match
+      `https://<host>/api/nowpayments/ipn`
+- [ ] The bot can reach the Gheymat USDT/IRT quote (the free tier is rate-limited; the default
+      quote cache is 10 minutes). Set `GHEYMAT_API_TOKEN` only if you use a paid plan
+- [ ] Enter an amount; an invoice is created and the payment link opens; the **✅ پرداخت کردم**
+      button is present
+- [ ] Complete one real low-value payment and confirm the balance is credited
+- [ ] `db.hooshpayinvoices.findOne({})` shows `fulfilled: true, balanceCredited: true`
 
----
-
-## Section 5 — Process Management (PM2)
-
-### Install PM2
+## 5. Process management (PM2)
 
 ```bash
 npm install -g pm2
 ```
 
-### Create ecosystem file
+`ecosystem.config.cjs`:
 
-```bash
-cat > ecosystem.config.cjs << 'EOF'
+```js
 module.exports = {
   apps: [{
     name: "swift-vpn-bot",
     script: "bot.js",
-    instances: 1,           // MUST be 1 — bot uses polling, not webhook mode
-    exec_mode: "fork",      // NOT cluster — single instance for polling
+    instances: 1,           // MUST be 1: the bot uses long polling
+    exec_mode: "fork",      // NOT cluster
     watch: false,
     max_memory_restart: "500M",
     env_file: ".env",
@@ -242,47 +146,37 @@ module.exports = {
     error_file: "logs/error.log",
     out_file: "logs/out.log",
     merge_logs: true,
-    restart_delay: 5000,    // wait 5s before restart to avoid rapid cycling
+    restart_delay: 5000,
     max_restarts: 10,
     min_uptime: "10s",
-  }]
+  }],
 };
-EOF
 ```
 
-> ⚠️ **Use `instances: 1` and `exec_mode: "fork"`**. Do NOT use cluster mode — the bot uses Telegram long-polling which must run in a single process. The HooshPay recovery cron has a Redis distributed lock that handles multiple instances, but the Telegram polling will conflict.
-
-### Start, save, and enable on boot
+> **Use `instances: 1` and `exec_mode: "fork"`.** Cluster mode would run several pollers on the
+> same bot token and Telegram would answer `409 Conflict`. The Redis leases protect the crons,
+> not the polling.
 
 ```bash
 mkdir -p logs
+npm run build                 # after every update, before restarting
 pm2 start ecosystem.config.cjs
 pm2 save
-pm2 startup   # follow the printed command to enable on system boot
+pm2 startup                   # run the command it prints to enable start on boot
+pm2 logs swift-vpn-bot        # live logs; also: pm2 status | restart | stop
 ```
 
-### Useful PM2 commands
-
-```bash
-pm2 logs swift-vpn-bot      # live log tail
-pm2 status                   # process status
-pm2 restart swift-vpn-bot   # restart
-pm2 stop swift-vpn-bot      # stop
-```
-
----
-
-## Section 6 — Nginx Reverse Proxy (if applicable)
+## 6. Nginx reverse proxy
 
 ```nginx
 server {
     listen 443 ssl;
-    server_name bot.yourdomain.com;
+    server_name bot.example.com;
 
-    ssl_certificate     /etc/letsencrypt/live/bot.yourdomain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/bot.yourdomain.com/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/bot.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/bot.example.com/privkey.pem;
 
-    # Webhook endpoint — pass raw body intact (required for HMAC validation)
+    # Webhook: pass the body through unchanged (required for signature validation)
     location /api/hooshpay/webhook {
         proxy_pass         http://127.0.0.1:3000;
         proxy_http_version 1.1;
@@ -290,198 +184,115 @@ server {
         proxy_set_header   X-Real-IP $remote_addr;
         proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header   X-Forwarded-Proto $scheme;
-
-        # CRITICAL: do not buffer — pass body through unchanged so HMAC is correct
         proxy_request_buffering off;
         proxy_buffering         off;
         client_max_body_size    64k;
     }
 
-    # Health check and all other routes
+    # Everything else: storefront, dashboards, API, health
     location / {
         proxy_pass         http://127.0.0.1:3000;
         proxy_http_version 1.1;
         proxy_set_header   Host $host;
         proxy_set_header   X-Real-IP $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
         client_max_body_size 64k;
     }
 }
 
-# Redirect HTTP to HTTPS
 server {
     listen 80;
-    server_name bot.yourdomain.com;
+    server_name bot.example.com;
     return 301 https://$host$request_uri;
 }
 ```
 
-> ⚠️ `proxy_request_buffering off` is **critical** for the webhook endpoint. If nginx buffers the request body, the raw bytes used for HMAC signature computation may differ from what the bot receives.
+> `proxy_request_buffering off` matters for the webhook: if the proxy rewrites the body, the bytes
+> the bot verifies may differ from the bytes the gateway signed. The sample host name is a
+> placeholder; replace it with your own.
 
----
+## 7. Database indexes
 
-## Section 7 — Database Indexes
-
-MongoDB indexes are created automatically by Mongoose on first startup. To verify they exist:
+Mongoose creates the indexes on first start. To verify:
 
 ```js
-// In mongosh or MongoDB Compass
 use swiftvpn
 db.hooshpayinvoices.getIndexes()
 ```
 
-Expected indexes:
-- `{ uid: 1 }` — unique **and sparse** (several invoices may have no `uid`)
-- `{ orderId: 1 }` — unique
-- `{ fulfilled: 1, balanceCredited: 1, status: 1 }` — recovery cron
-- `{ status: 1, createdAt: 1 }` — expiry cron
-- `{ userId: 1, createdAt: -1 }` — user lookup
+Expected on `hooshpayinvoices`:
 
-### Legacy `uid` index — automatic one-time migration
+- `{ uid: 1 }`: unique **and sparse** (several invoices may have no `uid`)
+- `{ orderId: 1 }`: unique
+- `{ fulfilled: 1, balanceCredited: 1, status: 1 }`: recovery cron
+- `{ status: 1, createdAt: 1 }`: expiry cron
+- `{ userId: 1, createdAt: -1 }`: user lookup
 
-Earlier releases created `{ uid: 1 }` as **unique but not sparse**. MongoDB never
-redefines an existing index, so that leftover index made index creation fail on
-every startup (`IndexOptionsConflict`, code 85) and the bot stopped before
-Telegram polling could begin.
+### Legacy `uid` index: automatic one-time migration
 
-On startup the app now replaces **exactly** that legacy definition
-(`hooshpayinvoices.uid_1` — key `{ uid: 1 }`, `unique: true`, not sparse) with
-the required unique + sparse index. The replacement can only *relax* the
-constraint, so no invoice data is affected, and it is idempotent: a database
-that already carries the correct index is left untouched.
+Earlier releases created `{ uid: 1 }` as unique but **not** sparse. MongoDB never redefines an
+existing index, so that index made index creation fail on every start (`IndexOptionsConflict`,
+code 85) and the bot stopped before polling.
 
-Any other `uid` index (custom name, custom options, non-unique) is **never
-dropped**. The startup then fails closed with the stage `index_migration` and
-names the conflicting index, so it can be reconciled by hand:
+On startup the app now replaces exactly that legacy definition (`hooshpayinvoices.uid_1`, key
+`{ uid: 1 }`, unique, not sparse) with the unique + sparse index. The replacement can only relax
+the constraint, so no invoice data is affected, and it is idempotent.
 
-```js
-// Inspect the current indexes, then decide what to do with the custom one.
-db.hooshpayinvoices.getIndexes()
-```
+Any other `uid` index (custom name or options, non-unique) is **never dropped**: startup fails
+closed with the stage `index_migration` and names the conflicting index so you can reconcile it
+by hand (`db.hooshpayinvoices.getIndexes()`).
 
----
+## 8. Monitoring, alerts and recovery
 
-## Section 8 — Monitoring & Alerts
+The bot writes structured JSON logs to stdout (`ts`, `service`, `level`, `message`, plus context
+such as `userId` and `amount`). The messages worth alerting on, the recovery procedures for stuck
+payments, and what *not* to do (never edit balances by hand in MongoDB) are in
+[docs/operations.md](docs/operations.md). Log an alert on `Critical startup dependency failed`
+first: its `stage` field says whether the config, MongoDB, the index migration or Redis failed.
 
-The bot emits **structured JSON logs** to stdout. Every payment event includes:
+## 9. Rollback
 
-```json
-{
-  "ts": "2026-09-16T10:00:00.000Z",
-  "service": "hooshpay",
-  "level": "info",
-  "message": "Phase-2 complete: balance credited",
-  "cid": "550e8400-e29b-41d4-a716-446655440000",
-  "uid": "inv_abc123",
-  "userId": 123456789,
-  "amount": 50000,
-  "newBalance": 150000
-}
-```
-
-### Recommended monitoring queries
+Prefer a non-destructive revert:
 
 ```bash
-# Watch payment confirmations live
-pm2 logs swift-vpn-bot | grep '"message":"Phase-2 complete'
-
-# Count failed fulfillments today
-grep '"level":"error"' logs/error.log | grep hooshpay | wc -l
-
-# Find any stuck invoices (should be 0)
-grep '"message":"Crash recovery' logs/out.log
-```
-
-### Critical log patterns to alert on
-
-| Pattern | Severity | Action |
-|---|---|---|
-| `"Critical startup dependency failed"` | 🔴 Critical | MongoDB/Redis is not ready — read the `stage` field: `mongo_config`, `mongo_connect`, `mongo_ping`, `index_migration`, `index_init`, `redis_connect` |
-| `"stage":"index_migration"` | 🔴 Critical | A custom `uid` index blocked the automatic legacy-index migration — the log names the index; reconcile it manually |
-| `"DB error crediting balance"` | 🔴 Critical | Check MongoDB, run `node scripts/preflight.js` |
-| `"Balance credit FAILED"` | 🔴 Critical | Admin notified via Telegram, but also check logs |
-| `"REVERSAL received"` | 🟠 High | Admin notified via Telegram automatically |
-| `"Redis acquire failed"` | 🟡 Medium | Redis is down; payment still works via MongoDB guard |
-| `"User not found"` | 🟡 Medium | Payment received but user deleted — manual credit needed |
-
----
-
-## Section 9 — Recovery Procedures
-
-### Stuck payments (fulfilled=true, balanceCredited=false)
-
-The recovery cron handles this automatically every 5 minutes. To trigger it immediately:
-
-1. In the Telegram admin group, send `/panel`
-2. Tap **🏦 گزارش HooshPay**
-3. If any stuck invoices appear, tap **⚡ اجرای تسویه‌های معلق**
-
-### Manual balance credit (admin)
-
-If a user paid but balance was not credited:
-
-```js
-// In mongosh
-use swiftvpn
-db.hooshpayinvoices.findOne({ uid: "inv_xxx" })
-// Verify status and fulfilled fields, then:
-db.users.updateOne({ telegramId: "USER_ID" }, { $inc: { balance: AMOUNT } })
-db.hooshpayinvoices.updateOne({ uid: "inv_xxx" }, { $set: { balanceCredited: true } })
-```
-
-### Reset a hung lock (if a lock is stuck in Redis)
-
-```bash
-redis-cli -h $REDIS_HOST -p $REDIS_PORT DEL "hoosh:lock:INV_UID"
-```
-
----
-
-## Section 10 — Rollback Plan
-
-If the deployment fails:
-
-```bash
-# Revert to previous working commit
 git log --oneline -5
-git checkout PREVIOUS_COMMIT_HASH -- .
-npm start
-
-# Or with PM2
-pm2 stop swift-vpn-bot
-git revert HEAD
-pm2 start ecosystem.config.cjs
+git revert <bad-commit>        # creates a new commit; history is preserved
+npm install && npm run build
+pm2 restart swift-vpn-bot
 ```
 
----
+Redeploying an earlier release is also fine. Data changes are additive, with one exception: a
+release older than the `uid` index migration (section 7) defines the original non-sparse index and
+will fail index creation against the migrated one, so roll back only to releases that include the
+migration.
 
-## Final GO / NO-GO Sign-off
-
-| Check | Status | Signed off by |
-|---|---|---|
-| Preflight script passes (0 failures) | ⬜ | |
-| HOOSHPAY_WEBHOOK_SECRET set in both .env and HooshPay dashboard | ⬜ | |
-| WEBHOOK_BASE_URL is public HTTPS | ⬜ | |
-| MongoDB healthy and indexed | ⬜ | |
-| Redis healthy with SET NX working | ⬜ | |
-| /health endpoint returns 200 | ⬜ | |
-| Bot responds to /start | ⬜ | |
-| Test payment completes end-to-end | ⬜ | |
-| PM2 startup on boot enabled | ⬜ | |
-| .env not committed to git | ⬜ | |
-
-**Deploy only when all boxes are checked.**
-
----
-
-## Section 7 — Admin Panel (web + Telegram)
+## 10. Admin panel notes
 
 | Topic | Notes |
 |---|---|
-| URL | `<WEBHOOK_BASE_URL>/admin` — served by the same Railway service, no extra deploy |
-| Auth | Telegram allowlist (`ADMINS`) + one-time code DM + Redis session (HttpOnly cookie, CSRF token) |
-| Session TTL | `ADMIN_SESSION_TTL_SECONDS` (default 8 h, min 15 min, max 24 h) |
-| Telegram panel | `/admin` or `پنل` — private chat for allowlisted admins; group requires `GROUP_ID` |
-| Audit | Every sensitive action lands in `AdminAuditLog` with actor, target, reason and IP (web) |
-| Products | `AdminProduct` catalog (CRUD, reorder, enable) powers panel product-mix & profit analytics; defaults are seeded on first boot. The Telegram shop still sells the built-in plan list — catalog-driven checkout is a follow-up (README §12.5) |
-| Broadcasts | Rate-limited (~25 msg/s), cancellable, resume from the last acknowledged recipient |
-| Backups | Include the new collections: `AdminAuditLog`, `AdminProduct`, `AdminBroadcast`, `SystemHealth` |
+| URLs | `<WEBHOOK_BASE_URL>/panel-next` (Next.js) and `/panel` (alias `/admin`); served by the same process, nothing extra to deploy |
+| Auth | Telegram allow-list (`ADMINS`) + one-time code by direct message + Redis session (HttpOnly cookie, CSRF token) |
+| Session lifetime | `ADMIN_SESSION_TTL_SECONDS` (default 8 h, min 15 min, max 24 h) |
+| Telegram panel | `/admin`, `/panel` or `پنل`; in private chat for allow-listed admins, or in the group set by `GROUP_ID` |
+| Audit | Every sensitive action is stored in `AdminAuditLog` with actor, target, reason and IP (web) |
+| Plans | The `AdminProduct` catalog (create, edit, reorder, enable) drives panel analytics only. Customers are always charged from the fixed plan list in `services/plans.js` (see [docs/payments.md](docs/payments.md)) |
+| Broadcasts | Sent in batches of 25 with a pause between batches, cancellable |
+| Backups | Include the new collections (`AdminAuditLog`, `AdminAccount`, `AdminProduct`, `AdminBroadcast`, `SystemHealth`, `MockTestRun`, `PaymentTombstone`) |
+
+## Final go / no-go
+
+| Check | Done |
+|---|---|
+| `npm run preflight` reports 0 failures | ☐ |
+| `HOOSHPAY_WEBHOOK_SECRET` and `NOWPAYMENTS_IPN_SECRET` are set in `.env` and in the provider dashboards | ☐ |
+| `WEBHOOK_BASE_URL` is a public HTTPS origin | ☐ |
+| MongoDB healthy and indexed; Redis healthy | ☐ |
+| `/health` returns 200 and `/ready` returns 200 | ☐ |
+| Bot answers `/start`; admin panel opens | ☐ |
+| A real low-value payment completes end to end | ☐ |
+| Exactly one process / replica | ☐ |
+| PM2 start on boot is enabled | ☐ |
+| `.env` is not committed (`git log --all -- .env` is empty) | ☐ |
+
+**Deploy only when every box is checked.**

@@ -8,6 +8,8 @@ node_modules/
 
 # ── Runtime / build output ───────────────────────────────────────────────────
 node-compile-cache/
+# Runtime session dumps (such files were committed once; they hold user IDs and must not be)
+/sessions/
 coverage/
 *.log
 npm-debug.log*
