@@ -62,7 +62,7 @@ export function rateLimitMiddleware({ limit, windowMs, scope = "route", methods 
   };
 }
 
-function parseCookies(header) {
+export function parseCookies(header) {
   const cookies = {};
   if (typeof header !== "string" || !header) return cookies;
   for (const part of header.split(";")) {
@@ -83,9 +83,9 @@ export const SESSION_COOKIE_PATH = "/api/admin";
 /**
  * The Next.js admin panel verifies the session server-side on every page
  * request (app/(app)/layout.tsx), which requires the browser to attach the
- * cookie to /panel-next/* requests directly — a server-to-server loopback
+ * cookie to /next-panel/* requests directly — a server-to-server loopback
  * fetch cannot forward a cookie the browser never sent it in the first
- * place. /api/admin and /panel-next are sibling paths with no shared
+ * place. /api/admin and /next-panel are sibling paths with no shared
  * non-root prefix, so a single Set-Cookie Path cannot cover both without
  * widening to "/"; instead the same session is issued as a second cookie
  * scoped to this path, keeping each narrower than "/" (the legacy /panel

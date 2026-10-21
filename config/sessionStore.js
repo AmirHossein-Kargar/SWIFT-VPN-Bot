@@ -14,6 +14,14 @@ import client, { isRedisReady } from "./redisClient.js";
 
 const prefix = "session:";
 
+// Test seam: unit tests inject an in-memory client so session-driven flows
+// (e.g. support compose mode) can be exercised without Redis.
+let injected = null;
+export function setSessionClientForTests(fake) { injected = fake; }
+export function clearSessionClientForTests() { injected = null; }
+const redis = () => injected || client;
+const online = () => (injected ? true : isRedisReady());
+
 // 7 days: comfortably longer than any payment/invoice lifetime, short enough
 // that abandoned conversations are reclaimed automatically.
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -23,9 +31,9 @@ const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
  * @returns {Promise<object>} session object, or {} when absent/unavailable
  */
 export const getSession = async (userId) => {
-  if (!client || !isRedisReady()) return {};
+  if (!redis() || !online()) return {};
   try {
-    const data = await client.get(prefix + userId);
+    const data = await redis().get(prefix + userId);
     if (!data) return {};
     const parsed = JSON.parse(data);
     return parsed && typeof parsed === "object" ? parsed : {};
@@ -41,9 +49,9 @@ export const getSession = async (userId) => {
  * @returns {Promise<void>}
  */
 export const setSession = async (userId, sessionData) => {
-  if (!client || !isRedisReady()) return;
+  if (!redis() || !online()) return;
   try {
-    await client.set(prefix + userId, JSON.stringify(sessionData), {
+    await redis().set(prefix + userId, JSON.stringify(sessionData), {
       EX: SESSION_TTL_SECONDS,
     });
   } catch (err) {
@@ -56,9 +64,9 @@ export const setSession = async (userId, sessionData) => {
  * @returns {Promise<void>}
  */
 export const clearSession = async (userId) => {
-  if (!client || !isRedisReady()) return;
+  if (!redis() || !online()) return;
   try {
-    await client.del(prefix + userId);
+    await redis().del(prefix + userId);
   } catch (err) {
     console.warn(`[sessionStore] clearSession failed (${err?.name || "RedisError"})`);
   }

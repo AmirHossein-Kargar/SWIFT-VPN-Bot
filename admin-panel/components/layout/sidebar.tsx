@@ -17,6 +17,8 @@ import {
   FlaskConical,
   Activity,
   Settings,
+  LifeBuoy,
+  Gift,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -35,6 +37,7 @@ const NAV_SECTIONS: NavSection[] = [
       { href: "/vpns", label: "VPN services", icon: Globe },
       { href: "/payments", label: "Payments", icon: CreditCard },
       { href: "/recovery", label: "Recovery", icon: RotateCcw },
+      { href: "/tickets", label: "Support tickets", icon: LifeBuoy },
     ],
   },
   {
@@ -49,6 +52,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: "/broadcasts", label: "Broadcasts", icon: Megaphone },
       { href: "/analytics", label: "Analytics", icon: BarChart3 },
+      { href: "/referrals", label: "Referrals", icon: Gift },
     ],
   },
   {
@@ -80,7 +84,7 @@ export function Sidebar() {
             </p>
             <ul className="space-y-0.5">
               {section.items.map((item) => {
-                const active = pathname === item.href;
+                const active = pathname === item.href || (item.href !== "/" && pathname.startsWith(`${item.href}/`));
                 const Icon = item.icon;
                 return (
                   <li key={item.href}>

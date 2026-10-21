@@ -266,9 +266,9 @@ describe("admin session hardening", () => {
     const issued = setCookies.filter((entry) => /swift_admin_session=(?!;)[^;]+/.test(entry));
     assert.equal(issued.length, 2, "one issued cookie per consumer, not a single Path=/ cookie");
     const apiCookie = setCookies.find((entry) => /Path=\/api\/admin(;|$)/i.test(entry));
-    const panelCookie = setCookies.find((entry) => /Path=\/panel-next(;|$)/i.test(entry));
+    const panelCookie = setCookies.find((entry) => /Path=\/next-panel(;|$)/i.test(entry));
     assert.ok(apiCookie, "a cookie scoped to /api/admin");
-    assert.ok(panelCookie, "a cookie scoped to /panel-next");
+    assert.ok(panelCookie, "a cookie scoped to /next-panel");
     for (const entry of [apiCookie, panelCookie]) {
       assert.match(entry, /swift_admin_session=[^;]+/);
       assert.match(entry, /HttpOnly/i);
@@ -279,15 +279,15 @@ describe("admin session hardening", () => {
     assert.equal(apiCookie.match(/swift_admin_session=([^;]+)/)[1], panelCookie.match(/swift_admin_session=([^;]+)/)[1]);
   });
 
-  test("a request carrying only the /panel-next-scoped cookie is still recognized as authenticated", async () => {
+  test("a request carrying only the /next-panel-scoped cookie is still recognized as authenticated", async () => {
     // This is exactly what the Next.js SSR layer does: it forwards whatever
-    // cookie header the browser attached to a /panel-next/* page request to
+    // cookie header the browser attached to a /next-panel/* page request to
     // a server-to-server loopback call against /api/admin/auth/session. A
-    // browser visiting /panel-next only ever attaches the /panel-next cookie
+    // browser visiting /next-panel only ever attaches the /next-panel cookie
     // (never the /api/admin one), so this is the real-world shape of that
     // forwarded header, not the combined pair a same-path request would see.
     const { verify } = await signIn();
-    const panelCookie = verify.headers.getSetCookie().find((entry) => /Path=\/panel-next(;|$)/i.test(entry));
+    const panelCookie = verify.headers.getSetCookie().find((entry) => /Path=\/next-panel(;|$)/i.test(entry));
     const cookie = panelCookie.split(";")[0];
     const session = await call("GET", "/api/admin/auth/session", { cookie });
     assert.equal(session.data.authenticated, true);
@@ -296,12 +296,12 @@ describe("admin session hardening", () => {
 
   test("logout clears the session everywhere: both current cookie paths and the pre-hardening legacy path", async () => {
     const { verify, cookie, csrf } = await signIn();
-    const panelCookie = verify.headers.getSetCookie().find((entry) => /Path=\/panel-next(;|$)/i.test(entry)).split(";")[0];
+    const panelCookie = verify.headers.getSetCookie().find((entry) => /Path=\/next-panel(;|$)/i.test(entry)).split(";")[0];
 
     const logout = await call("POST", "/api/admin/auth/logout", { cookie, csrf });
     const cleared = logout.headers.getSetCookie();
     assert.ok(cleared.some((entry) => /Path=\/api\/admin(;|$)/i.test(entry)), "clears the /api/admin cookie");
-    assert.ok(cleared.some((entry) => /Path=\/panel-next(;|$)/i.test(entry)), "clears the /panel-next cookie");
+    assert.ok(cleared.some((entry) => /Path=\/next-panel(;|$)/i.test(entry)), "clears the /next-panel cookie");
     assert.ok(cleared.some((entry) => /Path=\/(;|,|$)/.test(entry)), "clears the legacy root-path cookie");
 
     // The underlying session is gone, so neither cookie copy still works.

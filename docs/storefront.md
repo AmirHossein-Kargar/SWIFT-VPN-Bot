@@ -9,7 +9,7 @@ webhook endpoints and the read-only store API from one process.
 |---|---|
 | `/` | Public storefront (Persian, right-to-left, light/dark). Strict CSP; canonical URL derived from `WEBHOOK_BASE_URL` |
 | `/panel`, `/admin` | Original static admin dashboard (`noindex`, `no-store`) |
-| `/panel-next` | Next.js admin dashboard, embedded in the same process |
+| `/next-panel` | Next.js admin dashboard, embedded in the same process |
 | `/api/store/catalog`, `/api/store/plans/:id` | Public catalog: GET only, rate-limited, customer-safe fields only |
 | `/api/admin/*` | Admin JSON API ([reference](admin.md#apiadmin-reference)) |
 | `/api/hooshpay/webhook`, `/api/nowpayments/ipn` | Payment webhooks ([details](deployment.md#webhooks)) |
@@ -40,7 +40,7 @@ switch to it.
 
 | Step | What happens |
 |---|---|
-| `npm run build` (storefront part: `npm run build:storefront`) | `scripts/build-storefront.mjs` runs `next build storefront`, **refuses** output with executable inline scripts, inline event handlers or `javascript:` URLs, installs `storefront.html` and `_next/` into `web/public` (git-ignored build output) with pre-compressed `.br`/`.gz` copies, and deletes the build cache. `npm run build` also builds the `/panel-next` admin dashboard |
+| `npm run build` (storefront part: `npm run build:storefront`) | `scripts/build-storefront.mjs` runs `next build storefront`, **refuses** output with executable inline scripts, inline event handlers or `javascript:` URLs, installs `storefront.html` and `_next/` into `web/public` (git-ignored build output) with pre-compressed `.br`/`.gz` copies, and deletes the build cache. `npm run build` also builds the `/next-panel` admin dashboard |
 | Serving (`web/spa.js`) | `/` serves `storefront.html`, falling back to the static `web/public/store.html` if the build is missing, so the site stays up. It injects the canonical link from `WEBHOOK_BASE_URL`, compresses the HTML once per encoding and serves `/_next/static/**` pre-compressed with `Cache-Control: public, max-age=31536000, immutable` |
 | Theme | The external `web/public/store/theme-init.js` sets `data-theme` and the `dark` class before first paint (no inline script, so no CSP change) |
 | Plan loading | The catalog request is preloaded in `<head>` so it overlaps the JavaScript download and is reused by the app's `fetch()`. Retries and the refresh after "plan no longer sold" bypass the HTTP cache. The order dialog (Radix Dialog) is a separate chunk fetched on pointer/focus/touch intent over a plan. Tabs are a small in-repo component |
@@ -68,7 +68,7 @@ the fallback.
   https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:;
   connect-src 'self'; object-src 'none'; frame-ancestors 'none'` (see `STORE_CSP` in
   `web/spa.js`). Google Fonts are the only third-party origin.
-- `/panel-next` responses send `X-Frame-Options: DENY` and `frame-ancestors 'none'` (no
+- `/next-panel` responses send `X-Frame-Options: DENY` and `frame-ancestors 'none'` (no
   `script-src`: Next.js and next-themes need inline bootstrap scripts there).
 
 ## Verification

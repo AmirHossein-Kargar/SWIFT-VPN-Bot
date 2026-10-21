@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 
 const { applyNextPanelHeaders, nextAdminMiddleware } = await import("../../web/nextAdminMiddleware.js");
 
-describe("/panel-next response headers", () => {
+describe("/next-panel response headers", () => {
   test("the Next.js admin UI cannot be framed or MIME-sniffed", () => {
     const headers = {};
     applyNextPanelHeaders({ setHeader: (name, value) => { headers[name.toLowerCase()] = value; } });
@@ -20,7 +20,7 @@ describe("/panel-next response headers", () => {
     assert.doesNotMatch(headers["content-security-policy"], /script-src|default-src/);
   });
 
-  test("the middleware applies them before handing the request to Next, and only for /panel-next", () => {
+  test("the middleware applies them before handing the request to Next, and only for /next-panel", () => {
     const set = [];
     let passedThrough = false;
     nextAdminMiddleware({ path: "/api/store/catalog" }, { setHeader: (name) => set.push(name) }, () => { passedThrough = true; });

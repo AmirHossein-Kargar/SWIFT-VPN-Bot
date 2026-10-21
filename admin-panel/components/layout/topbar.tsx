@@ -113,7 +113,7 @@ export function Topbar() {
                 </p>
                 <ul className="space-y-0.5">
                   {section.items.map((item) => {
-                    const active = pathname === item.href;
+                    const active = pathname === item.href || (item.href !== "/" && pathname.startsWith(`${item.href}/`));
                     const Icon = item.icon;
                     return (
                       <li key={item.href}>

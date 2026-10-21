@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import express from "express";
 import { ADMIN_SESSION_COOKIE, issueAdminLoginCode, consumeAdminLoginCode, createAdminSession, deleteAdminSession } from "../services/admin/auth.js";
-import { AdminServiceError } from "../services/admin/authorization.js";
+import { AdminServiceError, assertAdminUser } from "../services/admin/authorization.js";
 import { runAuditedAction } from "../services/admin/audit.js";
 import { getDashboardMetrics } from "../services/admin/dashboard.js";
 import { listUsers, getUserDetail, changeUserBalance, setUserBlocked, getReferralOverview, resetTestServiceEligibility } from "../services/admin/users.js";
@@ -31,6 +31,9 @@ import { listAuditLogs } from "../services/admin/audit.js";
 import { listAdmins, addAdmin, removeAdmin } from "../services/admin/adminRegistry.js";
 import { sendUserMessage } from "../services/admin/userMessaging.js";
 import { getSettingsOverview } from "../services/admin/settings.js";
+import { listSupportTickets, getSupportTicket, replyToSupportTicket, setSupportTicketStatus } from "../services/admin/tickets.js";
+import { getMessageAttachment } from "../services/support/tickets.js";
+import { streamAttachment } from "../services/support/attachments.js";
 import { default as botInstance } from "../config/botInstance.js";
 import { attachAdminSession, requireAdminSession, requireCsrfToken, requireSameOrigin, adminApiHeaders, rateLimitMiddleware, clientIp, sessionCookieOptions, clearSessionCookieOptions, LEGACY_SESSION_COOKIE_PATH, NEXT_PANEL_SESSION_COOKIE_PATH, adminApiErrorHandler } from "./adminMiddleware.js";
 import { runMockTests, listMockRuns, getMockRun } from "../services/mockTests/runner.js";
@@ -119,7 +122,7 @@ router.post("/auth/verify", rateLimitMiddleware({ limit: 10 }), requireBody(), a
       metadata: { channel: "web" },
     });
     // Issued twice, at two disjoint, narrow paths: /api/admin (both panels'
-    // own fetches) and /panel-next (so the Next.js admin panel can verify
+    // own fetches) and /next-panel (so the Next.js admin panel can verify
     // the session server-side on its own page requests — see
     // NEXT_PANEL_SESSION_COOKIE_PATH for why one cookie cannot cover both).
     res.cookie(ADMIN_SESSION_COOKIE, token, sessionCookieOptions(ttlSeconds));
@@ -667,6 +670,59 @@ router.get("/audit", async (req, res, next) => {
       targetId: req.query.target,
     });
     res.json({ ok: true, data });
+  } catch (error) { next(error); }
+});
+
+// Support tickets (shared model with the Telegram bot; see services/support)
+router.get("/tickets", async (req, res, next) => {
+  try {
+    res.json({ ok: true, data: await listSupportTickets({
+      actorId: req.adminActorId,
+      status: req.query.status,
+      query: req.query.q,
+      unreadOnly: req.query.unread,
+      page: req.query.page,
+      pageSize: req.query.pageSize,
+    }) });
+  } catch (error) { next(error); }
+});
+
+router.get("/tickets/attachments/:messageId", async (req, res, next) => {
+  try {
+    assertAdminUser(req.adminActorId);
+    const attachment = await getMessageAttachment({ messageId: req.params.messageId });
+    await streamAttachment({ bot: botInstance.bot, attachment, res });
+  } catch (error) { next(error); }
+});
+
+router.get("/tickets/:ticketId", async (req, res, next) => {
+  try { res.json({ ok: true, data: await getSupportTicket({ actorId: req.adminActorId, ticketId: req.params.ticketId }) }); }
+  catch (error) { next(error); }
+});
+
+router.post("/tickets/:ticketId/reply", rateLimitMiddleware({ limit: 30 }), requireBody(), async (req, res, next) => {
+  try {
+    const result = await replyToSupportTicket({
+      actorId: req.adminActorId,
+      operationId: parseOperationId(req.body),
+      ticketId: req.params.ticketId,
+      text: req.body.text,
+      ipAddress: clientIp(req),
+    });
+    res.json({ ok: true, data: result });
+  } catch (error) { next(error); }
+});
+
+router.post("/tickets/:ticketId/status", rateLimitMiddleware({ limit: 30 }), requireBody(), async (req, res, next) => {
+  try {
+    const result = await setSupportTicketStatus({
+      actorId: req.adminActorId,
+      operationId: parseOperationId(req.body),
+      ticketId: req.params.ticketId,
+      status: req.body.status,
+      ipAddress: clientIp(req),
+    });
+    res.json({ ok: true, data: result });
   } catch (error) { next(error); }
 });
 
