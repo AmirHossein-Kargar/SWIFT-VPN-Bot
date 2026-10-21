@@ -58,6 +58,7 @@ describe("sendServiceSelectionMenu (entry / my_services_from_profile)", () => {
     assert.deepEqual(bot.edits[0].options.reply_markup.inline_keyboard, [
       [{ text: "alice-1", callback_data: "show_service_alice-1" }],
       [{ text: "bob-2", callback_data: "show_service_bob-2" }],
+      [{ text: "🏠 منوی اصلی", callback_data: "menu:home" }],
     ]);
   });
 

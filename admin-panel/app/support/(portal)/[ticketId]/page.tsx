@@ -6,7 +6,8 @@ import { customerApiGet } from "@/lib/customerApi.server";
 import { AdminApiError } from "@/lib/types";
 import { formatTicketDate, type TicketDetail } from "@/lib/tickets";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { TicketStatusBadge, TicketThread } from "@/components/tickets/ticket-thread";
+import { TicketStatusBadge } from "@/components/tickets/ticket-thread";
+import { LiveTicketThread } from "@/components/tickets/live-ticket-thread";
 import { CustomerTicketActions } from "@/components/support/customer-ticket-actions";
 
 export const metadata: Metadata = { title: "گفتگوی تیکت" };
@@ -40,7 +41,16 @@ export default async function CustomerTicketPage({ params }: { params: Promise<{
           </p>
         </CardHeader>
         <CardContent className="space-y-6">
-          <TicketThread messages={messages} attachmentBase="/api/support/attachments" viewer="customer" />
+          <LiveTicketThread
+            ticketId={ticket.ticketId}
+            endpoint={`/api/support/tickets/${encodeURIComponent(ticket.ticketId)}/updates`}
+            attachmentBase="/api/support/attachments"
+            viewer="customer"
+            initialMessages={messages}
+            initialCursor={detail.cursor ?? null}
+            initialStatus={ticket.status}
+            initialMessageCount={ticket.messageCount}
+          />
           <CustomerTicketActions ticketId={ticket.ticketId} status={ticket.status} />
         </CardContent>
       </Card>

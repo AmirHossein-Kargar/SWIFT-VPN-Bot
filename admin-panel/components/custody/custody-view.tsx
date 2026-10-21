@@ -14,6 +14,7 @@ import { adminMutate } from "@/lib/adminApi.client";
 import { AdminApiError } from "@/lib/types";
 import type { CustodyLocalInvoice, CustodyOverview, CustodyReconcileResult } from "@/lib/types";
 import { formatDateTime, formatToman } from "@/lib/utils";
+import { CustodyAssetsTab, CustodyConversionsTab, CustodyPayoutsTab } from "@/components/custody/custody-money-tabs";
 
 const SEVERITY_VARIANT: Record<string, "success" | "warning" | "destructive" | "outline"> = {
   ok: "success",
@@ -66,10 +67,17 @@ export function CustodyView({ overview, transactions }: { overview: CustodyOverv
       </Card>
 
       <Tabs defaultValue="overview">
-        <TabsList>
+        <TabsList className="h-auto flex-wrap justify-start">
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="assets">Assets</TabsTrigger>
+          <TabsTrigger value="conversions">Conversions</TabsTrigger>
+          <TabsTrigger value="payouts">Payouts</TabsTrigger>
           <TabsTrigger value="transactions">Transactions</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="assets"><CustodyAssetsTab /></TabsContent>
+        <TabsContent value="conversions"><CustodyConversionsTab /></TabsContent>
+        <TabsContent value="payouts"><CustodyPayoutsTab /></TabsContent>
 
         <TabsContent value="overview" className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">

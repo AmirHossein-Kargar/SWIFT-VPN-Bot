@@ -5,7 +5,7 @@ import { AdminApiError } from "./types";
 async function parseOrThrow(response: Response) {
   const body = await response.json().catch(() => null);
   if (!response.ok || !body?.ok) {
-    throw new AdminApiError(body?.message || "The request failed.", response.status, body?.error || "request_failed");
+    throw new AdminApiError(body?.message || "The request failed.", response.status, body?.error || "request_failed", Array.isArray(body?.details) ? body.details : undefined);
   }
   return body;
 }

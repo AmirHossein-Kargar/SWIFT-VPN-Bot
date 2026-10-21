@@ -40,6 +40,8 @@ const quietLogger = { log: () => {} };
 
 /** Drop every index of the collection; a missing collection is not an error. */
 async function resetIndexes() {
+  await HooshPayInvoice.init(); // let Mongoose finish its own auto-index build first, or it can recreate uid_1 mid-test
+  await collection().deleteMany({}); // documents from earlier tests would violate the unique indexes built below
   try {
     await collection().dropIndexes();
   } catch (error) {

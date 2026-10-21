@@ -22,7 +22,7 @@ export const guideButtons = {
   },
 };
 
-const handleGuide = async (bot, chatId) => {
+const handleGuide = async (bot, chatId, { messageId } = {}) => {
   // * Main message shown to the user
   const guideMessage = `📕 به بخش راهنمای ربات خوش آمدید
 
@@ -36,7 +36,19 @@ const handleGuide = async (bot, chatId) => {
   // the chat's existing tracked interface message when one is known safe —
   // i.e. it was itself put there by renderInterface — and otherwise sends
   // fresh, exactly as before.
-  await renderInterface(bot, { chatId, text: guideMessage, options: guideButtons });
+  await renderInterface(bot, {
+    chatId,
+    text: guideMessage,
+    messageId,
+    options: {
+      reply_markup: {
+        inline_keyboard: [
+          ...guideButtons.reply_markup.inline_keyboard,
+          [{ text: "🏠 منوی اصلی", callback_data: "menu:home" }],
+        ],
+      },
+    },
+  });
 };
 
 export default handleGuide;

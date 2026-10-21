@@ -329,7 +329,9 @@ describe("input handling, errors and headers", () => {
   });
 
   test("the admin app shell ships a strict CSP and clickjacking protection", async () => {
-    const page = await fetch(`${baseUrl}/admin`);
+    // /admin now redirects to the Next.js panel at /panel (its headers are covered by nextPanelHeaders.test.js);
+    // the legacy shell is still on disk and is served, with the same CSP, as /index.html.
+    const page = await fetch(`${baseUrl}/index.html`);
     assert.equal(page.status, 200);
     const csp = page.headers.get("content-security-policy");
     assert.equal(csp, ADMIN_CSP);
@@ -343,7 +345,9 @@ describe("input handling, errors and headers", () => {
 
   test("static path traversal cannot read files outside the web root", async () => {
     for (const path of ["/..%2f..%2fpackage.json", "/%2e%2e/%2e%2e/.env", "/../server.js", "/admin/..%5c..%5cpackage.json"]) {
-      const result = await fetch(`${baseUrl}${path}`);
+      // redirect: "manual" because /admin/... now answers with a redirect to /panel; the attempt is still sent
+      // and the response body must still never contain files from outside the web root.
+      const result = await fetch(`${baseUrl}${path}`, { redirect: "manual" });
       const text = await result.text();
       assert.equal(/"name":\s*"swift-vpn-bot"|WEBHOOK_BASE_URL|express/.test(text), false, path);
     }

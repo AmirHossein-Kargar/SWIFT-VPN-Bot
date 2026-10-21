@@ -59,8 +59,8 @@ describe("web admin authentication", () => {
     assert.equal(result.data.error, "unauthorized");
   });
 
-  test("the SPA is served at /admin", async () => {
-    const response = await fetch(`${baseUrl}/admin`);
+  test("the legacy SPA shell is still served (as /index.html; /admin now redirects to /panel)", async () => {
+    const response = await fetch(`${baseUrl}/index.html`);
     assert.equal(response.status, 200);
     const html = await response.text();
     assert.ok(html.includes("SWIFT Admin"));
@@ -118,6 +118,7 @@ describe("web admin API (session-authenticated)", () => {
   before(async () => {
     if (!dbAvailable) return;
     resetAdminRateLimitsForTests();
+    fakeRedis.map.delete(`admin:web:login-rate:${ADMIN}`); // the earlier login test used this account's cooldown slot
     const { code } = await issueAdminLoginCode(ADMIN, fakeRedis);
     const verify = await call("POST", "/api/admin/auth/verify", { body: { code } });
     cookie = (verify.headers.get("set-cookie") || "").split(";")[0];
@@ -134,7 +135,7 @@ describe("web admin API (session-authenticated)", () => {
   skip("products CRUD through the authenticated API", async () => {
     const created = await call("POST", "/api/admin/products", {
       cookie, csrf,
-      body: { operationId: `web${Date.now().toString(36)}`.padEnd(20, "0"), name: "Web test plan", durationDays: 14, trafficGb: 20, priceToman: 30_000, costToman: 5_000 },
+      body: { operationId: `web${Date.now().toString(36)}`.padEnd(20, "0"), name: "Web test plan", durationDays: 14, trafficGb: 20, priceToman: 30_000, costToman: 5_000, enabled: true },
     });
     assert.equal(created.status, 200);
     const list = await call("GET", "/api/admin/products", { cookie, csrf });

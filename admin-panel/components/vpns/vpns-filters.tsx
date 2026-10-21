@@ -42,7 +42,7 @@ export function VpnsFilters({ defaultSearch, status }: { defaultSearch: string; 
         <Input value={search} onChange={(event) => onSearchChange(event.target.value)} placeholder="Search by client ID, username, or Telegram ID" className="pl-8" />
       </div>
       <Select value={status} onValueChange={(value) => update({ status: value })}>
-        <SelectTrigger className="w-44">
+        <SelectTrigger className="w-44" aria-label="Filter by status">
           <SelectValue placeholder="Status" />
         </SelectTrigger>
         <SelectContent>

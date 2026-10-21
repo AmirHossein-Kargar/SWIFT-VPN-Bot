@@ -19,6 +19,7 @@ import {
   SupportError,
   listCustomerTickets,
   getCustomerTicket,
+  getTicketUpdates,
   getMessageAttachment,
 } from "../services/support/tickets.js";
 import { customerOpenTicket, customerReply, customerSetStatus } from "../services/support/workflow.js";
@@ -33,6 +34,7 @@ import {
   clearSessionCookieOptions,
   parseCookies,
   NEXT_PANEL_SESSION_COOKIE_PATH,
+  RETIRED_PANEL_COOKIE_PATH,
 } from "./adminMiddleware.js";
 
 export const CUSTOMER_API_COOKIE_PATH = "/api/support";
@@ -94,6 +96,7 @@ router.post("/auth/verify", limited({ limit: 10, scope: "verify" }), requireBody
     const { token, session, ttlSeconds } = await createCustomerSession(telegramId);
     res.cookie(CUSTOMER_SESSION_COOKIE, token, sessionCookieOptions(ttlSeconds, CUSTOMER_API_COOKIE_PATH));
     res.cookie(CUSTOMER_SESSION_COOKIE, token, sessionCookieOptions(ttlSeconds, NEXT_PANEL_SESSION_COOKIE_PATH));
+    res.clearCookie(CUSTOMER_SESSION_COOKIE, clearSessionCookieOptions(RETIRED_PANEL_COOKIE_PATH));
     res.json({ ok: true, csrfToken: session.csrfToken, expiresInSeconds: ttlSeconds });
   } catch (error) { next(error); }
 });
@@ -109,6 +112,7 @@ router.post("/auth/logout", requireBody(), async (req, res, next) => {
     if (req.customerSessionToken) await deleteCustomerSession(req.customerSessionToken).catch(() => {});
     res.clearCookie(CUSTOMER_SESSION_COOKIE, clearSessionCookieOptions(CUSTOMER_API_COOKIE_PATH));
     res.clearCookie(CUSTOMER_SESSION_COOKIE, clearSessionCookieOptions(NEXT_PANEL_SESSION_COOKIE_PATH));
+    res.clearCookie(CUSTOMER_SESSION_COOKIE, clearSessionCookieOptions(RETIRED_PANEL_COOKIE_PATH));
     res.json({ ok: true });
   } catch (error) { next(error); }
 });
@@ -154,6 +158,12 @@ router.post("/tickets", limited({ limit: 10, scope: "create" }), requireBody(), 
       channel: "web",
     });
     res.status(result.created ? 201 : 200).json({ ok: true, data: { ticket: result.ticket, replayed: result.duplicate, forwarded: result.forwarded } });
+  } catch (error) { next(error); }
+});
+
+router.get("/tickets/:ticketId/updates", async (req, res, next) => {
+  try {
+    res.json({ ok: true, data: await getTicketUpdates({ audience: "customer", userId: req.customerId, ticketId: req.params.ticketId, afterId: req.query.after, markRead: req.query.markRead === "1" }) });
   } catch (error) { next(error); }
 });
 

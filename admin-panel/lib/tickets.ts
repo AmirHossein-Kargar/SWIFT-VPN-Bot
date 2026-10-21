@@ -29,6 +29,8 @@ export interface TicketMessage {
 export interface TicketDetail {
   ticket: TicketSummary;
   messages: TicketMessage[];
+  /** Id of the last message returned; the live poller continues from here. */
+  cursor?: string | null;
 }
 
 export interface AdminTicketPage {

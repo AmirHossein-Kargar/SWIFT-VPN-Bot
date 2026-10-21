@@ -54,7 +54,8 @@ describe("handleGuide", () => {
     // explicitly (the latter two end up `undefined` here, which Telegram's
     // JSON transport drops exactly like an absent key) — what must be
     // byte-identical to the original guideButtons constant is reply_markup.
-    assert.deepEqual(options.reply_markup, guideButtons.reply_markup);
+    assert.deepEqual(options.reply_markup.inline_keyboard.slice(0, -1), guideButtons.reply_markup.inline_keyboard);
+    assert.deepEqual(options.reply_markup.inline_keyboard.at(-1), [{ text: "🏠 منوی اصلی", callback_data: "menu:home" }]);
     assert.equal(options.parse_mode, undefined);
   });
 

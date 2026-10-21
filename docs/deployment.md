@@ -37,7 +37,7 @@ day-two tasks see [Operations](operations.md).
 
    | Setting | Value |
    |---|---|
-   | Build | `npm install && npm run build` — builds the `/next-panel` dashboard and the public storefront. If the storefront build is missing, `/` falls back to the static page |
+   | Build | `npm install && npm run build` — builds the `/panel` dashboard and the public storefront. If the storefront build is missing, `/` falls back to the static page |
    | Start | `npm start` |
    | Healthcheck path | `/health` |
    | Replicas | `1` |

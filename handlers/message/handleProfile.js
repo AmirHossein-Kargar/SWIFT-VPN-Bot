@@ -195,6 +195,7 @@ const handleProfile = async (bot, chatId, userId, dependencies = {}) => {
           [
             { text: "🎟️ اعمال کد تخفیف", callback_data: "alert_discount_code_disabled" },
           ],
+          [{ text: "🏠 منوی اصلی", callback_data: "menu:home" }],
         ],
       },
     };

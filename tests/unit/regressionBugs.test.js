@@ -5,13 +5,10 @@
  * failure mode of each defect. All tests pass after the corresponding fix
  * is applied.
  *
- * Bug 1 — manualFulfillment.js: wrong runAuditedAction usage & wrong MongoDB filter
- *   - approveManualFulfillment queries WalletPurchase with { _id: purchaseId }
- *     but purchaseId is a UUID string (not a MongoDB ObjectId). The filter must
- *     use { purchaseId: purchaseId }.
- *   - cancelManualFulfillment calls runAuditedAction with no `execute` function,
- *     which throws a TypeError before any DB operations.
- *   - commitManualService has the same runAuditedAction problem.
+ * Bug 1 — runAuditedAction called without an `execute` function must throw
+ *   (calling it without `execute` threw a TypeError before any DB operation).
+ *   The static source checks for the unreleased services/manualFulfillment.js
+ *   module live in tests/unit/manualFulfillment.test.js, next to that module.
  *
  * Bug 2 — onMessage.js: hardcoded support URL in admin message flow
  *   - The "contact support" button in admin message delivery uses
@@ -40,9 +37,9 @@ function readSrc(rel) {
   return readFileSync(join(root, rel), "utf8");
 }
 
-// ── Bug 1: manualFulfillment.js — wrong runAuditedAction usage ─────────────
+// ── Bug 1: runAuditedAction requires an execute function ───────────────────
 
-describe("manualFulfillment.js — runAuditedAction API contract", () => {
+describe("runAuditedAction — API contract", () => {
   test("runAuditedAction must be called with an execute function", async () => {
     // runAuditedAction throws TypeError synchronously when execute is not a
     // function.  The correct pattern is:
@@ -64,71 +61,6 @@ describe("manualFulfillment.js — runAuditedAction API contract", () => {
           || (err instanceof Error && err.message.includes("execute"));
       },
       "runAuditedAction must throw when execute function is missing",
-    );
-  });
-
-  test("manualFulfillment approveManualFulfillment queries by purchaseId, not _id", () => {
-    // Static check: verify the filter keys on `purchaseId`, not `_id`. The
-    // query may spell this out explicitly (`purchaseId: purchaseId`) or use
-    // valid ES6 object-shorthand (`purchaseId,` inside an object literal) —
-    // both are equivalent at runtime, so either must satisfy this check.
-    const source = readSrc("services/manualFulfillment.js");
-    // Extract the approveManualFulfillment function body
-    const approveStart = source.indexOf("export async function approveManualFulfillment");
-    const approveEnd = source.indexOf("\nexport async function", approveStart + 1);
-    const approveBody = source.slice(
-      approveStart,
-      approveEnd === -1 ? approveStart + 2000 : approveEnd,
-    );
-
-    // Explicit property syntax: `purchaseId:` or `purchaseId :`.
-    const explicitProperty = /purchaseId\s*:/;
-    // ES6 shorthand property: `purchaseId` sitting directly between object-
-    // literal delimiters (`{`/`,` before, `,`/`}` after) — this scopes the
-    // match to an actual object-literal property position, not merely the
-    // word "purchaseId" appearing anywhere (e.g. in the function's own
-    // parameter list, which is `(purchaseId, adminId)`, or in a comment).
-    const shorthandProperty = /[{,]\s*purchaseId\s*[,}]/;
-
-    assert.ok(
-      explicitProperty.test(approveBody) || shorthandProperty.test(approveBody),
-      "approveManualFulfillment must query WalletPurchase by { purchaseId } (explicit or ES6 shorthand), not { _id }",
-    );
-  });
-
-  test("manualFulfillment cancelManualFulfillment queries by purchaseId, not _id", () => {
-    const source = readSrc("services/manualFulfillment.js");
-    const cancelStart = source.indexOf("export async function cancelManualFulfillment");
-    const cancelEnd = source.indexOf("\nexport async function commitManualService", cancelStart);
-    const cancelBody = source.slice(
-      cancelStart,
-      cancelEnd === -1 ? cancelStart + 3000 : cancelEnd,
-    );
-
-    // WalletPurchase queries must use { purchaseId: ... } not { _id: purchaseId }
-    assert.ok(
-      cancelBody.includes("purchaseId:") || cancelBody.includes("purchaseId :"),
-      "cancelManualFulfillment must query WalletPurchase by { purchaseId } not { _id }",
-    );
-
-    // The runAuditedAction call must contain an execute function
-    assert.ok(
-      cancelBody.includes("execute:"),
-      "cancelManualFulfillment must pass execute: fn to runAuditedAction",
-    );
-  });
-
-  test("manualFulfillment commitManualService uses correct runAuditedAction with execute fn", () => {
-    const source = readSrc("services/manualFulfillment.js");
-    const commitStart = source.indexOf("export async function commitManualService");
-    const commitBody = source.slice(
-      commitStart,
-      commitStart + 4000,
-    );
-
-    assert.ok(
-      commitBody.includes("execute:"),
-      "commitManualService must pass execute: fn to runAuditedAction",
     );
   });
 });

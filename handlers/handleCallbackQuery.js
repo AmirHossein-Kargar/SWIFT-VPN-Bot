@@ -23,8 +23,9 @@ import {
   getSession,
   setSession,
 } from "../config/sessionStore.js";
-import keyboard from "../keyboards/mainKeyboard.js";
-import { CHOOSE_OPTION_MESSAGE } from "../messages/staticMessages.js";
+import keyboard, { MENU_PREFIX } from "../keyboards/mainKeyboard.js";
+import { runMenuAction, showMainMenu } from "./menuActions.js";
+import { claimCallback, withSingleAck } from "../utils/callbackGuard.js";
 import promptForReceipt from "../paymentHandlers/promptForReceipt.js";
 import { getActiveProducts, getCustomerPlans, getCustomerPlanById } from "../services/plans.js";
 import handleBuyService, { buildDurationPlansMessage } from "../services/buyService/buyService.js";
@@ -117,7 +118,7 @@ const ADMIN_PANEL_KEYBOARD = {
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
-const handleCallbackQuery = async (bot, query) => {
+const handleCallbackQueryInner = async (bot, query) => {
   const data = query?.data;
   const chatId = query?.message?.chat?.id ?? query?.from?.id;
   const messageId = query?.message?.message_id;
@@ -136,6 +137,28 @@ const handleCallbackQuery = async (bot, query) => {
         show_alert: true,
       });
     } catch { /* ignore */ }
+    return;
+  }
+
+  // Rapid double-taps on the same button of the same message are dropped for
+  // operations that move money, create services or change state. Navigation
+  // is idempotent and intentionally not throttled here.
+  if (!claimCallback({ userId, messageId, data })) {
+    try { await bot.answerCallbackQuery(query.id); } catch { /* ignore */ }
+    return;
+  }
+
+  // ── Main menu (menu:*) — pure navigation into existing, self-checking flows ─
+  if (data.startsWith(MENU_PREFIX)) {
+    try { await bot.answerCallbackQuery(query.id); } catch { /* ignore */ }
+    await runMenuAction(bot, {
+      action: data.slice(MENU_PREFIX.length),
+      chatId,
+      userId,
+      chat: query.message.chat,
+      from: query.from,
+      messageId,
+    });
     return;
   }
 
@@ -438,12 +461,12 @@ const handleCallbackQuery = async (bot, query) => {
       break;
 
     case "back_to_home":
-      try { await bot.deleteMessage(chatId, messageId); } catch (_) {}
       await clearSession(chatId);
       if (session?.supportMessageId && session.supportMessageId !== messageId) {
         try { await bot.deleteMessage(chatId, session.supportMessageId); } catch (_) {}
       }
-      await bot.sendMessage(chatId, CHOOSE_OPTION_MESSAGE, keyboard);
+      // Edit the current screen into the main menu (one message, no clutter).
+      await showMainMenu(bot, { chatId, userId, chatType: query.message?.chat?.type, messageId });
       break;
 
     // ── Service purchase ─────────────────────────────────────────────────────
@@ -452,13 +475,11 @@ const handleCallbackQuery = async (bot, query) => {
     // they read the authoritative Admin Panel product catalog.)
 
     case "buy_service_back_to_main":
-      await bot.deleteMessage(chatId, messageId).catch(() => {});
-      await bot.sendMessage(chatId, CHOOSE_OPTION_MESSAGE);
+      await showMainMenu(bot, { chatId, userId, chatType: query.message?.chat?.type, messageId });
       break;
 
     case "buy_service_back":
-      await bot.deleteMessage(chatId, messageId).catch(() => {});
-      await handleBuyService(bot, chatId);
+      await handleBuyService(bot, chatId, { messageId });
       break;
 
     // ── Admin: back to panel ─────────────────────────────────────────────────
@@ -859,7 +880,7 @@ const handleCallbackQuery = async (bot, query) => {
     // or duration supplied by the callback/UI into the business layer.
     const selectedPlan = getCustomerPlanById(planId);
     if (!selectedPlan) {
-      await bot.sendMessage(chatId, "❌ این پلن در حال حاضر فعال نیست یا حذف شده است. لطفاً از منوی خرید دوباره انتخاب کنید.", keyboard.reply_markup);
+      await bot.sendMessage(chatId, "❌ این پلن در حال حاضر فعال نیست یا حذف شده است. لطفاً از منوی خرید دوباره انتخاب کنید.", keyboard);
       return;
     }
     await bot.deleteMessage(chatId, messageId).catch(() => {});
@@ -1030,6 +1051,21 @@ const handleCallbackQuery = async (bot, query) => {
   try {
     await bot.answerCallbackQuery(query.id);
   } catch { /* already answered */ }
+};
+
+/**
+ * Public entry point. Guarantees every callback query is acknowledged exactly
+ * once: handlers may answer with their own text/alert (first answer wins, later
+ * ones are dropped), and a query nobody answered is acknowledged at the end so
+ * the client spinner always stops.
+ */
+const handleCallbackQuery = async (bot, query) => {
+  const { bot: ackBot, ensureAnswered } = withSingleAck(bot, query?.id);
+  try {
+    await handleCallbackQueryInner(ackBot, query);
+  } finally {
+    await ensureAnswered();
+  }
 };
 
 export default handleCallbackQuery;

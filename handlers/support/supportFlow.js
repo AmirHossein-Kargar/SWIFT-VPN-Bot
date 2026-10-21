@@ -173,7 +173,7 @@ async function sendWebLink(bot, chatId, userId) {
   const base = webBaseUrl();
   if (!base) return "پنل وب در دسترس نیست.";
   const { code } = await issueCustomerLoginCode(userId);
-  const url = `${base}/next-panel/support/login#code=${code}`;
+  const url = `${base}/panel/support/login#code=${code}`;
   await bot.sendMessage(chatId, "🌐 لینک ورود یک‌بارمصرف به پنل پشتیبانی (۵ دقیقه معتبر است):", {
     reply_markup: { inline_keyboard: [[{ text: "ورود به پنل پشتیبانی", url }]] },
     protect_content: true,

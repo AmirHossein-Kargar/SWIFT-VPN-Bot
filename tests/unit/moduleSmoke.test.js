@@ -39,7 +39,7 @@ function walk(dir, acc = []) {
 
 test("every production module imports cleanly", async () => {
   const files = walk(root)
-    .map((full) => relative(root, full))
+    .map((full) => relative(root, full).replace(/\\/g, "/"))
     .filter((relPath) => !SKIP.has(relPath) && !SKIP_DIRS.some((pattern) => pattern.test(relPath + "/") || pattern.test(relPath)));
   assert.ok(files.length >= 60, `expected a full module tree, found ${files.length}`);
 

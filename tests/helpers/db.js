@@ -54,6 +54,10 @@ export async function connectTestDB() {
     return true;
   } catch (err) {
     await mongoose.disconnect().catch(() => {});
+    if (process.env.REQUIRE_MONGO_TESTS === "1") {
+      // Release verification (scripts/test-release.mjs): the DB-backed tests are required, so a skip must never pass for a pass.
+      throw new Error(`REQUIRE_MONGO_TESTS=1 but MongoDB is unreachable (${err?.name || "ConnectionError"}); refusing to skip the database-backed tests.`);
+    }
     console.warn(`[tests] MongoDB unavailable — real-database integration tests are skipped (${err?.name || "ConnectionError"}).`);
     return false;
   }

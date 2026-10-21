@@ -40,8 +40,18 @@ export const buildDurationPlansMessage = (durationDays, plans = []) => {
   ].join("\n");
 };
 
-const handleBuyService = async (bot, chatId) => {
-  await bot.sendMessage(chatId, DURATION_SELECTION_MESSAGE, buildDurationSelectionMarkup());
+const handleBuyService = async (bot, chatId, { messageId } = {}) => {
+  const markup = buildDurationSelectionMarkup();
+  if (messageId != null) {
+    try {
+      await bot.editMessageText(DURATION_SELECTION_MESSAGE, { ...markup, chat_id: chatId, message_id: messageId });
+      return;
+    } catch (error) {
+      if (/message is not modified/i.test(String(error?.response?.body?.description || error?.message))) return;
+      // Not editable (deleted / too old / media): fall back to one fresh menu.
+    }
+  }
+  await bot.sendMessage(chatId, DURATION_SELECTION_MESSAGE, markup);
 };
 
 export default handleBuyService;

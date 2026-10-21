@@ -13,7 +13,7 @@ async function sendServiceSelectionMenu(bot, chatId, userId, { messageId, userMo
   try {
     const user = await userModel.findOne({ telegramId: userId });
     if (!user || !Array.isArray(user.services) || user.services.length === 0) {
-      await renderInterface(bot, { chatId, text: "⚠️ شما هیچ سرویسی ندارید.", messageId });
+      await renderInterface(bot, { chatId, text: "⚠️ شما هیچ سرویسی ندارید.", messageId, options: { reply_markup: { inline_keyboard: [[{ text: "🏠 منوی اصلی", callback_data: "menu:home" }]] } } });
       return;
     }
 
@@ -28,7 +28,7 @@ async function sendServiceSelectionMenu(bot, chatId, userId, { messageId, userMo
     await renderInterface(bot, {
       chatId,
       text: "📌 یکی از اشتراک‌های زیر را انتخاب کنید:",
-      options: { reply_markup: { inline_keyboard: serviceButtons } },
+      options: { reply_markup: { inline_keyboard: [...serviceButtons, [{ text: "🏠 منوی اصلی", callback_data: "menu:home" }]] } },
       messageId,
     });
   } catch (error) {
