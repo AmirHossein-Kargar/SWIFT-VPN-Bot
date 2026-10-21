@@ -10,7 +10,11 @@ async function parseOrThrow(response: Response) {
   return body;
 }
 
-export async function adminGet<T>(path: string, searchParams?: Record<string, string | number | undefined>): Promise<T> {
+export async function adminGet<T>(
+  path: string,
+  searchParams?: Record<string, string | number | undefined>,
+  options: { signal?: AbortSignal } = {}
+): Promise<T> {
   const query = new URLSearchParams();
   if (searchParams) {
     for (const [key, value] of Object.entries(searchParams)) {
@@ -18,7 +22,7 @@ export async function adminGet<T>(path: string, searchParams?: Record<string, st
     }
   }
   const queryString = query.toString();
-  const response = await fetch(`/api/admin${path}${queryString ? `?${queryString}` : ""}`);
+  const response = await fetch(`/api/admin${path}${queryString ? `?${queryString}` : ""}`, { signal: options.signal });
   const body = await parseOrThrow(response);
   return body.data as T;
 }
@@ -27,12 +31,14 @@ export async function adminMutate<T>(
   path: string,
   method: "POST" | "PATCH" | "DELETE",
   csrfToken: string,
-  payload?: Record<string, unknown>
+  payload?: Record<string, unknown>,
+  options: { signal?: AbortSignal } = {}
 ): Promise<T> {
   const response = await fetch(`/api/admin${path}`, {
     method,
     headers: { "Content-Type": "application/json", "x-csrf-token": csrfToken },
     body: JSON.stringify(payload ?? {}),
+    signal: options.signal,
   });
   const body = await parseOrThrow(response);
   return body.data as T;

@@ -18,6 +18,15 @@ admin-panel/.next/
 admin-panel/next-env.d.ts
 admin-panel/node_modules/
 
+# ── Public storefront (storefront/ → built into web/public by scripts/build-storefront.mjs) ──
+storefront/.next/
+storefront/out/
+storefront/next-env.d.ts
+storefront/tsconfig.tsbuildinfo
+web/public/_next/
+web/public/_next.staging/
+web/public/storefront.html
+
 # ── Editor / tooling state ───────────────────────────────────────────────────
 .vscode/settings.json
 .mimocode/

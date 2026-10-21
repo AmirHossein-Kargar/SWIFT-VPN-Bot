@@ -63,7 +63,7 @@ export function UsersFilters({
         />
       </div>
       <Select value={activity} onValueChange={(value) => update({ activity: value })}>
-        <SelectTrigger className="w-40">
+        <SelectTrigger className="w-40" aria-label="Filter by activity">
           <SelectValue placeholder="Activity" />
         </SelectTrigger>
         <SelectContent>
@@ -73,7 +73,7 @@ export function UsersFilters({
         </SelectContent>
       </Select>
       <Select value={paying} onValueChange={(value) => update({ paying: value })}>
-        <SelectTrigger className="w-36">
+        <SelectTrigger className="w-36" aria-label="Filter by paying status">
           <SelectValue placeholder="Paying" />
         </SelectTrigger>
         <SelectContent>
@@ -83,7 +83,7 @@ export function UsersFilters({
         </SelectContent>
       </Select>
       <Select value={blocked} onValueChange={(value) => update({ blocked: value })}>
-        <SelectTrigger className="w-36">
+        <SelectTrigger className="w-36" aria-label="Filter by block status">
           <SelectValue placeholder="Status" />
         </SelectTrigger>
         <SelectContent>
@@ -93,7 +93,7 @@ export function UsersFilters({
         </SelectContent>
       </Select>
       <Select value={sort} onValueChange={(value) => update({ sort: value })}>
-        <SelectTrigger className="w-40">
+        <SelectTrigger className="w-40" aria-label="Sort users">
           <SelectValue placeholder="Sort by" />
         </SelectTrigger>
         <SelectContent>

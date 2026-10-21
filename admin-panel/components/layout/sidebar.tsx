@@ -17,10 +17,10 @@ import {
   FlaskConical,
   Activity,
   Settings,
-  ShieldCheck,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { Logo } from "@/components/brand/logo";
 import { stripBasePath } from "@/lib/basePath";
 
 type NavItem = { href: string; label: string; icon: typeof LayoutDashboard };
@@ -68,14 +68,14 @@ export function Sidebar() {
 
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-card lg:flex">
-      <div className="flex h-14 items-center gap-2 border-b border-border px-5">
-        <ShieldCheck className="h-5 w-5 text-foreground" />
-        <span className="text-sm font-semibold tracking-tight">Swift VPN Admin</span>
+      <div className="flex h-14 items-center gap-2.5 border-b border-border px-5">
+        <Logo height={24} />
+        <span className="rounded border border-border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Admin</span>
       </div>
       <nav className="flex-1 overflow-y-auto px-3 py-4">
         {NAV_SECTIONS.map((section) => (
           <div key={section.label} className="mb-4">
-            <p className="px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+            <p className="px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
               {section.label}
             </p>
             <ul className="space-y-0.5">

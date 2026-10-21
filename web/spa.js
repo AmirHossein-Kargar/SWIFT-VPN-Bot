@@ -2,12 +2,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import express from "express";
+import { brotliCompressSync, gzipSync } from "node:zlib";
 
 const webRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "public");
 
 // Matches .html/.htm, tolerating trailing dots/spaces that Windows file
 // systems ignore when resolving a path.
 const HTML_FILE = /\.html?[.\s]*$/i;
+
+/** Next.js static build output (web/public/_next/static/**), written by scripts/build-storefront.mjs. */
+const HASHED_ASSET = /[\\/]_next[\\/]static[\\/]/;
+const PRECOMPRESSED_ASSET = /^\/_next\/static\/.+\.(?:js|css)$/;
 
 export const STATIC_OPTIONS = {
   dotfiles: "ignore",
@@ -20,6 +25,11 @@ export const STATIC_OPTIONS = {
   // any HTML that still reaches the static middleware must never be framable
   // or publicly cached. Scripts, styles and images keep the 1h public cache.
   setHeaders(res, filePath) {
+    // Content-hashed storefront build assets never change under the same URL.
+    if (HASHED_ASSET.test(filePath)) {
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      return;
+    }
     if (!HTML_FILE.test(filePath)) return;
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("X-Robots-Tag", "noindex, nofollow");
@@ -62,7 +72,8 @@ export const STORE_CSP = [
 const ADMIN_PAGE = /^\/(?:panel|admin)(?:\/.*)?$/;
 
 /** HTML files in web/public and the route whose headers they must carry. */
-const HTML_SHELLS = Object.freeze({ "index.html": "admin", "store.html": "store", "404.html": "notFound" });
+// storefront.html is the Next.js build of the storefront; store.html is the static fallback.
+const HTML_SHELLS = Object.freeze({ "index.html": "admin", "store.html": "store", "storefront.html": "store", "404.html": "notFound" });
 
 let staticMiddleware = null;
 
@@ -85,7 +96,11 @@ export function serveAdminSpa(req, res, next) {
   // API and health endpoints are never handled by the SPA.
   if (req.path.startsWith("/api/") || ["/health", "/ready", "/livez"].includes(req.path)) return next();
   if (req.path === "/") return serveStorefront(req, res, next);
+  if (PRECOMPRESSED_ASSET.test(req.path)) return servePrecompressed(req, res, () => servePublicFile(req, res, next));
+  return servePublicFile(req, res, next);
+}
 
+function servePublicFile(req, res, next) {
   const relative = safeRelative(req.path);
   if (!relative) return next();
 
@@ -136,25 +151,102 @@ export function storefrontCanonical(env = process.env) {
   }
 }
 
-let storeTemplate = null;
-function storeHtml() {
-  storeTemplate ??= fs.readFileSync(path.join(webRoot, "store.html"), "utf8");
-  const canonical = storefrontCanonical();
+/** Whether an Accept-Encoding header allows `name` (an explicit q=0 refuses it). */
+export function acceptsEncoding(header, name) {
+  for (const part of String(header || "").split(",")) {
+    const [token, ...params] = part.trim().toLowerCase().split(";");
+    if (token !== name) continue;
+    const q = params.map((param) => param.trim()).find((param) => param.startsWith("q="));
+    return !q || Number(q.slice(2)) > 0;
+  }
+  return false;
+}
+
+/**
+ * Serves the .br/.gz copy that scripts/build-storefront.mjs wrote next to a
+ * build asset. The Express app has no compression middleware, so without this
+ * the storefront's JavaScript would be sent uncompressed. Falls through to the
+ * normal static handler when the client or the build has no compressed variant.
+ */
+export function servePrecompressed(req, res, next) {
+  if (req.method !== "GET" && req.method !== "HEAD") return next();
+  const relative = safeRelative(req.path);
+  if (!relative) return next();
+  const file = path.join(webRoot, relative);
+  if (!file.startsWith(webRoot + path.sep)) return next();
+  const candidates = [["br", ".br"], ["gzip", ".gz"]].filter(([name]) => acceptsEncoding(req.headers["accept-encoding"], name));
+  const pick = (index) => {
+    const entry = candidates[index];
+    if (!entry) return next();
+    const [encoding, extension] = entry;
+    fs.stat(file + extension, (error, stats) => {
+      if (error || !stats.isFile()) return pick(index + 1);
+      res.setHeader("Content-Encoding", encoding);
+      res.setHeader("Vary", "Accept-Encoding");
+      res.setHeader("Content-Type", path.extname(file) === ".css" ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8");
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.sendFile(file + extension, { cacheControl: false, dotfiles: "allow" }, (sendError) => {
+        if (sendError && !res.headersSent) {
+          res.removeHeader("Content-Encoding");
+          next();
+        }
+      });
+    });
+  };
+  pick(0);
+}
+
+/** Inserts the canonical link + og:url. Works with or without the <!--canonical--> marker. */
+export function injectCanonical(html, canonical) {
   const escaped = canonical ? canonical.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) : null;
-  return storeTemplate.replace("<!--canonical-->", escaped
-    ? `<link rel="canonical" href="${escaped}" />
-  <meta property="og:url" content="${escaped}" />`
-    : "");
+  const tags = escaped ? `<link rel="canonical" href="${escaped}" />
+  <meta property="og:url" content="${escaped}" />` : "";
+  if (html.includes("<!--canonical-->")) return html.replace("<!--canonical-->", () => tags);
+  // The Next.js build has no HTML comments to anchor on: insert before </head>.
+  return tags ? html.replace("</head>", () => `${tags}</head>`) : html;
+}
+
+let storeTemplate = null;
+/** The Next.js build when present (scripts/build-storefront.mjs), otherwise the static page. */
+function storeTemplateHtml() {
+  if (storeTemplate) return storeTemplate;
+  for (const name of ["storefront.html", "store.html"]) {
+    try {
+      storeTemplate = fs.readFileSync(path.join(webRoot, name), "utf8");
+      return storeTemplate;
+    } catch { /* try the next candidate */ }
+  }
+  throw new Error("storefront HTML missing");
+}
+
+const compressedHtml = new Map();
+function encodedStorefront(html, acceptEncoding) {
+  const encoding = acceptsEncoding(acceptEncoding, "br") ? "br" : acceptsEncoding(acceptEncoding, "gzip") ? "gzip" : null;
+  if (!encoding) return null;
+  const key = `${encoding}:${html}`;
+  if (!compressedHtml.has(key)) {
+    if (compressedHtml.size >= 4) compressedHtml.clear(); // canonical only varies with the env: keep this tiny
+    const body = Buffer.from(html, "utf8");
+    compressedHtml.set(key, encoding === "br" ? brotliCompressSync(body) : gzipSync(body, { level: 9 }));
+  }
+  return { encoding, body: compressedHtml.get(key) };
 }
 
 /** GET / — the public VPN storefront. */
 export function serveStorefront(req, res, next) {
   if (req.method !== "GET" && req.method !== "HEAD") return next();
   let html;
-  try { html = storeHtml(); } catch { return next(); }
+  try { html = injectCanonical(storeTemplateHtml(), storefrontCanonical()); } catch { return next(); }
   res.setHeader("Cache-Control", "public, max-age=300");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Vary", "Accept-Encoding");
   securityHeaders(res, STORE_CSP);
+  const encoded = encodedStorefront(html, req.headers["accept-encoding"]);
+  if (encoded) {
+    res.setHeader("Content-Encoding", encoded.encoding);
+    return res.type("html").send(encoded.body);
+  }
   res.type("html").send(html);
 }
 

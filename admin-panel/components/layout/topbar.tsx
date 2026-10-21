@@ -14,6 +14,8 @@ import { useAdminSession } from "@/components/session-provider";
 import { adminMutate } from "@/lib/adminApi.client";
 import { stripBasePath } from "@/lib/basePath";
 import { NAV_SECTIONS } from "@/components/layout/sidebar";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { Logo } from "@/components/brand/logo";
 import { cn } from "@/lib/utils";
 
 function pageTitle(pathname: string): string {
@@ -71,7 +73,8 @@ export function Topbar() {
           </BreadcrumbList>
         </Breadcrumb>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2">
+        <ThemeToggle />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm" className="gap-2">
@@ -97,15 +100,15 @@ export function Topbar() {
       <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
         <SheetContent side="right" className="w-72 p-0">
           <SheetHeader className="border-b border-border px-5 py-4">
-            <SheetTitle className="flex items-center gap-2">
-              <ShieldCheck className="h-5 w-5" />
-              Swift VPN Admin
+            <SheetTitle className="flex items-center gap-2.5">
+              <Logo height={24} />
+              <span className="sr-only">Admin navigation</span>
             </SheetTitle>
           </SheetHeader>
           <nav className="overflow-y-auto px-3 py-4">
             {NAV_SECTIONS.map((section) => (
               <div key={section.label} className="mb-4">
-                <p className="px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                <p className="px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                   {section.label}
                 </p>
                 <ul className="space-y-0.5">

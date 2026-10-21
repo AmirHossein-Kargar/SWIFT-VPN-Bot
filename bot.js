@@ -53,6 +53,7 @@ import { handleAdminPanelCommand, handleMockTestEntry } from "./handlers/admin/p
 import { isAdminUser } from "./utils/auth.js";
 import { touchUserActivity } from "./services/admin/users.js";
 import { ensureTelegramUser } from "./services/users/ensureTelegramUser.js";
+import { refuseIfBlocked } from "./services/users/accessGate.js";
 
 // * ⚙️ Configuration report
 // Resolves platform-provided variable names (Railway's MONGO_URL / REDIS_URL /
@@ -95,7 +96,8 @@ bot.on("message", async (msg) => {
     // Register the minimum Telegram account data needed for wallet ownership.
     // Contact/phone sharing is neither requested nor processed.
     if (msg.chat?.type === "private" && userId) {
-      await ensureTelegramUser(msg.from);
+      const account = await ensureTelegramUser(msg.from);
+      if (await refuseIfBlocked({ bot, userId, chatType: msg.chat.type, user: account, chatId })) return;
       void touchUserActivity(userId, { now: new Date() });
     }
 
@@ -208,6 +210,7 @@ bot.on("message", async (msg) => {
 // * 🔘 Callback Query Handler
 bot.on("callback_query", async (query) => {
   try {
+    if (await refuseIfBlocked({ bot, userId: query?.from?.id, chatType: query?.message?.chat?.type, query })) return;
     await handleCallbackQuery(bot, query);
   } catch (err) {
     console.error("❌ Error in bot.on('callback_query'):", err);
@@ -219,6 +222,7 @@ bot.on("photo", async (msg) => {
   try {
     const userId = msg.from?.id;
     const chatId = msg.chat?.id;
+    if (await refuseIfBlocked({ bot, userId, chatType: msg.chat?.type, silent: true })) return;
     // Support sessions are keyed by user id. Payment sessions are keyed by
     // chat id. Those are the same in private chats; in a group they are not.
     const userSession = userId == null ? {} : await getSession(userId);
@@ -247,6 +251,7 @@ bot.on("photo", async (msg) => {
 bot.on("video", async (msg) => {
   try {
     const userId = msg.from?.id;
+    if (await refuseIfBlocked({ bot, userId, chatType: msg.chat?.type, silent: true })) return;
     const session = await getSession(userId);
 
     if (session?.support) {
