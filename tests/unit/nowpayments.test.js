@@ -96,6 +96,7 @@ const TRX_CATALOG = buildCatalogFromProviderData({ currencies: ["trx", "btc"], m
 function successTransport(calls) {
   return async (options) => {
     calls.push(options);
+    if (options.url.includes("/min-amount")) return { status: 200, data: { min_amount: 0.05, fiat_equivalent: 0.01 } };
     if (options.url.endsWith("/currencies")) return { status: 200, data: { currencies: ["btc", "trx", "eth"] } };
     if (options.url.endsWith("/merchant/coins")) return { status: 200, data: { selectedCurrencies: ["btc", "trx", "eth"] } };
     if (options.url.endsWith("/full-currencies") || options.url.includes("fixed_rate")) return { status: 404, data: {} };
@@ -247,9 +248,11 @@ describe("NOWPayments invoice creation", () => {
       request: createNowPaymentsRequest({
         apiKey: API_KEY,
         baseURL: "https://api.nowpayments.io/v1",
-        transport: async (options) => options.url.endsWith("/currencies")
-          ? { status: 200, data: { currencies: ["trx"] } }
-          : { status: 400, data: { message: API_KEY } },
+        transport: async (options) => options.url.includes("/min-amount")
+          ? { status: 200, data: { min_amount: 0.05, fiat_equivalent: 0.01 } }
+          : options.url.endsWith("/currencies")
+            ? { status: 200, data: { currencies: ["trx"] } }
+            : { status: 400, data: { message: API_KEY } },
       }),
     }), (error) => error.code === "provider_rejected" && !error.message.includes(API_KEY));
     assert.equal([...rejected.docs.values()][0].status, "creation_failed");
@@ -265,9 +268,11 @@ describe("NOWPayments invoice creation", () => {
       request: createNowPaymentsRequest({
         apiKey: API_KEY,
         baseURL: "https://api.nowpayments.io/v1",
-        transport: async (options) => options.url.endsWith("/currencies")
-          ? { status: 200, data: { currencies: ["trx"] } }
-          : { status: 200, data: { id: "999", price_amount: 1, price_currency: "usd" } },
+        transport: async (options) => options.url.includes("/min-amount")
+          ? { status: 200, data: { min_amount: 0.05, fiat_equivalent: 0.01 } }
+          : options.url.endsWith("/currencies")
+            ? { status: 200, data: { currencies: ["trx"] } }
+            : { status: 200, data: { id: "999", price_amount: 1, price_currency: "usd" } },
       }),
     }), (error) => error.code === "malformed_response");
     assert.equal([...malformed.docs.values()][0].invoiceUrl ?? null, null);
@@ -282,6 +287,7 @@ describe("NOWPayments invoice creation", () => {
       apiKey: API_KEY,
       baseURL: "https://api.nowpayments.io/v1",
       transport: async (options) => {
+        if (options.url.includes("/min-amount")) return { status: 200, data: { min_amount: 0.05, fiat_equivalent: 0.01 } };
         if (options.url.endsWith("/currencies")) return { status: 200, data: { currencies: ["trx"] } };
         posts += 1;
         const error = new Error("timeout");

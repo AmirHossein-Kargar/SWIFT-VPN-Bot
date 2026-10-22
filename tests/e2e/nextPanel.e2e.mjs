@@ -101,7 +101,34 @@ const audits = (() => {
 })();
 const PROVIDER_LABEL = { hooshpay: "HooshPay", nowpayments: "NOWPayments", bank: "Bank transfer", trx: "TRX" };
 const STATUS_MAP = { failed: "failed", rejected: "failed", pending: "pending", waiting_for_approval: "pending", unpaid: "pending", confirming: "pending", paid: "fulfilled" };
+// A NOWPayments order whose invoice outcome is unknown. Present only while a scenario enables it, so other
+// scenarios (row counts, screen matrix) are unaffected. `releases` records every release request the browser sends.
+const UNKNOWN_KEY = "nowpayments:NP-UNKNOWN-0001";
+let unknownStub = null;
+function unknownRow() {
+  return {
+    key: UNKNOWN_KEY, id: "NP-UNKNOWN-0001", provider: "nowpayments", providerLabel: "NOWPayments", type: "top-up", userId: "77", amount: 500000,
+    currency: "Toman", product: "Wallet top-up", trackingCode: null, status: "recovery-required", rawStatus: "creation_unknown",
+    createdAt: new Date(NOW.getTime() - 3_600_000).toISOString(), paidAt: null, fulfilledAt: null, retryCount: 0, lastRetryAt: null, nextRetryAt: null,
+    lastError: null, recoveryStatus: "required", recoveryReason: "provider_creation_outcome_unknown",
+    deletion: { eligible: false, code: "recovery_required", reason: "needs review" },
+  };
+}
+function unknownDetail() {
+  return {
+    ...unknownRow(),
+    timeline: [{ name: "Invoice creation result unknown", at: null, status: "warning", detail: "The provider may hold an invoice for this order." }],
+    fulfilled: false, webhookEvents: [], purchase: null,
+    actions: {
+      retryVerification: false, retryFulfillment: false, manualResolve: false, checkProvider: true, releaseCreationLock: true,
+      releaseAvailableAt: new Date(NOW.getTime() - 60_000).toISOString(), providerLookupConfigured: unknownStub.lookupConfigured,
+    },
+  };
+}
 function paymentRows() {
+  return [...paymentRowsFromModels(), ...(unknownStub ? [unknownRow()] : [])];
+}
+function paymentRowsFromModels() {
   return Object.entries(models).flatMap(([provider, model]) => model.docs.map((doc) => {
     const source = deletion.DELETION_SOURCES[provider];
     const verdict = deletion.explainDeletion(provider, doc);
@@ -179,6 +206,26 @@ api.get("/users/:id/photo", async (req, res, next) => {
 api.get("/users/:id", guard((req, res) => ok(res, userDetail(req.params.id))));
 
 api.get("/payments", guard((req, res) => ok(res, { items: paymentRows(), page: 1, pages: 1, pageSize: 25, total: paymentRows().length })));
+api.get("/payments/:key", guard((req, res) => {
+  if (unknownStub && req.params.key === UNKNOWN_KEY) return ok(res, unknownDetail());
+  throw new (await_import_AdminServiceError())("Payment not found.", { status: 404, code: "payment_not_found" });
+}));
+api.post("/payments/:key/retry", json, guard(async (req, res) => {
+  if (!unknownStub || req.params.key !== UNKNOWN_KEY) throw new (await_import_AdminServiceError())("Payment not found.", { status: 404, code: "payment_not_found" });
+  unknownStub.retries.push(req.body);
+  ok(res, { ok: true, status: "no-payment-found" });
+}));
+api.post("/payments/:key/release-creation-lock", json, guard(async (req, res) => {
+  if (!unknownStub || req.params.key !== UNKNOWN_KEY) throw new (await_import_AdminServiceError())("Payment not found.", { status: 404, code: "payment_not_found" });
+  unknownStub.releases.push({ ...req.body, actor: actor(req) });
+  await new Promise((resolve) => setTimeout(resolve, 400)); // a window in which a second click would be possible
+  // Same contract as the real service: without a usable provider lookup the release needs the explicit attestation.
+  if (!unknownStub.lookupConfigured && req.body?.acceptUnverified !== true) {
+    throw new (await_import_AdminServiceError())("Provider lookup is not possible; confirm after checking the NOWPayments dashboard.", { status: 409, code: "provider_lookup_required" });
+  }
+  unknownStub.released = true;
+  ok(res, { ok: true, released: true, verifiedWithProvider: unknownStub.lookupConfigured, financialMutation: false });
+}));
 api.post("/payments/delete-preview", json, guard(async (req, res) => ok(res, await deletion.previewPaymentDeletion({ actorId: actor(req), keys: req.body?.keys }))));
 api.post("/payments/delete", json, guard(async (req, res) => ok(res, await deletion.deletePayments({
   actorId: actor(req), operationId: req.body?.operationId, keys: req.body?.keys, confirmCount: req.body?.confirmCount, tombstoneModel: tombstones, auditModel: audits,
@@ -366,6 +413,102 @@ await step("customer support portal at /panel/support: one-time link signs in, o
   assert.equal(foreign.status(), 404);
   assert.equal(await page.getByText("متن خصوصی").count(), 0);
   await page.context().close();
+});
+
+// ── Functional: NOWPayments order with an unknown invoice outcome ───────────
+async function openUnknownOrder(page) {
+  await go(page, "/payments");
+  await page.getByRole("row").filter({ hasText: "NP-UNKNOWN-0001" }).getByRole("button", { name: "View" }).click();
+  await page.getByText("Payment detail").waitFor();
+}
+
+await step("unknown-outcome order: offers a read-only provider check and its own release, never the generic 'Mark resolved'", async () => {
+  unknownStub = { lookupConfigured: true, releases: [], retries: [], released: false };
+  try {
+    const page = await newPage();
+    await openUnknownOrder(page);
+    await page.getByRole("button", { name: "Check provider (read-only)" }).waitFor();
+    await page.getByRole("button", { name: /Release create-lock/ }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "Mark resolved" }).count(), 0, "the generic resolve is not offered here");
+    assert.equal(await page.getByRole("button", { name: /^Retry$/ }).count(), 0);
+    await page.getByRole("button", { name: "Check provider (read-only)" }).click();
+    await page.getByText(/still locked; release it explicitly/).waitFor();
+    assert.equal(unknownStub.retries.length, 1);
+    assert.equal(unknownStub.released, false, "an empty lookup result never releases anything");
+    assert.equal(unknownStub.releases.length, 0);
+    await page.context().close();
+  } finally { unknownStub = null; }
+});
+
+await step("unknown-outcome release (provider lookup available): reason is mandatory and a double click sends one request", async () => {
+  unknownStub = { lookupConfigured: true, releases: [], retries: [], released: false };
+  try {
+    const page = await newPage();
+    await openUnknownOrder(page);
+    await page.getByRole("button", { name: /Release create-lock/ }).click();
+    const submit = page.getByRole("button", { name: "Check provider and release" });
+    assert.equal(await submit.isDisabled(), true, "no reason yet");
+    assert.equal(await page.getByText(/Provider lookup is not configured/).count(), 0);
+    await page.getByPlaceholder(/Reason, recorded in the audit log/).fill("too short");
+    assert.equal(await submit.isDisabled(), true, "9 characters is not enough");
+    await page.getByPlaceholder(/Reason, recorded in the audit log/).fill("customer never received the link; checked");
+    assert.equal(await submit.isDisabled(), false);
+    await submit.dblclick();
+    await page.getByText(/Create-lock released \(the provider found no payment\)/).waitFor();
+    assert.equal(unknownStub.releases.length, 1, "double click = one request");
+    assert.equal(unknownStub.releases[0].acceptUnverified, false);
+    assert.equal(unknownStub.releases[0].actor, "424242");
+    assert.match(unknownStub.releases[0].reason, /customer never received the link/);
+    assert.match(unknownStub.releases[0].operationId, /^[0-9a-f-]{36}$/);
+    assert.deepEqual(page.errors.splice(0), [], "console/page errors");
+    await page.context().close();
+  } finally { unknownStub = null; }
+});
+
+await step("unknown-outcome release (lookup impossible): needs a written confirmation before an unverified release", async () => {
+  unknownStub = { lookupConfigured: false, releases: [], retries: [], released: false };
+  try {
+    const page = await newPage();
+    await openUnknownOrder(page);
+    await page.getByRole("button", { name: /Release create-lock/ }).click();
+    await page.getByText(/Provider lookup is not configured/).waitFor();
+    await page.getByPlaceholder(/Reason, recorded in the audit log/).fill("verified in the NOWPayments dashboard: nothing paid");
+    await page.getByRole("button", { name: "Check provider and release" }).click();
+    // The server refuses without an attestation; the UI now asks for it explicitly.
+    const attest = page.getByRole("checkbox");
+    await attest.waitFor();
+    await page.getByText(/Provider lookup is not possible/).waitFor();
+    const unverified = page.getByRole("button", { name: "Release without provider verification" });
+    assert.equal(await unverified.isDisabled(), true, "disabled until the box is ticked");
+    assert.equal(unknownStub.releases.length, 1);
+    assert.equal(unknownStub.releases[0].acceptUnverified, false, "the first attempt never self-attests");
+    assert.equal(unknownStub.released, false);
+    await attest.click();
+    assert.equal(await unverified.isDisabled(), false);
+    await unverified.click();
+    await page.getByText(/released on your written confirmation/).waitFor();
+    assert.equal(unknownStub.releases.length, 2);
+    assert.equal(unknownStub.releases[1].acceptUnverified, true);
+    assert.notEqual(unknownStub.releases[1].operationId, unknownStub.releases[0].operationId, "a new operation id per attempt");
+    assert.equal(unknownStub.released, true);
+    await page.screenshot({ path: join(shots, "unknown-outcome-release.png") });
+    assert.deepEqual(page.errors.splice(0), [], "console/page errors");
+    await page.context().close();
+  } finally { unknownStub = null; }
+});
+
+await step("unknown-outcome release is session-, CSRF- and origin-protected", async () => {
+  unknownStub = { lookupConfigured: true, releases: [], retries: [], released: false };
+  try {
+    const url = `${base}/api/admin/payments/${encodeURIComponent(UNKNOWN_KEY)}/release-creation-lock`;
+    const body = JSON.stringify({ operationId: "x".repeat(20), reason: "customer never received the link" });
+    const headers = { cookie: `${auth.ADMIN_SESSION_COOKIE}=${session.token}`, "content-type": "application/json" };
+    assert.equal((await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body })).status, 401, "no session");
+    assert.equal((await fetch(url, { method: "POST", headers, body })).status, 403, "no CSRF token");
+    assert.equal((await fetch(url, { method: "POST", headers: { ...headers, "x-csrf-token": "nope" }, body })).status, 403, "wrong CSRF token");
+    assert.equal((await fetch(url, { method: "POST", headers: { ...headers, "x-csrf-token": session.session.csrfToken, origin: "https://evil.example" }, body })).status, 403, "cross-origin");
+    assert.equal(unknownStub.releases.length, 0, "none of the refused requests reached the handler");
+  } finally { unknownStub = null; }
 });
 
 // ── Functional: payments deletion ───────────────────────────────────────────

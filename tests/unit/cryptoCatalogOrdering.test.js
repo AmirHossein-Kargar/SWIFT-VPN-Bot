@@ -231,6 +231,7 @@ describe("two-step selection and invoice payload", () => {
       },
     };
     const transport = async (options) => {
+      if (options.url.includes("/min-amount")) return { status: 200, data: { min_amount: 0.05, fiat_equivalent: 0.01 } };
       if (options.url.endsWith("/currencies")) return { status: 200, data: { currencies: MERCHANT.map((c) => c.toLowerCase()) } };
       if (options.url.endsWith("/invoice")) {
         posts.push(options.data);

@@ -87,6 +87,20 @@ export function readNowPaymentsConfig(env = process.env, { allowWithoutCallback 
     : TRON_PAY_CURRENCY;
   if (!configuredPayCurrency) throw new NowPaymentsFlowError("not_configured");
 
+  // Outcome (payout) currency used for the minimum-amount pair. Unset = the pay currency itself.
+  const configuredOutcome = env.NOWPAYMENTS_MIN_AMOUNT_CURRENCY_TO?.trim()
+    ? normalizePayCurrency(env.NOWPAYMENTS_MIN_AMOUNT_CURRENCY_TO)
+    : null;
+  if (env.NOWPAYMENTS_MIN_AMOUNT_CURRENCY_TO?.trim() && !configuredOutcome) throw new NowPaymentsFlowError("not_configured");
+
+  // Optional safety margin (percent) added to the provider's minimum before accepting an amount.
+  // 0 by default: the provider documents no tolerance, so any value is an operator decision.
+  const rawMargin = env.NOWPAYMENTS_MIN_AMOUNT_MARGIN_PERCENT?.trim();
+  const minAmountMarginPercent = rawMargin ? Number(rawMargin) : 0;
+  if (!Number.isFinite(minAmountMarginPercent) || minAmountMarginPercent < 0 || minAmountMarginPercent > 100) {
+    throw new NowPaymentsFlowError("not_configured");
+  }
+
   const email = env.NOWPAYMENTS_EMAIL?.trim() || "";
   const password = env.NOWPAYMENTS_PASSWORD?.trim() || "";
   const rawCatalogTtl = Number(env.NOWPAYMENTS_CATALOG_TTL_SECONDS || 300);
@@ -101,6 +115,8 @@ export function readNowPaymentsConfig(env = process.env, { allowWithoutCallback 
     priceCurrency,
     callbackUrl: callback,
     payCurrency: configuredPayCurrency,
+    minAmountCurrencyTo: configuredOutcome,
+    minAmountMarginPercent,
     email,
     password,
     hasCustodyAuth: Boolean(email && password),
@@ -256,6 +272,30 @@ export function invoiceUrlIsTrusted(value) {
     && !parsed.username
     && !parsed.password
     && (host === "nowpayments.io" || host.endsWith(".nowpayments.io"));
+}
+
+/**
+ * A hosted-invoice URL that is safe and usable to hand to a customer: https, the
+ * provider's own host, no credentials, and a path (a bare host cannot be an invoice page).
+ * The official reference shows `https://nowpayments.io/payment/?iid=<invoice id>` but does
+ * not state that `iid` must equal the invoice `id`, so that is NOT enforced here (see
+ * invoiceUrlIidDiffers, which only lets the caller log it). Whether the page renders is a
+ * provider-side fact this check cannot establish.
+ */
+export function invoiceUrlIsUsable(value) {
+  if (!invoiceUrlIsTrusted(value)) return false;
+  const parsed = new URL(value);
+  return Boolean(parsed.pathname) && parsed.pathname !== "/";
+}
+
+/** Informational only: the URL carries an `iid` that differs from the invoice id. */
+export function invoiceUrlIidDiffers(value, invoiceId) {
+  try {
+    const iid = new URL(value).searchParams.get("iid");
+    return iid != null && iid !== String(invoiceId);
+  } catch {
+    return false;
+  }
 }
 
 export function coversCryptoAmount(actuallyPaid, payAmount) {

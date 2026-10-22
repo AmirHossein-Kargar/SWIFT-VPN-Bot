@@ -7,6 +7,7 @@ import { getDashboardMetrics } from "../services/admin/dashboard.js";
 import { listUsers, getUserDetail, changeUserBalance, setUserBlocked, getReferralOverview, resetTestServiceEligibility } from "../services/admin/users.js";
 import { listVpns, getVpnDetail, performVpnAction, listRemoteClients } from "../services/admin/vpns.js";
 import { listProducts, createProduct, updateProduct, duplicateProduct, reorderProducts } from "../services/admin/products.js";
+import { releaseCreationUnknownLock } from "../services/admin/creationUnknown.js";
 import { listPayments, getPaymentDetail, retryPayment, markPaymentRecoveryRequired, resolvePaymentRecovery, confirmBankInvoice, rejectBankInvoice } from "../services/admin/payments.js";
 import { previewPaymentDeletion, deletePayments } from "../services/admin/paymentDeletion.js";
 import { getRecoveryQueue, retrySafeRecoveryItems } from "../services/admin/recovery.js";
@@ -431,6 +432,13 @@ router.post("/payments/:key/retry", requireBody(), async (req, res, next) => {
 router.post("/payments/:key/recovery-required", requireBody(), async (req, res, next) => {
   try {
     const result = await markPaymentRecoveryRequired({ actorId: req.adminActorId, operationId: parseOperationId(req.body), key: req.params.key, reason: req.body.reason, ipAddress: clientIp(req) });
+    res.json({ ok: true, data: result });
+  } catch (error) { next(error); }
+});
+
+router.post("/payments/:key/release-creation-lock", requireBody(), async (req, res, next) => {
+  try {
+    const result = await releaseCreationUnknownLock({ actorId: req.adminActorId, operationId: parseOperationId(req.body), key: req.params.key, reason: req.body.reason, acceptUnverified: req.body.acceptUnverified === true, ipAddress: clientIp(req) });
     res.json({ ok: true, data: result });
   } catch (error) { next(error); }
 });

@@ -6,7 +6,7 @@ import { findTombstone, recordLateEvent } from "../payments/invoiceCleanup.js";
 const LATE_MONEY_STATUSES = new Set(["confirming", "confirmed", "sending", "partially_paid", "finished"]);
 
 /** Best-effort: the response to the provider must never depend on the alert succeeding. */
-async function alertLatePayment({ bot, orderId, status }) {
+async function alertLatePayment({ bot, orderId, status, closed = false }) {
   const groupId = process.env.GROUP_ID;
   if (!groupId) return;
   try {
@@ -15,7 +15,7 @@ async function alertLatePayment({ bot, orderId, status }) {
       groupId,
       `🚨 <b>NOWPayments Alert</b>
 
-⚠️ پرداخت دیرهنگام (${String(status).slice(0, 20)}) برای فاکتور پاک‌شده دریافت شد. Order: <code>${String(orderId).replace(/[^A-Za-z0-9_.-]/g, "")}</code>. اعتبار خودکار ثبت نشد؛ بررسی دستی لازم است.`,
+⚠️ پرداخت دیرهنگام (${String(status).slice(0, 20)}) برای ${closed ? "سفارش بسته‌شده" : "فاکتور پاک‌شده"} دریافت شد. Order: <code>${String(orderId).replace(/[^A-Za-z0-9_.-]/g, "")}</code>. اعتبار خودکار ثبت نشد؛ بررسی دستی لازم است.`,
       { parse_mode: "HTML" },
     );
   } catch (error) {
@@ -76,6 +76,12 @@ export async function handleNowPaymentsIpn(req, res, {
       code: typeof error?.code === "string" || typeof error?.code === "number" ? error.code : undefined,
     });
     return send(res, 503, { ok: false, error: "temporarily_unavailable", request_id: requestId });
+  }
+
+  // A verified payment arrived for an order we had already closed (expired / failed / refunded / released after an
+  // unknown create). It is never credited automatically; it is flagged in the recovery queue and a human is told once.
+  if (result.flaggedForReview && LATE_MONEY_STATUSES.has(String(payload.payment_status || "").toLowerCase())) {
+    await alertLatePayment({ bot, orderId: payload.order_id, status: payload.payment_status, closed: true });
   }
 
   if (result.outcome === "unknown_order") {

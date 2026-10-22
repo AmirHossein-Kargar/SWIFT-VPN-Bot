@@ -7,7 +7,8 @@ import {
   readNowPaymentsConfig,
   tomanToFiatCents,
 } from "../nowpayments/money.js";
-import { buildQueryPath, createNowPaymentsRequest } from "../nowpayments/nowpaymentsClient.js";
+import { createNowPaymentsRequest } from "../nowpayments/nowpaymentsClient.js";
+import { assertMeetsMinimum, requestMinAmount } from "../nowpayments/minAmount.js";
 import { fetchNowPaymentsCatalog, validateCatalogSelection } from "../nowpayments/catalog.js";
 import { getCustomerPlanByDurationAndVolume, getCustomerPlanById } from "../plans.js";
 import { getUsdtTomanQuote, gheymatCacheTtlMs, gheymatMaxAgeMs } from "./gheymatClient.js";
@@ -41,21 +42,6 @@ function parseEstimate(body, { amount, currencyFrom, currencyTo }) {
     return { ok: false, reason: "amount_from" };
   }
   return { ok: true, amount: estimated };
-}
-
-function parseMinAmount(body, expectedPayCurrency) {
-  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
-  const currencyFrom = String(body.currency_from || "").trim().toLowerCase();
-  if (expectedPayCurrency && currencyFrom && currencyFrom !== expectedPayCurrency) return null;
-  const minAmount = Number(body.min_amount);
-  if (!Number.isFinite(minAmount) || minAmount <= 0) return null;
-  const fiatEquivalent = body.fiat_equivalent != null ? Number(body.fiat_equivalent) : null;
-  return {
-    minCryptoAmount: Number(minAmount.toFixed(8)),
-    minFiatEquivalent: Number.isFinite(fiatEquivalent) && fiatEquivalent > 0
-      ? Number(fiatEquivalent.toFixed(4))
-      : null,
-  };
 }
 
 async function estimatedCrypto({ amount, currencyFrom, currencyTo, request, cacheKey, ttlMs, nowMs }) {
@@ -120,7 +106,7 @@ export async function quoteTronTopUp({
   network: requestedNetwork = null,
   currencyPrecision = 6,
   planId = null,
-  enforceMinAmount = false,
+  enforceMinAmount = true,
   requireEstimate = false,
   catalogMinAmount = null,
   env = process.env,
@@ -174,32 +160,10 @@ export async function quoteTronTopUp({
 
   let minAmountInfo = null;
   if (enforceMinAmount) {
-    let minRes;
-    try {
-      minRes = await call({
-        method: "GET",
-        path: buildQueryPath("/min-amount", {
-          currency_from: targetPayCurrency,
-          currency_to: targetPayCurrency,
-          fiat_equivalent: config.priceCurrency,
-          is_fixed_rate: config.isFixedRate,
-          is_fee_paid_by_user: config.isFeePaidByUser,
-        }),
-      });
-    } catch (error) {
-      logQuoteFailure("nowpayments_min_amount", error, { payCurrency: targetPayCurrency });
-      throw new NowPaymentsFlowError("estimate_unavailable");
-    }
-    if (!minRes || minRes.status !== 200) {
-      throw new NowPaymentsFlowError("estimate_unavailable");
-    }
-    minAmountInfo = parseMinAmount(minRes.data, targetPayCurrency);
-    if (!minAmountInfo) {
-      throw new NowPaymentsFlowError("estimate_unavailable");
-    }
-    if (minAmountInfo.minFiatEquivalent != null && priceAmount + 1e-6 < minAmountInfo.minFiatEquivalent) {
-      throw new NowPaymentsFlowError("below_min_amount");
-    }
+    // Fail closed: without an established provider minimum no quote is issued,
+    // so no invoice can be created for an amount nobody has checked.
+    minAmountInfo = await requestMinAmount({ call, config, payCurrency: targetPayCurrency });
+    assertMeetsMinimum({ priceAmountCents, minInfo: minAmountInfo, tomanPerFiat: fiat.tomanPerUsdt, marginPercent: config.minAmountMarginPercent });
   } else if (Number.isFinite(Number(catalogMinAmount)) && Number(catalogMinAmount) > 0) {
     minAmountInfo = {
       minCryptoAmount: Number(Number(catalogMinAmount).toFixed(8)),

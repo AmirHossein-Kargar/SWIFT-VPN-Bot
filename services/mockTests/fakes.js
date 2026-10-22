@@ -126,6 +126,10 @@ export function createFakeNowPayments({ invoiceOutcomes = [], payAmount = null }
     if (method === "GET" && path === "/currencies") {
       return { status: 200, data: { currencies: MOCK_NOWPAYMENTS_CURRENCIES.map((entry) => entry.code) } };
     }
+    if (method === "GET" && path.startsWith("/min-amount")) {
+      // A synthetic minimum far below the scenario's amounts ($0.50 / 1 unit of the coin).
+      return { status: 200, data: { currency_from: new URLSearchParams(path.split("?")[1] || "").get("currency_from"), min_amount: 1, fiat_equivalent: 0.5 } };
+    }
     if (method === "POST" && path === "/invoice") {
       const outcome = queue.length ? queue.shift() : "ok";
       if (outcome === "throw") {

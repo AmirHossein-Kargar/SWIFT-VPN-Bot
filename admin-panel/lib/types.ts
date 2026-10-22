@@ -106,7 +106,25 @@ export interface PaymentDetail extends AdminPayment {
   fulfilled: boolean;
   webhookEvents: { receivedAt: string; event: string | null; status: string | null; amount: number | null; trackingCode: string | null }[];
   purchase: Record<string, unknown> | null;
-  actions: { retryVerification: boolean; retryFulfillment: boolean; manualResolve: boolean };
+  actions: {
+    retryVerification: boolean;
+    retryFulfillment: boolean;
+    manualResolve: boolean;
+    /** NOWPayments creation_unknown only: read-only provider lookup (never releases the lock). */
+    checkProvider?: boolean;
+    /** NOWPayments creation_unknown only: audited release of the customer's create-lock. */
+    releaseCreationLock?: boolean;
+    releaseAvailableAt?: string | null;
+    providerLookupConfigured?: boolean;
+  };
+}
+
+export interface CreationLockReleaseResult {
+  ok: boolean;
+  released: boolean;
+  verifiedWithProvider?: boolean;
+  /** "payment_found": a provider payment was found and handed to normal settlement; the lock was not released. */
+  reason?: string;
 }
 
 export interface UserDetail {

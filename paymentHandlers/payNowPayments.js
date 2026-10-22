@@ -3,7 +3,7 @@ import { formatTopUpAmount, parseTopUpAmount, resolveTopUpLimits } from "../util
 import NowPaymentsInvoice from "../models/NowPaymentsInvoice.js";
 import { currencyGroupLabel, networkLabel, paginateGroups } from "../services/nowpayments/labels.js";
 import { createNowPaymentsTopUp, resetNowPaymentsCreateLocksForTests } from "../services/nowpayments/createInvoice.js";
-import { fetchNowPaymentsCatalog, validateCatalogSelection } from "../services/nowpayments/catalog.js";
+import { fetchPaymentCatalog, validateCatalogSelection } from "../services/nowpayments/catalog.js";
 import { formatTrxAmount, quoteSnapshotIsFresh, quoteTronTopUp, resetTronQuoteCacheForTests } from "../services/pricing/tronQuote.js";
 import { logQuoteFailure } from "../services/pricing/quoteLog.js";
 
@@ -31,13 +31,25 @@ const FAILURE_TEXT = {
   invalid_currency_selection: "❌ رمزارز انتخاب‌شده در درگاه فعال نیست.",
   invalid_network_selection: "❌ شبکه انتخاب‌شده برای این رمزارز معتبر نیست.",
   network_selection_required: "⚠️ برای این رمزارز چند شبکه فعال وجود دارد؛ لطفاً شبکه را انتخاب کنید.",
-  below_min_amount: "⚠️ مبلغ انتخاب‌شده کمتر از حداقل مجاز شبکه درگاه NOWPayments برای این رمزارز است.\n\nلطفاً مبلغ بیشتری وارد کنید یا شبکه دیگری انتخاب نمایید.",
+  below_min_amount: "⚠️ مبلغ انتخاب‌شده کمتر از حداقل مجاز پرداخت برای این رمزارز است.\n\nلطفاً مبلغ بیشتری وارد کنید یا رمزارز / شبکه دیگری انتخاب نمایید.",
+  min_amount_unavailable: "❌ حداقل مبلغ پرداخت این رمزارز اکنون از درگاه دریافت نشد.\n\nبرای جلوگیری از ساخت فاکتور نامعتبر، فاکتوری ساخته نشد. لطفاً کمی بعد دوباره تلاش کنید.",
+  persistence_failed: "❌ ثبت فاکتور با خطا روبه‌رو شد و لینک پرداخت تحویل داده نشد.\n\nموجودی شما شارژ نشده است. لطفاً تا بررسی پشتیبانی پرداخت نکنید و دوباره فاکتور نسازید.",
   estimate_unavailable: "❌ دریافت برآورد لحظه‌ای رمزارز از درگاه ممکن نشد.\n\nلطفاً دوباره تلاش کنید.",
   provider_rejected: "❌ ایجاد فاکتور پرداخت ناموفق بود.\n\nلطفاً دوباره تلاش کنید یا روش دیگری را انتخاب کنید.",
   ambiguous: "❌ نتیجه ایجاد فاکتور نامشخص است.\n\nموجودی شما شارژ نشده است. لطفاً تا بررسی پشتیبانی، دوباره فاکتور نسازید.",
   malformed_response: "❌ پاسخ درگاه پرداخت نامعتبر بود و لینک پرداخت تحویل داده نشد.\n\nموجودی شما شارژ نشده است.",
   in_flight: "⏳ یک فاکتور رمزارزی هنوز تعیین‌تکلیف نشده است.\n\nتا مشخص شدن نتیجه، فاکتور جدیدی ساخته نمی‌شود.",
 };
+
+/** Persian failure text; a below-minimum failure states the minimum in Toman when it is known. */
+export function failureText(error, fallbackCode = "provider_rejected") {
+  const code = error?.code;
+  const base = FAILURE_TEXT[code] || FAILURE_TEXT[fallbackCode];
+  if (code === "below_min_amount" && Number.isSafeInteger(error?.minToman) && error.minToman > 0) {
+    return `${base}\n\n▫️ حداقل مبلغ شارژ با این رمزارز: <code>${formatTopUpAmount(error.minToman)}</code> تومان (بسته به نرخ لحظه‌ای ممکن است تغییر کند).`;
+  }
+  return base;
+}
 
 function quoteTime(quoteAt) {
   const date = new Date(quoteAt);
@@ -202,7 +214,7 @@ export async function handleNowPaymentsCurrencyMenu(bot, query, session, deps = 
     return;
   }
   try {
-    const catalog = deps.catalog || await (deps.fetchCatalog || fetchNowPaymentsCatalog)({
+    const catalog = deps.catalog || await (deps.fetchCatalog || fetchPaymentCatalog)({
       env: deps.env || process.env,
       request: deps.request,
     });
@@ -266,7 +278,7 @@ export async function handleNowPaymentsSelectAsset(bot, query, tickerInput, sess
   }
   const cleanTicker = String(tickerInput || "").trim().toUpperCase();
   try {
-    const catalog = deps.catalog || await (deps.fetchCatalog || fetchNowPaymentsCatalog)({
+    const catalog = deps.catalog || await (deps.fetchCatalog || fetchPaymentCatalog)({
       env: deps.env || process.env,
       request: deps.request,
     });
@@ -293,7 +305,7 @@ export async function handleNowPaymentsSelectNetwork(bot, query, payCurrencyInpu
     return;
   }
   try {
-    const catalog = deps.catalog || await (deps.fetchCatalog || fetchNowPaymentsCatalog)({
+    const catalog = deps.catalog || await (deps.fetchCatalog || fetchPaymentCatalog)({
       env: deps.env || process.env,
       request: deps.request,
     });
@@ -354,7 +366,7 @@ export async function handleNowPaymentsSelectNetwork(bot, query, payCurrencyInpu
   } catch (error) {
     const code = error?.code || "currency_unavailable";
     try {
-      await edit(bot, chatId, messageId, FAILURE_TEXT[code] || FAILURE_TEXT.currency_unavailable, [
+      await edit(bot, chatId, messageId, failureText(error, "currency_unavailable"), [
         ASSET_BUTTON,
         ...BACK,
       ]);
@@ -401,7 +413,7 @@ export async function handleNowPaymentsBackToNetwork(bot, query, session, deps =
     return;
   }
   try {
-    const catalog = deps.catalog || await (deps.fetchCatalog || fetchNowPaymentsCatalog)({
+    const catalog = deps.catalog || await (deps.fetchCatalog || fetchPaymentCatalog)({
       env: deps.env || process.env,
       request: deps.request,
     });
@@ -575,7 +587,7 @@ export async function handleNowPaymentsAmount(bot, msg, session, deps = {}) {
     logQuoteFailure("topup_quote", error);
     const code = error?.code || "rate_unavailable";
     try {
-      await edit(bot, chatId, messageId, FAILURE_TEXT[code] || FAILURE_TEXT.rate_unavailable, [
+      await edit(bot, chatId, messageId, failureText(error, "rate_unavailable"), [
         ASSET_BUTTON,
         ...BACK,
       ]);
@@ -665,12 +677,14 @@ export async function confirmNowPaymentsTopUp(bot, query, session, deps = {}) {
     logQuoteFailure("nowpayments_invoice", error);
     const code = error?.code || "provider_rejected";
     try {
-      await edit(bot, chatId, messageId, FAILURE_TEXT[code] || FAILURE_TEXT.provider_rejected, BACK);
+      await edit(bot, chatId, messageId, failureText(error, "provider_rejected"), BACK);
     } catch { /* ignore */ }
-    if (code !== "ambiguous" && code !== "in_flight") recentCreates.delete(createKey);
+    // A remote invoice may exist for these: keep the guard and block a re-create.
+    const unresolved = code === "ambiguous" || code === "in_flight" || code === "persistence_failed";
+    if (!unresolved) recentCreates.delete(createKey);
     await setSession(chatId, {
       ...session,
-      step: code === "ambiguous" || code === "in_flight" ? "nowpayments_review" : "waiting_for_nowpayments_amount",
+      step: unresolved ? "nowpayments_review" : "waiting_for_nowpayments_amount",
       messageId,
       paymentType: "nowpayments",
     });
