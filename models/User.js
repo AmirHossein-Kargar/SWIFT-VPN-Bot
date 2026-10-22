@@ -23,6 +23,10 @@ const userSchema = new mongoose.Schema({
   refundedPurchaseIds: { type: [String], default: [] },
   completedPurchaseIds: { type: [String], default: [] },
   totalServices: { type: Number, default: 0 },
+  // Derived from WalletPurchase (status "completed") and written ONLY by services/users/userSpend.js.
+  // They serve the admin "top spending" ranking; money is never read from them.
+  totalSpent: { type: Number, default: 0, min: 0 },
+  completedOrderCount: { type: Number, default: 0, min: 0 },
   hasReceivedTest: { type: Boolean, default: false },
   testServiceAttemptId: { type: String, default: null },
   testServiceStatus: { type: String, enum: [null, "provisioning", "manual_review", "completed", "failed"], default: null },
@@ -75,5 +79,7 @@ userSchema.index({ username: 1 }, { name: "idx_user_username" });
 userSchema.index({ createdAt: -1 }, { name: "idx_user_created_recent" });
 userSchema.index({ lastActivityAt: -1 }, { name: "idx_user_activity_recent" });
 userSchema.index({ isBanned: 1, createdAt: -1 }, { name: "idx_user_blocked_recent" });
+// Same key order and directions as the admin "top spending" sort, so the sort needs no blocking stage.
+userSchema.index({ totalSpent: -1, createdAt: -1, _id: 1 }, { name: "idx_user_spend_rank" });
 
 export default mongoose.models.User || mongoose.model("User", userSchema);

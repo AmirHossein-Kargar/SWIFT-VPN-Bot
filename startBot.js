@@ -7,6 +7,7 @@ import app, { PORT, setRuntimeReadiness } from "./server.js";
 import { startHooshpayRecoveryCron, stopHooshpayRecoveryCron } from "./services/hooshpay/hooshpayRecoveryCron.js";
 import { startNowPaymentsRecoveryCron, stopNowPaymentsRecoveryCron } from "./services/nowpayments/recovery.js";
 import { startInvoiceCleanupCron, stopInvoiceCleanupCron } from "./services/payments/invoiceCleanup.js";
+import { startUserSpendSweeper, stopUserSpendSweeper } from "./services/users/userSpendSweeper.js";
 import mongoose from "mongoose";
 import { connectRedis, closeRedis } from "./config/redisClient.js";
 import { seedDefaultProducts } from "./services/plans.js";
@@ -212,6 +213,14 @@ export default async function startBot() {
     );
   }
 
+  // 6b. Persisted user-spend sweeper (reporting counters only). Its own try block: it must neither
+  // depend on nor be able to block the payment crons above. Disable with USER_SPEND_SWEEPER=off.
+  try {
+    if (startUserSpendSweeper()) console.log("\x1b[32m%s\x1b[0m", "✔ User Spend Sweeper Started");
+  } catch (error) {
+    console.error("\x1b[31m%s\x1b[0m", "❌ Failed to start User Spend Sweeper:", error?.name || "Error");
+  }
+
   // 7. Graceful shutdown — SIGTERM (Railway) + SIGINT (Ctrl-C)
   let shuttingDown = false;
 
@@ -245,6 +254,12 @@ export default async function startBot() {
       console.log("\x1b[32m%s\x1b[0m", "✔ HooshPay cron stopped");
     } catch (e) {
       console.error("⚠️  HooshPay cron stop error:", e?.name || "Error");
+    }
+
+    try {
+      stopUserSpendSweeper();
+    } catch (e) {
+      console.error("⚠️  User spend sweeper stop error:", e?.name || "Error");
     }
 
     // 7d. Close Express HTTP server

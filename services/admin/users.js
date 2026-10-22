@@ -8,6 +8,7 @@ import { assertAdminUser, AdminServiceError } from "./authorization.js";
 import { runAuditedAction } from "./audit.js";
 import { escapeRegex, parsePagination, requireReason, requireTelegramId, parsePositiveInteger } from "./validation.js";
 import sharedRedisClient from "../../config/redisClient.js";
+import { usePersistedSpendSort } from "../users/userSpend.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ACTIVITY_TOUCH_MS = 15 * 60_000;
@@ -94,7 +95,11 @@ export async function listUsers({ actorId, query = {} } = {}) {
   let items;
   let total;
 
-  if (sortBy === "spending") {
+  // The persisted ranking is used only when requested AND verified (services/users/userSpend.js); the page's
+  // displayed totals still come from the exact aggregate below, so list, detail and other sorts agree.
+  const persistedSpendRanking = sortBy === "spending" && await usePersistedSpendSort();
+
+  if (sortBy === "spending" && !persistedSpendRanking) {
     const [result] = await User.aggregate([
       { $match: filter },
       {
@@ -115,7 +120,9 @@ export async function listUsers({ actorId, query = {} } = {}) {
     items = (result?.items || []).map((user) => safeUser(user, user));
     total = Number(result?.total?.[0]?.count || 0);
   } else {
-    const sort = sortBy === "activity" ? { lastActivityAt: -1, _id: 1 } : { createdAt: -1, _id: 1 };
+    // Same keys and directions as the aggregate's $sort, backed by idx_user_spend_rank (no blocking sort stage).
+    const sort = persistedSpendRanking ? { totalSpent: -1, createdAt: -1, _id: 1 }
+      : sortBy === "activity" ? { lastActivityAt: -1, _id: 1 } : { createdAt: -1, _id: 1 };
     [items, total] = await Promise.all([
       User.find(filter).select("telegramId username firstName lastName balance successfulPayments totalServices services createdAt lastActivityAt isBanned referralCode referredByTelegramId")
         .sort(sort).skip((page - 1) * pageSize).limit(pageSize).lean().maxTimeMS(5_000),

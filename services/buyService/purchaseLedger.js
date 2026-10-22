@@ -2,6 +2,7 @@ import User from "../../models/User.js";
 import WalletPurchase from "../../models/WalletPurchase.js";
 import { getSuccessServiceMessage, guideButtons } from "../../messages/staticMessages.js";
 import escapeHtml from "../../utils/escapeHtml.js";
+import { scheduleUserSpendRecompute } from "../users/userSpend.js";
 
 const NOTIFICATION_CLAIM_MS = 5 * 60_000;
 const RECOVERY_STALE_MS = 5 * 60_000;
@@ -255,6 +256,10 @@ export async function commitProvisionedPurchase(
       { $set: { walletDebitStatus: "finalized" } }
     );
   }
+
+  // Derived reporting counters only. Fire-and-forget: never awaited, never throws, cannot change this result;
+  // a lost update is repaired by the user-spend sweeper (services/users/userSpendSweeper.js).
+  scheduleUserSpendRecompute(completed.telegramId ?? purchase.telegramId, { userModel, purchaseModel });
 
   const notified = await notifyPurchaseOnce(completed, bot, owner);
   return { purchase: completed, notified };
