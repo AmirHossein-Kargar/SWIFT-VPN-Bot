@@ -303,9 +303,9 @@ export function createNowPaymentsClient({
     updateMerchantEstimate: (paymentId) => mutatingPostRequest({
       path: `/payment/${encodeURIComponent(String(paymentId).trim())}/update-merchant-estimate`,
     }),
-    listPayments: ({ limit = 20, page = 0, sortBy = "created_at", orderBy = "desc", dateFrom, dateTo } = {}) =>
+    listPayments: ({ limit = 20, page = 0, sortBy = "created_at", orderBy = "desc", dateFrom, dateTo, invoiceId } = {}) =>
       authenticatedGet(
-        buildQueryPath("/payment/", { limit, page, sortBy, orderBy, dateFrom, dateTo }),
+        buildQueryPath("/payment/", { limit, page, sortBy, orderBy, dateFrom, dateTo, invoiceId }),
         { includeApiKey: true },
       ),
 

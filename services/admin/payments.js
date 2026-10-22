@@ -7,6 +7,10 @@ import { default as botInstance } from "../../config/botInstance.js";
 import { verifyHooshPayment } from "../hooshpay/verifyHooshPayment.js";
 import { fulfillHooshOrder } from "../hooshpay/fulfillHooshOrder.js";
 import { reconcileNowPaymentsPayment } from "../nowpayments/recovery.js";
+import { lookupCreationUnknown } from "../nowpayments/creationLookup.js";
+import { MIN_RELEASE_AGE_MS } from "./creationUnknown.js";
+import { readNowPaymentsConfig } from "../nowpayments/money.js";
+import { createNowPaymentsClient } from "../nowpayments/nowpaymentsClient.js";
 import { confirmBankPayment } from "../payments/confirmBankPayment.js";
 import { commitProvisionedPurchase, deliverPurchaseNotification } from "../buyService/purchaseLedger.js";
 import trxScanner from "../trxWalletScanner.js";
@@ -206,6 +210,10 @@ async function findPayment(key) {
   return { provider, record, normalized: normalizePayment(provider, record) };
 }
 
+function lookupConfigured() {
+  try { return Boolean(readNowPaymentsConfig(process.env)?.hasCustodyAuth); } catch { return false; }
+}
+
 function timelineFor(provider, record) {
   const events = [];
   const add = (name, at, status = "done", detail = null) => { if (at) events.push({ name, at, status, detail }); };
@@ -228,6 +236,16 @@ function timelineFor(provider, record) {
       for (const item of (record.ipnLog || []).slice(-20)) {
         add("IPN received", item.receivedAt, item.paymentStatus === "finished" ? "success" : "done", item.paymentStatus ? `Status: ${String(item.paymentStatus).slice(0, 40)}` : null);
       }
+    }
+    if (provider === "nowpayments" && record.status === "creation_unknown") {
+      const lookedAt = record.lastRetryAt ? new Date(record.lastRetryAt).toISOString() : null;
+      events.push({
+        name: "Invoice creation result unknown",
+        at: null,
+        status: "warning",
+        detail: "The provider may hold an invoice for this order. The customer cannot open another crypto invoice until this is settled by a payment or released by an administrator.",
+      });
+      if (lookedAt) events.push({ name: "Provider payment lookup", at: lookedAt, status: "done", detail: `Last result: ${String(record.lastErrorCode || "payment bound").slice(0, 80)} · attempts: ${Number(record.retryCount || 0)}` });
     }
     add("Payment verified", record.paidAt || record.confirmedAt);
     add("Wallet credited", record.balanceCreditedAt, record.balanceCredited ? "success" : (["paid", "confirmed", "finished"].includes(record.status) ? "warning" : "pending"));
@@ -275,8 +293,18 @@ export async function getPaymentDetail({ actorId, key } = {}) {
     actions: {
       // Derived from retryPlan(), the exact rule retryPayment() enforces, so the UI never offers a retry that is refused.
       retryVerification: retryPlan(provider, record).action === "verify",
-      retryFulfillment: (() => { const plan = retryPlan(provider, record); return plan.kind === "attempt" && plan.action !== "verify"; })(),
-      manualResolve: normalized.status === "recovery-required" || record.recoveryStatus === "required",
+      retryFulfillment: (() => { const plan = retryPlan(provider, record); return plan.kind === "attempt" && plan.action !== "verify" && plan.action !== "lookup"; })(),
+      // The generic disposition must not be offered where it is refused: these orders have their own audited release.
+      manualResolve: (normalized.status === "recovery-required" || record.recoveryStatus === "required")
+        && !(provider === "nowpayments" && ["creation_unknown", "creating"].includes(record.status)),
+      // NOWPayments orders with an unknown invoice outcome only (other providers' payloads keep their exact shape):
+      // a read-only provider lookup (never releases the lock) and the audited release of the customer's create-lock.
+      ...(provider === "nowpayments" && record.status === "creation_unknown" ? {
+        checkProvider: retryPlan(provider, record).action === "lookup",
+        releaseCreationLock: !record.paymentId && !record.balanceCredited,
+        releaseAvailableAt: new Date(new Date(record.updatedAt || record.createdAt || 0).getTime() + MIN_RELEASE_AGE_MS).toISOString(),
+        providerLookupConfigured: lookupConfigured(),
+      } : {}),
     },
   };
   return details;
@@ -333,6 +361,8 @@ export function retryPlan(provider, record) {
   if (provider === "nowpayments") {
     if (record.balanceCredited) return settled();
     if (record.paymentId && !["failed", "expired", "refunded"].includes(record.status)) return attempt("reconcile");
+    // The provider may hold a payment for an order whose invoice was never recorded: ask it (read-only).
+    if (!record.paymentId && record.status === "creation_unknown") return attempt("lookup");
     return refuse("این پرداخت NOWPayments شناسه قابل بررسی ندارد یا در وضعیت پایانی ناموفق است.", "payment_not_retryable");
   }
   if (provider === "bank") {
@@ -354,7 +384,7 @@ export function retryPlan(provider, record) {
 }
 
 /** Failures of an eligible attempt that say nothing about the payment itself must not flag it for manual recovery. */
-const BENIGN_RETRY_FAILURES = new Set(["payment_processing"]);
+const BENIGN_RETRY_FAILURES = new Set(["payment_processing", "nowpayments_lookup_unavailable"]);
 
 async function attemptRetry({ provider, plan, record, actorId }) {
   const bot = botInstance.bot;
@@ -373,6 +403,16 @@ async function attemptRetry({ provider, plan, record, actorId }) {
     if (!(result.credited || result.alreadyCredited || result.notified)) throw new AdminServiceError("تسویه HooshPay همچنان ناقص است.", { status: 503, code: "hooshpay_fulfillment_incomplete" });
     await HooshPayInvoice.updateOne({ _id: record._id }, { $set: { recoveryStatus: "none", recoveryReason: null } });
     return { ok: true, status: "fulfilled", auditSummary: { status: "fulfilled" } };
+  }
+  if (provider === "nowpayments" && plan.action === "lookup") {
+    const config = readNowPaymentsConfig(process.env);
+    if (!config?.hasCustodyAuth) throw new AdminServiceError("بررسی در درگاه نیازمند NOWPAYMENTS_EMAIL و NOWPAYMENTS_PASSWORD است.", { status: 503, code: "nowpayments_lookup_unavailable" });
+    const client = createNowPaymentsClient({ apiKey: config.apiKey, baseURL: config.baseURL, email: config.email, password: config.password });
+    const found = await lookupCreationUnknown({ invoice: record, client });
+    if (found.outcome === "lookup_unavailable") throw new AdminServiceError("پاسخ درگاه در دسترس نیست؛ بعداً دوباره تلاش کنید.", { status: 503, code: "nowpayments_lookup_unavailable" });
+    if (["lookup_ambiguous", "lookup_mismatch", "lookup_unconfirmed"].includes(found.outcome)) throw new AdminServiceError("داده‌های درگاه مبهم یا ناسازگار است؛ در پنل NOWPayments بررسی کنید.", { status: 409, code: "nowpayments_lookup_inconclusive" });
+    const status = found.outcome === "no_payment_found" ? (found.conclusive === false ? "no-payment-found-unverifiable" : "no-payment-found") : String(found.appliedOutcome || "payment-applied");
+    return { ok: true, status, auditSummary: { status } };
   }
   if (provider === "nowpayments") {
     const result = await reconcileNowPaymentsPayment({ invoice: record });
@@ -475,6 +515,10 @@ export async function resolvePaymentRecovery({ actorId, operationId, key, reason
     execute: async () => {
       const current = await model.findOne({ [field]: id }).select("recoveryStatus status balanceCredited").lean();
       if (!current) throw new AdminServiceError("پرداخت یا سفارش یافت نشد.", { status: 404, code: "payment_not_found" });
+      // A generic disposition must never leave (or hide) an unreleased create-lock: this case has its own audited workflow.
+      if (provider === "nowpayments" && ["creation_unknown", "creating"].includes(current.status)) {
+        throw new AdminServiceError("این سفارش NOWPayments هنوز قفل ایجاد فاکتور دارد؛ از «آزادسازی قفل ایجاد» استفاده کنید.", { status: 409, code: "use_creation_lock_release" });
+      }
       if (current.recoveryStatus !== "required" && !["manual_review", "uncertain"].includes(current.status) && !(["paid", "finished"].includes(current.status) && current.balanceCredited === false)) {
         throw new AdminServiceError("این پرداخت در انتظار بازیابی دستی نیست.", { status: 409, code: "not_recovery_required" });
       }

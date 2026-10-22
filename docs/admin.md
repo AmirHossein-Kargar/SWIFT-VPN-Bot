@@ -41,7 +41,7 @@ rate-limited. Sign-in requests are rate-limited per Telegram ID and per IP.
 | Dashboard / analytics | KPIs, revenue/orders/users charts, popular plans, provider and plan breakdowns, CSV export, live system health |
 | Users | Search, filters, profile with payments, orders and services. **Credit** or **debit** the wallet, **block / unblock**, **send a Telegram message**, **restore test-service eligibility** (see [User actions](#user-actions)) |
 | VPN services | Registry plus live WizardXray detail: change link, enable/disable, revoke, extend time, add traffic |
-| Payments | All providers, status tabs, full timeline (wallet debit/refund and webhook events), safe retry, mark for recovery, manual resolve, bank-receipt confirm/reject |
+| Payments | All providers, status tabs, full timeline (wallet debit/refund and webhook events), safe retry, mark for recovery, manual resolve, bank-receipt confirm/reject; NOWPayments orders with an unknown invoice outcome: read-only provider check and an audited, reason-and-confirmation-gated lock release |
 | Recovery | Queue of stuck payments and orders, safe retry-all |
 | Plans & pricing | `AdminProduct` catalog: create, edit, duplicate, reorder, enable. Used for management and analytics only |
 | Custody | NOWPayments custody balances, conversions, payouts and reconciliation (needs `NOWPAYMENTS_EMAIL` / `NOWPAYMENTS_PASSWORD`) |
@@ -97,7 +97,7 @@ idempotent through `operationId`. `GET /api/admin/operations/new-id` returns a f
 | Overview | `GET /dashboard` · `GET /analytics` · `GET /analytics/report` · `GET /analytics/export.csv` · `GET /system/health` · `GET /settings/overview` · `GET /audit` · `GET /referrals` |
 | Users | `GET /users` · `GET /users/:id` · `POST /users/:id/balance` · `/block` · `/unblock` · `/test-eligibility` · `/message` |
 | VPN | `GET /vpns` · `GET /vpns/:username` · `POST /vpns/:username/actions` · `GET /vpns-remote/clients` |
-| Payments | `GET /payments` · `GET /payments/:key` · `POST /payments/:key/retry` · `/recovery-required` · `/resolve` · `POST /payments/bank/:id/confirm` · `/reject` |
+| Payments | `GET /payments` · `GET /payments/:key` · `POST /payments/:key/retry` · `/recovery-required` · `/resolve` · `/release-creation-lock` (NOWPayments `creation_unknown` only) · `POST /payments/bank/:id/confirm` · `/reject` |
 | Recovery | `GET /recovery` · `POST /recovery/retry-safe` |
 | Plans & pricing | `GET/POST /products` · `PATCH /products/:id` · `POST /products/:id/duplicate` · `POST /products/reorder` |
 | Broadcast | `POST /broadcast/preview` · `POST /broadcast` · `GET /broadcast/status/:id` · `POST /broadcast/cancel/:id` · `GET /broadcasts` |

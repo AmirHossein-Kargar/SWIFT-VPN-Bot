@@ -100,7 +100,10 @@ describe("TRON quote and invoice guards", () => {
       env: ENV,
       now: new Date(),
       usdtQuote: async () => ({ tomanPerUsdt: 250_000, createdAt: new Date().toISOString(), source: "gheymat" }),
-      request: async () => ({ status: 403, data: { code: "INVALID_API_KEY", message: "Invalid api key" }, providerCode: "INVALID_API_KEY" }),
+      // Only the optional estimate fails here; the mandatory minimum-amount lookup succeeds.
+      request: async ({ path }) => (String(path).startsWith("/min-amount")
+        ? { status: 200, data: { min_amount: 0.05, fiat_equivalent: 0.01 } }
+        : { status: 403, data: { code: "INVALID_API_KEY", message: "Invalid api key" }, providerCode: "INVALID_API_KEY" }),
     });
     assert.equal(quote.estimatedTrx, null);
     assert.equal(quote.amountToman, 50_000);

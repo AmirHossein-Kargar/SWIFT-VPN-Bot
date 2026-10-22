@@ -92,6 +92,7 @@ describe("TRON quote composition", () => {
     resetTronQuoteCacheForTests();
     const calls = [];
     const quote = await quoteTronTopUp({
+      enforceMinAmount: false, // isolates the optional estimate; the minimum is covered in nowpaymentsMinAmount.test.js
       amountToman: 50_000,
       env: ENV,
       now: NOW,
@@ -114,6 +115,7 @@ describe("TRON quote composition", () => {
   test("a failed or malformed estimate does not invent a TRX price", async () => {
     resetTronQuoteCacheForTests();
     await assert.rejects(() => quoteTronTopUp({
+      enforceMinAmount: false, // isolates the optional estimate; the minimum is covered in nowpaymentsMinAmount.test.js
       amountToman: 50_000,
       env: ENV,
       now: NOW,
@@ -121,6 +123,7 @@ describe("TRON quote composition", () => {
       request: async () => { throw new Error("should not estimate"); },
     }), (error) => error.code === "rate_unavailable");
     const mismatched = await quoteTronTopUp({
+      enforceMinAmount: false, // isolates the optional estimate; the minimum is covered in nowpaymentsMinAmount.test.js
       amountToman: 50_000,
       env: ENV,
       now: NOW,
@@ -144,6 +147,7 @@ describe("TRON quote composition", () => {
     for (const failure of failures) {
       resetTronQuoteCacheForTests();
       const quote = await quoteTronTopUp({
+        enforceMinAmount: false, // isolates the optional estimate; the minimum is covered in nowpaymentsMinAmount.test.js
         amountToman: 50_000,
         env: ENV,
         now: NOW,
@@ -163,6 +167,7 @@ describe("TRON quote composition", () => {
     resetTronQuoteCacheForTests();
     let calls = 0;
     await assert.rejects(() => quoteTronTopUp({
+      enforceMinAmount: false, // isolates the optional estimate; the minimum is covered in nowpaymentsMinAmount.test.js
       amountToman: 50_000,
       env: {},
       now: NOW,
@@ -179,6 +184,7 @@ describe("TRON quote composition", () => {
     console.warn = (line) => lines.push(String(line));
     try {
       await quoteTronTopUp({
+        enforceMinAmount: false, // isolates the optional estimate; the minimum is covered in nowpaymentsMinAmount.test.js
         amountToman: 50_000,
         env: ENV,
         now: NOW,
@@ -204,6 +210,7 @@ describe("TRON quote composition", () => {
   test("accepts a documented string estimated_amount and does not require a guessed field", async () => {
     resetTronQuoteCacheForTests();
     const quote = await quoteTronTopUp({
+      enforceMinAmount: false, // isolates the optional estimate; the minimum is covered in nowpaymentsMinAmount.test.js
       amountToman: 50_000,
       env: ENV,
       now: NOW,

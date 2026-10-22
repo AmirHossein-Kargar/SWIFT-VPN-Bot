@@ -4,6 +4,7 @@ import {
   readNowPaymentsConfig,
 } from "./money.js";
 import { createNowPaymentsClient } from "./nowpaymentsClient.js";
+import { resolvePaymentAllowlist } from "./allowlist.js";
 import { logQuoteFailure } from "../pricing/quoteLog.js";
 
 const catalogCache = new Map();
@@ -119,6 +120,39 @@ export function normalizeCatalogAsset(entry, { fixedRateSet = new Set(), merchan
   };
 }
 
+/** Customer-menu groups: one entry per ticker, networks nested, preferred tickers first. */
+export function groupAssets(assets) {
+  const groupsMap = new Map();
+  for (const asset of assets) {
+    const groupKey = asset.ticker;
+    if (!groupsMap.has(groupKey)) {
+      groupsMap.set(groupKey, {
+        ticker: groupKey,
+        name: asset.name,
+        networks: [],
+        requiresNetworkSelection: false,
+        defaultPayCurrency: asset.code,
+      });
+    }
+    const group = groupsMap.get(groupKey);
+    group.networks.push({
+      payCurrency: asset.code,
+      network: asset.network,
+      name: asset.name,
+      extraIdExists: asset.extraIdExists,
+      networkPrecision: asset.networkPrecision,
+      fixedRateSupported: asset.fixedRateSupported,
+      minAmount: asset.minAmount,
+    });
+    group.requiresNetworkSelection = group.networks.length > 1;
+  }
+
+  return [...groupsMap.values()]
+    .map((group, index) => ({ group, index }))
+    .sort((a, b) => preferredRank(a.group.ticker) - preferredRank(b.group.ticker) || a.index - b.index)
+    .map(({ group }) => group);
+}
+
 export function buildCatalogFromProviderData({
   fullCurrencies = null,
   currencies = null,
@@ -182,40 +216,13 @@ export function buildCatalogFromProviderData({
     return true;
   });
 
-  const groupsMap = new Map();
-  for (const asset of assets) {
-    const groupKey = asset.ticker;
-    if (!groupsMap.has(groupKey)) {
-      groupsMap.set(groupKey, {
-        ticker: groupKey,
-        name: asset.name,
-        networks: [],
-        requiresNetworkSelection: false,
-        defaultPayCurrency: asset.code,
-      });
-    }
-    const group = groupsMap.get(groupKey);
-    group.networks.push({
-      payCurrency: asset.code,
-      network: asset.network,
-      name: asset.name,
-      extraIdExists: asset.extraIdExists,
-      networkPrecision: asset.networkPrecision,
-      fixedRateSupported: asset.fixedRateSupported,
-      minAmount: asset.minAmount,
-    });
-    group.requiresNetworkSelection = group.networks.length > 1;
-  }
-
-  const groups = [...groupsMap.values()]
-    .map((group, index) => ({ group, index }))
-    .sort((a, b) => preferredRank(a.group.ticker) - preferredRank(b.group.ticker) || a.index - b.index)
-    .map(({ group }) => group);
+  const groups = groupAssets(assets);
 
   return {
     assets,
     groups,
     byCode: Object.fromEntries(assets.map((asset) => [asset.code, asset])),
+    merchantVerified: Boolean(merchantSet),
     fetchedAt,
     expiresAt: fetchedAt + ttlMs,
   };
@@ -366,4 +373,39 @@ export function validateCatalogSelection(catalog, { payCurrency, ticker, network
   }
 
   throw new NowPaymentsFlowError("currency_unavailable");
+}
+
+/**
+ * Customer-facing view of a merchant-verified catalog: only allowlisted assets
+ * the merchant account has enabled right now, labelled from the allowlist.
+ * Fails closed: an unverified catalog or an empty intersection throws; it never
+ * falls back to listing everything.
+ */
+export function applyPaymentAllowlist(catalog, { env = process.env, entries } = {}) {
+  if (!catalog || !Array.isArray(catalog.assets) || catalog.merchantVerified !== true) {
+    throw new NowPaymentsFlowError("currency_unavailable");
+  }
+  const allowed = entries === undefined ? resolvePaymentAllowlist(env) : resolvePaymentAllowlist(env, entries);
+  const assets = [];
+  for (const entry of allowed) {
+    const asset = catalog.byCode?.[entry.payCurrency];
+    if (!asset || !asset.enable || asset.isMerchantEnabled !== true) continue;
+    assets.push({ ...asset, ticker: entry.ticker, network: entry.network });
+  }
+  if (!assets.length) throw new NowPaymentsFlowError("currency_unavailable");
+  return {
+    assets,
+    groups: groupAssets(assets),
+    byCode: Object.fromEntries(assets.map((asset) => [asset.code, asset])),
+    merchantVerified: true,
+    allowlisted: true,
+    fetchedAt: catalog.fetchedAt,
+    expiresAt: catalog.expiresAt,
+  };
+}
+
+/** The catalog the customer flow and invoice creation must use. */
+export async function fetchPaymentCatalog(options = {}) {
+  const catalog = await fetchNowPaymentsCatalog({ ...options, includeExtendedMetadata: true });
+  return applyPaymentAllowlist(catalog, { env: options.env || process.env });
 }

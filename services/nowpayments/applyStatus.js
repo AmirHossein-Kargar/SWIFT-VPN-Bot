@@ -209,10 +209,12 @@ export async function applyNowPaymentsUpdate({
   await appendIpnLog(invoiceModel, orderId, payload, status, now);
 
   if (invoice.status === "creation_failed") {
+    const flaggedBefore = invoice.recoveryStatus;
     await invoiceModel.updateOne({ orderId }, {
       $set: { recoveryStatus: "required", recoveryReason: "ipn_after_rejected_create", updatedAt: now() },
     });
-    return { outcome: "not_eligible", credited: false };
+    // flaggedForReview is true only the first time, so a provider's IPN retries do not re-alert.
+    return { outcome: "not_eligible", credited: false, flaggedForReview: flaggedBefore !== "required" };
   }
 
   // A refund is a terminal reversal. It either wins before final settlement and
@@ -250,7 +252,21 @@ export async function applyNowPaymentsUpdate({
     };
   }
 
-  if (TERMINAL_NON_CREDIT_STATUSES.includes(invoice.status)) return terminalOutcome(invoice);
+  if (TERMINAL_NON_CREDIT_STATUSES.includes(invoice.status)) {
+    // A verified `finished` for an order we already closed (expired/failed/
+    // refunded) means money may really have arrived. It is never credited
+    // automatically, but it must not be acknowledged silently either.
+    let flaggedForReview = false;
+    const flaggedBefore = invoice.recoveryStatus; // read before the update (a live document may alias it)
+    if (status === SUCCESS_PAYMENT_STATUS && !invoice.balanceCredited) {
+      await invoiceModel.updateOne(
+        { orderId, balanceCredited: false, recoveryStatus: { $ne: "resolved" } },
+        { $set: { recoveryStatus: "required", recoveryReason: "payment_after_terminal_status", updatedAt: now() } },
+      );
+      flaggedForReview = flaggedBefore !== "required" && flaggedBefore !== "resolved";
+    }
+    return { ...terminalOutcome(invoice), ...(flaggedForReview ? { flaggedForReview } : {}) };
+  }
   if (invoice.balanceCredited) {
     return {
       outcome: "already_credited",
@@ -289,6 +305,9 @@ export async function applyNowPaymentsUpdate({
             : {}),
           updatedAt: now(),
         },
+        // A provider-bound payment settles the "did the invoice exist?" question, so the
+        // one-open-create-per-user key must not outlive creation_unknown.
+        $unset: { openCreateKey: 1 },
       },
     );
     return { outcome: status, credited: false };

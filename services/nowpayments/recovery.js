@@ -4,6 +4,7 @@ import { notifyNowPaymentsCredit } from "./notify.js";
 import { readNowPaymentsConfig } from "./money.js";
 import { createNowPaymentsRequest } from "./nowpaymentsClient.js";
 import { acquireRedisLease, releaseRedisLease } from "../redisLease.js";
+import { recoverCreationUnknownOrders } from "./creationLookup.js";
 
 const RECOVERABLE = ["creation_unknown", "pending", "waiting", "confirming", "confirmed", "sending", "partially_paid", "finished"];
 
@@ -111,6 +112,18 @@ export async function recoverNowPaymentsInvoices({
   const config = readNowPaymentsConfig(env);
   if (!config) return { recovered: 0, unresolved, errors: 0, skipped: "not_configured" };
   const call = request || createNowPaymentsRequest({ apiKey: config.apiKey, baseURL: config.baseURL });
+
+  // Orders whose invoice may exist remotely but was never recorded: ask the provider (authenticated
+  // payment list) whether a payment exists for them. Needs the JWT credentials; never releases the lock.
+  let creationLookup = null;
+  if (config.hasCustodyAuth) {
+    try {
+      creationLookup = await recoverCreationUnknownOrders({ invoiceModel, env, request, apply, notify, bot, now });
+    } catch (error) {
+      log("warn", "creation_unknown lookup failed", { errorType: error?.name || "Error" });
+    }
+  }
+
   const pending = await rows(invoiceModel, {
     paymentId: { $nin: [null, ""] },
     balanceCredited: false,
@@ -153,7 +166,7 @@ export async function recoverNowPaymentsInvoices({
     }
   }
 
-  return { recovered, unresolved, errors };
+  return { recovered, unresolved, errors, ...(creationLookup ? { creationLookup } : {}) };
 }
 
 let timer = null;

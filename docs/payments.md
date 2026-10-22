@@ -68,6 +68,82 @@ New TRON top-ups use a hosted NOWPayments invoice (`pay_currency: trx`).
 5. The credited Toman amount is the amount the customer confirmed, not a later market value.
    Duplicate IPNs credit once (`appliedPaymentKeys`).
 
+### Which currencies are offered, and the minimum amount
+
+- **Allowlist (at most 10 choices).** Customers can only pick what is listed in
+  [`services/nowpayments/allowlist.js`](../services/nowpayments/allowlist.js) **and** enabled for
+  the merchant account right now (`GET /v1/merchant/coins`, cross-checked with `GET /v1/currencies`).
+  Each network of a token is its own entry with its own provider code (`usdttrc20` ≠ `usdtbsc`).
+  If the merchant list cannot be read, or nothing in the allowlist is enabled, the menu is empty and
+  creation is refused; the full provider list is never shown as a fallback. Invoice creation re-checks
+  the allowlist, network and ticker server-side, so a hand-crafted callback cannot pick another coin.
+  Run `node scripts/verify-nowpayments-allowlist.mjs` (read-only, needs `NOWPAYMENTS_API_KEY`) to see
+  what the live account accepts and the provider's current minimums before editing the list.
+- **Minimum amount.** Before a quote is issued, and again before `POST /invoice` when the quote did
+  not carry it, the bot asks `GET /v1/min-amount?currency_from=<code>&currency_to=<outcome>&fiat_equivalent=usd`
+  (plus the same `is_fixed_rate` / `is_fee_paid_by_user` flags as the invoice) and compares
+  the invoice price (Toman ÷ the Gheymat rate, in cents) with the returned `fiat_equivalent`. Below the
+  minimum the customer is told the minimum in Toman and no invoice is created; the entered amount is never
+  raised. If the lookup fails or is unusable, no quote or invoice is produced (fail closed). There is no
+  hard-coded crypto minimum; `TOPUP_MIN_TOMAN` remains the only static floor. `<outcome>` is the pay currency
+  itself unless `NOWPAYMENTS_MIN_AMOUNT_CURRENCY_TO` names the coin your account settles to (set it if the
+  account auto-converts; the bot logs `outcome_pair_differs` when an invoice reports another payout currency).
+- **Hosted URL.** `invoice_url` must be an `https` NOWPayments URL with a path (a bare host cannot be an
+  invoice page). The reference shows `https://nowpayments.io/payment/?iid=<id>` but does not promise that
+  `iid` equals the invoice `id`, so a different `iid` is delivered unchanged and only logged
+  (`iid_differs_from_invoice_id`). An unusable URL is withheld and the order is parked as `creation_unknown`
+  with the provider invoice id. If the invoice exists remotely but the local write fails, the same parking
+  applies (`persistence_failed`). Whether the hosted page renders is a provider-side fact the bot cannot
+  verify: `scripts/sandbox-invoice-check.mjs` (owner-run, sandbox only) creates one below-minimum and one
+  above-minimum sandbox invoice to open in a browser.
+- **Safety margin.** The reference documents no tolerance between the `/min-amount` figure and what the
+  hosted page accepts, and (without `is_fixed_rate`) the pay amount is computed later at the live rate, so an
+  amount equal to the minimum can end up below it. `NOWPAYMENTS_MIN_AMOUNT_MARGIN_PERCENT` (0–100, default
+  **0**) raises the required price by that percentage. It is off by default because no value can be justified
+  from provider documentation; calibrate it with the sandbox check or set `NOWPAYMENTS_FIXED_RATE=true`
+  (the rate is then frozen for the invoice).
+- **Late payments.** A verified `finished` IPN for an order already `expired`, `failed` or `refunded` is not
+  credited but sets `recoveryReason: payment_after_terminal_status` for admin review.
+
+### Orders whose invoice outcome is unknown (`creation_unknown`)
+
+A timed-out or half-recorded `POST /invoice` leaves the order in `creation_unknown`. While it exists the
+customer cannot open another crypto invoice (`in_flight`; the status check and the unique `openCreateKey` both
+enforce it), so a second invoice can never be created for an unresolved first one.
+
+| Step | What happens | Money / lock |
+|---|---|---|
+| Signed IPN | Verified like any other (order, invoice, amount, currency, crypto amount). A provider-bound status moves the order off `creation_unknown` and frees the key | credits only on a verified `finished`, once |
+| Recovery lookup (every 2 min, needs `NOWPAYMENTS_EMAIL` / `NOWPAYMENTS_PASSWORD`) | `GET /v1/payment/` filtered by the recorded `invoiceId` (or by a date window and `order_id` when none was recorded). Exactly one matching payment is handed to the normal verifier; none, several, truncated pages, mismatching ids, or any provider failure change nothing and back off 10 min | never credits by itself; never releases the lock |
+| Admin retry | Same read-only lookup, on demand | same |
+| Admin **release** (`POST /payments/:key/release-creation-lock`, audited) | Only for an uncredited, payment-less order older than 10 min, after a fresh lookup finds nothing (or, if the lookup is impossible, with an explicit `acceptUnverified`). One compare-and-set to `creation_failed`, clearing both lock mechanisms | no money moves; a later signed payment for it is flagged `ipn_after_rejected_create`, never auto-credited |
+
+**What the lookup can and cannot establish.** The official reference has no "get invoice" endpoint, so the lookup can
+prove that a payment exists but never that an unpaid invoice does not. In `GET /v1/payment/` the documented
+correlation keys are `invoice_id` (and the `invoiceId` filter). `order_id` is in the response schema but every
+documented sample has it `null`, so it is **not assumed to be returned**:
+
+- a payment carrying our `invoice_id` **and** an `order_id` equal to ours is settled by the normal verifier;
+- our `invoice_id` with a missing/null `order_id` is **held** (`provider_lookup_unconfirmed`, with the payment id) and
+  blocks the release; our invoice under another order id, several payments, a result truncated at the page limit, or
+  paging that does not advance are likewise held (`ambiguous` / `mismatch`);
+- with **no recorded invoice id** only `order_id` is left, so an empty result is *not* verification
+  (`no_payment_found_unverifiable`) and a release then always needs the written confirmation;
+- authentication failures, HTTP errors, timeouts and malformed bodies are "unavailable": nothing changes, back-off,
+  and a release needs the written confirmation.
+
+None of these outcomes ever releases the lock. Releasing is a human decision and the generic "resolve" action refuses
+these orders (`use_creation_lock_release`). Because the customer never received the link in these cases, a payment
+for the abandoned invoice is unlikely; if one arrives after a release it is held for review, an administrator is
+alerted once in the admin group, and nothing is credited automatically.
+
+**Admin panel.** Payments → the order → *Check provider (read-only)* runs the lookup. *Release create-lock…* needs a reason
+of 10–400 characters; the server looks the order up first. If it cannot verify absence, the dialog asks for an explicit
+tick ("I checked this invoice in the NOWPayments dashboard and confirm that no payment exists") before
+*Release without provider verification* is enabled. Every attempt is audited with the administrator's identity, the
+attestation flag and an order reference (the audit log redacts long ids, so the last 12 characters are stored). The
+generic "Mark resolved" button is not offered for these orders.
+
 A missing, stale or inconsistent quote, an ambiguous create, or any non-`finished` status does
 not credit and never invents a rate. A recovery cron re-checks open invoices every 2 minutes.
 

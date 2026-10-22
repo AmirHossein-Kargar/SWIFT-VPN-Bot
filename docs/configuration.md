@@ -78,6 +78,9 @@ malformed.
 | `NOWPAYMENTS_FIXED_RATE` | `false` | Pass the fixed-rate flag to NOWPayments invoices |
 | `NOWPAYMENTS_FEE_PAID_BY_USER` | `false` | Pass the fee-paid-by-user flag to NOWPayments invoices |
 | `NOWPAYMENTS_CATALOG_TTL_SECONDS` | `300` | Cache time for the NOWPayments currency catalog (30–3600) |
+| `NOWPAYMENTS_MIN_AMOUNT_CURRENCY_TO` | pay currency | Outcome currency used as `currency_to` in `GET /v1/min-amount`. Leave unset when each coin is paid out as itself; set it (e.g. `usdttrc20`) when the account auto-converts to another coin |
+| `NOWPAYMENTS_MIN_AMOUNT_MARGIN_PERCENT` | `0` | Percent added to the provider's minimum before an amount is accepted (0–100). Off by default; see [Payments](payments.md#which-currencies-are-offered-and-the-minimum-amount) |
+| `NOWPAYMENTS_ENABLED_CURRENCIES` | all allowlisted | Comma-separated provider codes (e.g. `usdttrc20,trx`) that **narrow** the built-in allowlist in [`services/nowpayments/allowlist.js`](../services/nowpayments/allowlist.js). It can switch a network off without a deploy; it can never add a currency |
 | `NOWPAYMENTS_EMAIL` / `NOWPAYMENTS_PASSWORD` | unset | Custody / Mass Payouts credentials (JWT login). Set **both or neither**; needed only for the admin Custody features |
 | `NOWPAYMENTS_PUBLIC_KEY` | unset | Not used by the payment flow. If it equals `NOWPAYMENTS_API_KEY`, the configuration is rejected |
 | `GHEYMAT_API_BASE_URL` | `https://backend.gheymat.online` | Override the live USDT/IRT quote API (public HTTPS) |

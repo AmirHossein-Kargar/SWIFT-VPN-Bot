@@ -6,14 +6,17 @@ import {
   buildInvoicePaymentRequest,
   buildInvoiceRequest,
   currenciesIncludeAsset,
-  invoiceUrlIsTrusted,
+  invoiceUrlIidDiffers,
+  invoiceUrlIsUsable,
   normalizePayCurrency,
   readNowPaymentsConfig,
   tomanToFiatCents,
   NowPaymentsFlowError,
 } from "./money.js";
 import { createNowPaymentsRequest, NowPaymentsApiError } from "./nowpaymentsClient.js";
-import { fetchNowPaymentsCatalog, validateCatalogSelection } from "./catalog.js";
+import { fetchPaymentCatalog, validateCatalogSelection } from "./catalog.js";
+import { allowlistEntryFor } from "./allowlist.js";
+import { assertMeetsMinimum, requestMinAmount } from "./minAmount.js";
 import { logQuoteFailure } from "../pricing/quoteLog.js";
 
 const OPEN_CREATE = ["creating", "creation_unknown"];
@@ -72,8 +75,14 @@ export async function createNowPaymentsTopUp({
       requestedPayCurrency || quote?.payCurrency || config.payCurrency,
     );
     if (!targetPayCurrency) throw new NowPaymentsFlowError("currency_unavailable");
-    const targetTicker = String(requestedTicker || quote?.ticker || targetPayCurrency).trim().toUpperCase();
-    const targetNetwork = String(requestedNetwork || quote?.network || targetPayCurrency).trim().toUpperCase();
+    // Server-side gate: whatever the UI showed, only an allowlisted currency on
+    // its allowlisted network can reach the provider.
+    const allowed = allowlistEntryFor(targetPayCurrency, env);
+    if (!allowed) throw new NowPaymentsFlowError("currency_unavailable");
+    const targetTicker = String(requestedTicker || quote?.ticker || allowed.ticker).trim().toUpperCase();
+    const targetNetwork = String(requestedNetwork || quote?.network || allowed.network).trim().toUpperCase();
+    if (targetTicker !== allowed.ticker) throw new NowPaymentsFlowError("invalid_currency_selection");
+    if (targetNetwork !== allowed.network) throw new NowPaymentsFlowError("invalid_network_selection");
     const targetPrecision = Number.isInteger(currencyPrecision) ? currencyPrecision : (quote?.currencyPrecision ?? 6);
     const targetPlanId = planId || quote?.planId || null;
 
@@ -81,12 +90,12 @@ export async function createNowPaymentsTopUp({
     const priceAmountCents = tomanToFiatCents(amountToman, rate.tomanPerFiat);
     if (priceAmountCents == null) throw new NowPaymentsFlowError("invalid_rate");
 
-    if (quote?.minAmount?.minFiatEquivalent != null) {
-      const priceUsd = priceAmountCents / 100;
-      if (priceUsd + 1e-6 < Number(quote.minAmount.minFiatEquivalent)) {
-        throw new NowPaymentsFlowError("below_min_amount");
-      }
-    }
+    // No invoice without an established provider minimum. A quote that already
+    // carries the fiat minimum is checked here, before anything is written; with
+    // no such quote the minimum is fetched just before the invoice request (below).
+    const call = request || createNowPaymentsRequest({ apiKey: config.apiKey, baseURL: config.baseURL });
+    let minInfo = quote?.minAmount?.minFiatEquivalent != null ? quote.minAmount : null;
+    if (minInfo) assertMeetsMinimum({ priceAmountCents, minInfo, tomanPerFiat: rate.tomanPerFiat, marginPercent: config.minAmountMarginPercent });
 
     orderId = `NP-${randomUUID()}`;
     const openCreateKey = `user:${numericUserId}`;
@@ -117,7 +126,7 @@ export async function createNowPaymentsTopUp({
             estimateAt: quote.estimateAt || currentNow.getTime(),
           }
         : null),
-      minAmount: quote?.minAmount || null,
+      minAmount: minInfo || null,
       feePolicy: {
         isFixedRate: Boolean(config.isFixedRate),
         isFeePaidByUser: Boolean(config.isFeePaidByUser),
@@ -144,8 +153,8 @@ export async function createNowPaymentsTopUp({
         quotedAt: rate.quoteAt ? new Date(rate.quoteAt) : currentNow,
         estimatedPayAmount: quote?.estimatedAmount ?? null,
         estimatedAt: quote?.estimateAt ? new Date(quote.estimateAt) : null,
-        minPayAmount: quote?.minAmount?.minCryptoAmount ?? null,
-        minFiatEquivalent: quote?.minAmount?.minFiatEquivalent ?? null,
+        minPayAmount: minInfo?.minCryptoAmount ?? null,
+        minFiatEquivalent: minInfo?.minFiatEquivalent ?? null,
         quoteExpiresAt: quote?.quoteExpiresAt ? new Date(quote.quoteExpiresAt) : null,
         feePolicy: {
           isFixedRate: Boolean(config.isFixedRate),
@@ -163,7 +172,6 @@ export async function createNowPaymentsTopUp({
       throw error;
     }
 
-    const call = request || createNowPaymentsRequest({ apiKey: config.apiKey, baseURL: config.baseURL });
     let currencies;
     try {
       currencies = await call({ method: "GET", path: "/currencies" });
@@ -184,23 +192,29 @@ export async function createNowPaymentsTopUp({
       throw new NowPaymentsFlowError("currency_unavailable");
     }
 
-    // The exact currency/network the customer picked must still be enabled for
-    // this merchant right now; nothing is ever substituted silently.
-    const expectedTicker = requestedTicker || quote?.ticker || null;
-    const expectedNetwork = requestedNetwork || quote?.network || null;
+    // The exact currency the customer picked must still be enabled for this
+    // merchant right now; nothing is ever substituted silently. Ticker/network
+    // were already matched against the allowlist entry above, so the catalog is
+    // only consulted for availability (its own network labels are heuristics).
     try {
-      const catalog = providedCatalog || await fetchNowPaymentsCatalog({ env, request: call });
-      const asset = validateCatalogSelection(catalog, { payCurrency: targetPayCurrency });
-      if (expectedTicker && asset.ticker !== String(expectedTicker).trim().toUpperCase()) {
-        throw new NowPaymentsFlowError("invalid_currency_selection");
-      }
-      if (expectedNetwork && asset.network !== String(expectedNetwork).trim().toUpperCase()) {
-        throw new NowPaymentsFlowError("invalid_network_selection");
-      }
+      const catalog = providedCatalog || await fetchPaymentCatalog({ env, request: call });
+      validateCatalogSelection(catalog, { payCurrency: targetPayCurrency });
     } catch (error) {
       logQuoteFailure("nowpayments_merchant_selection", error);
       await markFailed(invoiceModel, orderId);
       throw error instanceof NowPaymentsFlowError ? error : new NowPaymentsFlowError("currency_unavailable");
+    }
+
+    if (!minInfo) {
+      // An outage here blocks creation: an unchecked amount never reaches the provider.
+      try {
+        minInfo = await requestMinAmount({ call, config, payCurrency: targetPayCurrency });
+        assertMeetsMinimum({ priceAmountCents, minInfo, tomanPerFiat: rate.tomanPerFiat, marginPercent: config.minAmountMarginPercent });
+      } catch (error) {
+        await markFailed(invoiceModel, orderId);
+        throw error;
+      }
+      immutableSnapshot.minAmount = minInfo;
     }
 
     const payload = buildInvoiceRequest({
@@ -218,7 +232,12 @@ export async function createNowPaymentsTopUp({
       throw new NowPaymentsFlowError("invalid_rate");
     }
     await invoiceModel.updateOne({ orderId, status: "creating" }, {
-      $set: { apiAttemptedAt: now(), updatedAt: now() },
+      $set: {
+        apiAttemptedAt: now(),
+        minPayAmount: minInfo?.minCryptoAmount ?? null,
+        minFiatEquivalent: minInfo?.minFiatEquivalent ?? null,
+        updatedAt: now(),
+      },
     });
 
     let response;
@@ -274,7 +293,7 @@ export async function createNowPaymentsTopUp({
       await markUnknown(invoiceModel, orderId, invoiceId);
       throw new NowPaymentsFlowError("malformed_response");
     }
-    if (!invoiceUrlIsTrusted(body.invoice_url)) {
+    if (!invoiceUrlIsUsable(body.invoice_url)) {
       await markUnknown(invoiceModel, orderId, invoiceId);
       throw new NowPaymentsFlowError("malformed_response");
     }
@@ -286,6 +305,24 @@ export async function createNowPaymentsTopUp({
     if (body.pay_currency != null && String(body.pay_currency).toLowerCase() !== targetPayCurrency) {
       await markUnknown(invoiceModel, orderId, invoiceId);
       throw new NowPaymentsFlowError("malformed_response");
+    }
+
+    if (invoiceUrlIidDiffers(body.invoice_url, invoiceId)) {
+      logQuoteFailure("nowpayments_invoice_url", {
+        code: "iid_differs_from_invoice_id",
+        message: "hosted URL iid differs from the invoice id (not a documented contract; delivered unchanged)",
+      }, { orderRef: orderId.slice(-12) });
+    }
+
+    // The minimum was checked for one outcome currency; if the invoice reports another payout
+    // currency the account auto-converts and NOWPAYMENTS_MIN_AMOUNT_CURRENCY_TO should be set.
+    const payout = typeof body.payout_currency === "string" ? body.payout_currency.trim().toLowerCase() : null;
+    const checkedPair = minInfo?.currencyTo || config.minAmountCurrencyTo || targetPayCurrency;
+    if (payout && payout !== checkedPair) {
+      logQuoteFailure("nowpayments_min_amount_pair", {
+        code: "outcome_pair_differs",
+        message: "invoice payout currency differs from the pair used for the minimum-amount check",
+      }, { payCurrency: targetPayCurrency, checkedPair, payout });
     }
 
     const responsePayAmount = Number(body.pay_amount);
@@ -300,19 +337,33 @@ export async function createNowPaymentsTopUp({
       invoiceId,
     };
 
-    await invoiceModel.updateOne({ orderId, status: "creating" }, {
-      $set: {
-        status: "pending",
-        invoiceId,
-        invoiceUrl: String(body.invoice_url),
-        payAmount,
-        quoteSnapshot: updatedSnapshot,
-        recoveryStatus: "none",
-        recoveryReason: null,
-        updatedAt: now(),
-      },
-      $unset: { openCreateKey: 1, nextRetryAt: 1 },
-    });
+    // The provider invoice exists. If it cannot be recorded, the URL is NOT
+    // handed out (nothing could track it) and the order is parked as unknown with
+    // the provider invoice id, so a later IPN or the recovery job can still
+    // settle it. This is a persistence failure, not a provider rejection.
+    try {
+      await invoiceModel.updateOne({ orderId, status: "creating" }, {
+        $set: {
+          status: "pending",
+          invoiceId,
+          invoiceUrl: String(body.invoice_url),
+          payAmount,
+          quoteSnapshot: updatedSnapshot,
+          recoveryStatus: "none",
+          recoveryReason: null,
+          updatedAt: now(),
+        },
+        $unset: { openCreateKey: 1, nextRetryAt: 1 },
+      });
+    } catch (error) {
+      logQuoteFailure("nowpayments_invoice_persist", error, { orderRef: orderId.slice(-12) });
+      try {
+        await markUnknown(invoiceModel, orderId, invoiceId);
+      } catch (parkError) {
+        logQuoteFailure("nowpayments_invoice_persist_park", parkError, { orderRef: orderId.slice(-12) });
+      }
+      throw new NowPaymentsFlowError("persistence_failed");
+    }
     return {
       orderId,
       invoiceId,
