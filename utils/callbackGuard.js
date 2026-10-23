@@ -16,6 +16,7 @@ const SENSITIVE_PREFIXES = [
   "hoosh_verify:", "admin_hoosh_resend:", "admin_hoosh_run_pending",
   "pay_hoosh", "pay_nowpayments", "pay_trx", "np_create", "np_select_currency", "np_cancel",
   "menu:test", "sup_", "admin_scan_trx_wallet",
+  "admin_create_api_service", "apires:",
 ];
 
 const DEDUPE_WINDOW_MS = 2_000;

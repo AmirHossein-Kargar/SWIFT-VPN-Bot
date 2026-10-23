@@ -12,6 +12,7 @@ import {
   handleApiDaysInput,
 } from "./admin/apiServicePurchase.js";
 import { handleAdminPanelStep } from "./admin/panel.js";
+import { canContinueAdminStep, isAdminTextStep } from "../utils/adminStepSession.js";
 
 // Function to send config to user
 async function handleSendConfig(bot, msg, session) {
@@ -64,6 +65,13 @@ async function handleSendConfig(bot, msg, session) {
 async function handleMessage(bot, msg) {
   const chatId = msg.chat.id;
   const session = await getSession(chatId);
+
+  // Privileged admin prompts live in the (shared) chat session. Only the admin who opened
+  // one, and who is still authorized, may answer it. Anyone else is ignored before ANY
+  // side effect: no reply, no expiry-driven clearing, no consumption of the session.
+  if (isAdminTextStep(session?.step) && !canContinueAdminStep({ session, chatId, userId: msg.from?.id })) {
+    return;
+  }
 
   // An abandoned input prompt must not capture this message: drop the stale
   // state and send the user back to the menu with an inline button.
@@ -226,6 +234,7 @@ async function handleMessage(bot, msg) {
         step: "admin_waiting_for_message",
         targetUserId: userId,
         messageId: messageId,
+        adminUserId: session.adminUserId,
       });
     } catch (error) {
       console.error("Error finding user:", error);
@@ -296,7 +305,8 @@ async function handleMessage(bot, msg) {
   }
 
   // Handle registering VPN ID
-  const currentSession = msg.session || session;
+  // Only the store-backed session counts; nothing on the incoming message may supply one.
+  const currentSession = session;
   if (currentSession?.step === "waiting_for_vpn_id") {
     const vpnId = msg.text?.trim();
     const telegramId = currentSession.targetTelegramId;

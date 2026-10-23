@@ -15,6 +15,8 @@ import {
   apiServicePurchase,
   createApiService,
   cancelApiPurchase,
+  isApiPurchaseInFlight,
+  resolveApiPurchaseCallback,
 } from "./admin/apiServicePurchase.js";
 import showPaymentMethods from "./message/showPaymentMethods.js";
 import sendServiceSelectionMenu from "../services/manageServices/sendServiceSelectionMenu.js";
@@ -61,7 +63,8 @@ import { confirmBankPayment } from "../services/payments/confirmBankPayment.js";
 import { sumAmount, sumUserBalances } from "../services/admin/collectionStats.js";
 import { estimateCatalogConsumption } from "../services/admin/reportMath.js";
 import { escapeErrorMessage } from "../utils/escapeHtml.js";
-import { isAdmin } from "../utils/auth.js";
+import { isAdmin, isAdminGroup, isAdminUser } from "../utils/auth.js";
+import { adminOwnerFields, isActiveForeignAdminPrompt } from "../utils/adminStepSession.js";
 import { handleAdminPanelCallbacks } from "./admin/panel.js";
 
 // ─── Authorization helpers ─────────────────────────────────────────────────
@@ -140,6 +143,26 @@ const handleCallbackQueryInner = async (bot, query) => {
     return;
   }
 
+  // The admin group is not a customer surface: the docs, the routing in bot.js and every message the bot posts
+  // there (alerts, ticket copies, receipt confirm/reject buttons) are admin-only, and customer flows run in
+  // private chats. A non-admin's tap there can only be a stray or forwarded button, and every customer handler
+  // would write to the group's shared session, so it is ignored before any state is touched.
+  if (isAdminGroup(chatId) && !isAdminUser(userId)) {
+    try { await bot.answerCallbackQuery(query.id); } catch { /* ignore */ }
+    return;
+  }
+
+  // While a provider purchase is running in this process for this chat, nothing but the per-admin panel
+  // (`adm:`, which only writes its own per-admin session key) may run: every other handler can replace or clear
+  // the shared session that records the running purchase. This relies on the in-process lock, never on the age
+  // of a stored marker, so it cannot be bypassed or left stuck by a crash.
+  if (isApiPurchaseInFlight(chatId) && !data.startsWith("adm:")) {
+    try {
+      await bot.answerCallbackQuery(query.id, { text: "⏳ خرید API در حال انجام است؛ لطفاً منتظر بمانید.", show_alert: true });
+    } catch { /* ignore */ }
+    return;
+  }
+
   // Rapid double-taps on the same button of the same message are dropped for
   // operations that move money, create services or change state. Navigation
   // is idempotent and intentionally not throttled here.
@@ -151,6 +174,8 @@ const handleCallbackQueryInner = async (bot, query) => {
   // ── Main menu (menu:*) — pure navigation into existing, self-checking flows ─
   if (data.startsWith(MENU_PREFIX)) {
     try { await bot.answerCallbackQuery(query.id); } catch { /* ignore */ }
+    // Menu actions wipe or replace the chat's session; in the admin group that may hold another admin's prompt.
+    if (isAdminGroup(chatId) && isActiveForeignAdminPrompt({ session: await getSession(chatId), chatId, userId })) return;
     await runMenuAction(bot, {
       action: data.slice(MENU_PREFIX.length),
       chatId,
@@ -164,6 +189,12 @@ const handleCallbackQueryInner = async (bot, query) => {
 
   // ── Support tickets (sup_*) — answers its own callback query ──────────────
   if (data.startsWith("sup_") && (await handleSupportCallback(bot, query))) return;
+
+  // ── Reconciling an unsettled API purchase (apires:*) — admin-only, audited ─
+  if (data.startsWith("apires:")) {
+    await resolveApiPurchaseCallback(bot, query);
+    return;
+  }
 
   // ── SWIFT Admin Panel (adm:*) — shared services, audited actions ──────────
   if (data.startsWith("adm:") ) {
@@ -436,6 +467,8 @@ const handleCallbackQueryInner = async (bot, query) => {
 
     // ── Cancel / back ────────────────────────────────────────────────────────
     case "back_to_topup":
+      // Another admin's active prompt lives in this shared session: neither clear nor replace it.
+      if (isActiveForeignAdminPrompt({ session, chatId, userId })) break;
       await bot.deleteMessage(chatId, messageId);
 
       // Clean up any pending invoice for the current payment type
@@ -461,6 +494,7 @@ const handleCallbackQueryInner = async (bot, query) => {
       break;
 
     case "back_to_home":
+      if (isActiveForeignAdminPrompt({ session, chatId, userId })) break;
       await clearSession(chatId);
       if (session?.supportMessageId && session.supportMessageId !== messageId) {
         try { await bot.deleteMessage(chatId, session.supportMessageId); } catch (_) {}
@@ -694,6 +728,7 @@ const handleCallbackQueryInner = async (bot, query) => {
         step: "admin_waiting_for_user_id",
         action: "send_message_to_user",
         messageId,
+        ...adminOwnerFields(userId),
       });
       await bot.editMessageText(
         "📨 <b>ارسال پیام به کاربر</b>\n\n🔢 لطفاً <b>آیدی عددی</b> کاربر را وارد کنید:",
@@ -847,6 +882,7 @@ const handleCallbackQueryInner = async (bot, query) => {
       step: "waiting_for_config_details",
       targetUserId,
       messageId: sentMsg.message_id,
+      ...adminOwnerFields(userId),
     });
     return;
   }
@@ -892,7 +928,7 @@ const handleCallbackQueryInner = async (bot, query) => {
     // ADMIN ONLY — registers a VPN service ID against a user account.
     if (!isAdmin(chatId, userId)) { await denyAdmin(bot, query.id); return; }
     const targetTelegramId = data.split(":")[1];
-    await setSession(chatId, { step: "waiting_for_vpn_id", targetTelegramId, messageId });
+    await setSession(chatId, { step: "waiting_for_vpn_id", targetTelegramId, messageId, ...adminOwnerFields(userId) });
     await bot.editMessageText("🔑 لطفاً آیدی سرویس را وارد کنید:", { chat_id: chatId, message_id: messageId });
     return;
   }
@@ -1011,6 +1047,7 @@ const handleCallbackQueryInner = async (bot, query) => {
       step: "admin_waiting_for_hoosh_search",
       hooshSearchType: type,
       messageId,
+      ...adminOwnerFields(userId),
     });
     await bot.editMessageText(
       `🔍 <b>جستجوی فاکتور HooshPay</b>\n\n` +

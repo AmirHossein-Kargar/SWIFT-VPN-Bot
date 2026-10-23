@@ -43,6 +43,9 @@ function getClient() {
   cachedClient = axios.create({
     baseURL: normalizedBase,
     timeout: TIMEOUT_MS,
+    // Never follow redirects: axios would turn a redirected POST into a GET (301/302/303) or re-send the mutation to
+    // another URL (307/308), and report whatever that other endpoint answered as the provider's answer.
+    maxRedirects: 0,
     maxContentLength: MAX_BODY_BYTES,
     maxBodyLength: MAX_BODY_BYTES,
     headers: {
@@ -54,16 +57,54 @@ function getClient() {
   return cachedClient;
 }
 
+/**
+ * Codes carried ONLY by errors the client has proven to be an explicit, self-consistent panel rejection (see
+ * isExplicitRejection). Callers that must decide "retryable or not" (the admin purchase flow) rely on these instead of
+ * re-deriving a verdict from a bare HTTP status.
+ */
+export const WIZARD_REJECTION_CODES = Object.freeze(["provider_insufficient_balance", "panel_rejected_request"]);
+
+const isClientErrorStatus = (status) => Number.isInteger(status) && status >= 400 && status < 500 && status !== 408;
+
+/** The panel's own status field: undefined when absent, NaN when present but malformed. */
+function bodyHttpCode(body) {
+  const raw = body.http_code;
+  if (raw === undefined || raw === null) return undefined;
+  const parsed = typeof raw === "number" ? raw : (typeof raw === "string" && /^\d{3}$/.test(raw) ? Number(raw) : Number.NaN);
+  return Number.isInteger(parsed) ? parsed : Number.NaN;
+}
+
+/**
+ * Evidence that the panel REFUSED a request, as opposed to failing, being cut off or answering something else.
+ * Contract evidence in this repository (api/wizardApi.js header, docs/payments.md "Definitive failures",
+ * tests/unit/wizardApi*.test.js): the panel answers a refusal with a JSON object {ok:false, error, http_code}, usually
+ * with transport status 200. Accepted only when ALL of these hold:
+ *   - the body is a JSON object whose `ok` is exactly the boolean false;
+ *   - the transport status is 2xx or a 4xx other than 408;
+ *   - the body's `http_code`, if present, is a well-formed 4xx other than 408.
+ * Everything else (a 5xx/3xx/408 transport status, a server-side or contradictory or malformed body http_code, a
+ * non-JSON or truncated body, ok that is not literally false) is NOT established as a refusal.
+ */
+function isExplicitRejection(body, httpStatus) {
+  if (!body || typeof body !== "object" || Array.isArray(body) || body.ok !== false) return false;
+  const transportOk = (httpStatus >= 200 && httpStatus < 300) || isClientErrorStatus(httpStatus);
+  if (!transportOk) return false;
+  const reported = bodyHttpCode(body);
+  return reported === undefined || isClientErrorStatus(reported);
+}
+
 function safeError(operation, error, { mutation = false } = {}) {
   const status = Number.isInteger(error?.response?.status) ? error.response.status : undefined;
-  const code = status === 402
+  // Only a mutation that is PROVEN refused may be treated as "nothing happened". A bare status never proves it: a
+  // 2xx whose body was cut off, a 3xx, a 408, a 5xx and any error without a response all stay ambiguous.
+  const rejected = mutation && isClientErrorStatus(status) && isExplicitRejection(error.response.data, status);
+  if (rejected) {
+    return new WizardApiError(operation, { status, code: panelRejectionCode(error.response.data, status), ambiguous: false });
+  }
+  const code = !mutation && status === 402
     ? "provider_insufficient_balance"
     : (typeof error?.code === "string" ? error.code : undefined);
-  return new WizardApiError(operation, {
-    status,
-    code,
-    ambiguous: mutation && (!status || status >= 500),
-  });
+  return new WizardApiError(operation, { status, code, ambiguous: mutation });
 }
 
 // Keep only a coarse, non-sensitive rejection category. Never persist or log
@@ -96,6 +137,11 @@ async function request(operation, method, path, form, { mutation = false } = {})
       });
     }
     if (body.ok !== true) {
+      const refused = isExplicitRejection(body, response.status);
+      if (mutation && !refused) {
+        // ok is not literally false, or the body contradicts a refusal (e.g. a server-side http_code): unknown outcome.
+        throw new WizardApiError(operation, { status: response.status, code: "panel_response_unproven", ambiguous: true });
+      }
       throw new WizardApiError(operation, {
         status: response.status,
         code: panelRejectionCode(body, response.status),
