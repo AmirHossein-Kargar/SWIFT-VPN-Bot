@@ -675,6 +675,15 @@ await step("tickets: English inbox + chat; a Telegram message appears live, offl
   const before = await logItems(page).count();
   assert.equal(before, 1);
 
+  // Layout: conversation on the left, ticket list on the right; the header names the real customer.
+  const convBox = await page.getByRole("region", { name: "Conversation" }).boundingBox();
+  const inboxBox = await page.getByRole("region", { name: "Ticket inbox" }).boundingBox();
+  assert.ok(convBox.x < inboxBox.x, "conversation is left of the inbox");
+  const customer = page.getByTestId("ticket-customer");
+  await customer.getByText("Ali Rezaei").waitFor();
+  await customer.getByText("@photo_user").waitFor();
+  await customer.getByText("910001").waitFor();
+
   await customerSays(live, 910001, "New message from Telegram");
   await conversation(page).getByText("New message from Telegram").waitFor({ timeout: 10_000 });
   assert.equal(await logItems(page).count(), before + 1);
