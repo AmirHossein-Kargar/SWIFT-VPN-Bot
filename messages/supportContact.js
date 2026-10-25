@@ -4,8 +4,9 @@
  * The direct support identifier is configurable through the SUPPORT_CONTACT
  * environment variable (e.g. "@swift_support" or a numeric Telegram ID).
  * Nothing is hardcoded in source; when unset, only the in-bot support flow
- * is offered.
+ * is offered. Wording lives in ./supportCopy.js.
  */
+import { SUPPORT_COPY } from "./supportCopy.js";
 
 export function getSupportContact() {
   const raw = String(process.env.SUPPORT_CONTACT || "").trim();
@@ -27,29 +28,45 @@ export function getSupportContactUrl() {
 }
 
 /**
- * Persian support notice shown when the user enters support mode.
- * The direct-contact block is included only when a contact is configured.
+ * Optional terms page, offered as a button only when SUPPORT_TERMS_URL holds an
+ * https URL. Nothing is invented: unset or malformed means no button.
  */
-export function getSupportMessage() {
-  const contact = getSupportContact();
-  const directBlock = contact
-    ? `▫️ جهت ارتباط به صورت مستقیم:\n🔰 ${contact}\n\n`
-    : "";
-  return `${directBlock}‼️ قبل از ارسال پیام به پشتیبانی، قوانین و مقررات سرویس‌ دهی را مطالعه کنید.
-
-🎫 برای ثبت درخواست، «تیکت جدید» را بزنید. هر درخواست یک شماره تیکت جداگانه دارد و پاسخ پشتیبانی در همان تیکت برای شما ارسال می‌شود.
-
-✅ فایل‌های مجاز: متن، عکس، فیلم`;
+export function getSupportTermsUrl() {
+  const raw = String(process.env.SUPPORT_TERMS_URL || "").trim();
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
-/** Persian notice for unsupported media types while in support mode. */
+/** Support menu text: title and a short description. Direct contact is a button, never inline text. */
+export function getSupportMessage() {
+  return `<b>${SUPPORT_COPY.title}</b>\n\n${SUPPORT_COPY.description}`;
+}
+
+/** Prompt shown before the first message of a new ticket. */
+export function getNewTicketMessage() {
+  return `${SUPPORT_COPY.termsNotice}\n\n${SUPPORT_COPY.newTicketPrompt}\n${SUPPORT_COPY.allowedFiles}`;
+}
+
+/** Notice for unsupported media types while in support mode. */
 export function getUnsupportedMediaMessage() {
-  return getSupportMessage();
+  return `${SUPPORT_COPY.unsupportedFile}\n${SUPPORT_COPY.allowedFiles}`;
 }
 
 /** Inline keyboard row(s) linking to the direct support chat, when configured. */
 export function getSupportDirectButton() {
   const url = getSupportContactUrl();
   if (!url) return [];
-  return [[{ text: "📩 گفتگو با پشتیبانی", url }]];
+  return [[{ text: SUPPORT_COPY.directContact, url }]];
+}
+
+/** Inline keyboard row linking to the terms page, when configured. */
+export function getSupportTermsButton() {
+  const url = getSupportTermsUrl();
+  if (!url) return [];
+  return [[{ text: SUPPORT_COPY.terms, url }]];
 }

@@ -6,9 +6,9 @@
  * user-uploaded media can never execute or be framed.
  */
 import axios from "axios";
-import { SupportError } from "./tickets.js";
+import { SupportError, MAX_ATTACHMENT_BYTES } from "./tickets.js";
 
-export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+export { MAX_ATTACHMENT_BYTES };
 
 const CONTENT_TYPES = Object.freeze({
   jpg: "image/jpeg",
@@ -28,24 +28,24 @@ export function contentTypeFor(kind, filePath = "") {
 }
 
 export async function streamAttachment({ bot, attachment, res, http = axios }) {
-  if (!bot || !attachment?.fileId) throw new SupportError("پیوست در دسترس نیست.", { status: 404, code: "attachment_unavailable" });
+  if (!bot || !attachment?.fileId) throw new SupportError("پیوست در دسترس نیست.", { status: 404, code: "attachment_unavailable", adminMessage: "The attachment is not available." });
   let url;
   let filePath = "";
   try {
     const file = await bot.getFile(attachment.fileId);
-    if (Number(file?.file_size) > MAX_ATTACHMENT_BYTES) throw new SupportError("حجم پیوست بیش از حد مجاز است.", { status: 413, code: "attachment_too_large" });
+    if (Number(file?.file_size) > MAX_ATTACHMENT_BYTES) throw new SupportError("حجم پیوست بیش از حد مجاز است.", { status: 413, code: "attachment_too_large", adminMessage: "The attachment is larger than the 20 MB limit." });
     filePath = file?.file_path || "";
     url = await bot.getFileLink(attachment.fileId);
   } catch (error) {
     if (error instanceof SupportError) throw error;
-    throw new SupportError("دریافت پیوست از تلگرام ممکن نشد.", { status: 502, code: "attachment_unavailable" });
+    throw new SupportError("دریافت پیوست از تلگرام ممکن نشد.", { status: 502, code: "attachment_unavailable", adminMessage: "The attachment could not be downloaded from Telegram." });
   }
 
   let upstream;
   try {
     upstream = await http.get(url, { responseType: "stream", timeout: 15_000, maxContentLength: MAX_ATTACHMENT_BYTES, validateStatus: (status) => status === 200 });
   } catch {
-    throw new SupportError("دریافت پیوست از تلگرام ممکن نشد.", { status: 502, code: "attachment_unavailable" });
+    throw new SupportError("دریافت پیوست از تلگرام ممکن نشد.", { status: 502, code: "attachment_unavailable", adminMessage: "The attachment could not be downloaded from Telegram." });
   }
 
   res.status(200);

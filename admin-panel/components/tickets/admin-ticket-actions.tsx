@@ -1,11 +1,11 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,121 +19,219 @@ import {
 import { useAdminSession } from "@/components/session-provider";
 import { useOperationId } from "@/components/users/use-operation-id";
 import { adminMutate } from "@/lib/adminApi.client";
-import { STATUS_LABELS, ticketErrorMessage, type TicketStatus } from "@/lib/tickets";
+import {
+  MAX_MESSAGE_LENGTH,
+  NEXT_STATUSES,
+  STATUS_LABELS,
+  TICKET_STATUSES,
+  isDefinitiveFailure,
+  ticketErrorMessage,
+  type TicketStatus,
+} from "@/lib/tickets";
 
-const MAX_LENGTH = 3500;
+const DRAFT_PREFIX = "swift:ticket-draft:";
 
-// Mirrors services/admin ADMIN_TRANSITIONS in services/support/tickets.js.
-const NEXT_STATUSES: Record<TicketStatus, TicketStatus[]> = {
-  open: ["pending", "resolved", "closed"],
-  pending: ["open", "resolved", "closed"],
-  resolved: ["open", "closed"],
-  closed: ["open"],
-};
+function readDraft(ticketId: string): string {
+  try { return window.sessionStorage.getItem(DRAFT_PREFIX + ticketId) ?? ""; } catch { return ""; }
+}
+function writeDraft(ticketId: string, value: string) {
+  try {
+    if (value) window.sessionStorage.setItem(DRAFT_PREFIX + ticketId, value);
+    else window.sessionStorage.removeItem(DRAFT_PREFIX + ticketId);
+  } catch { /* storage unavailable: the draft is simply not remembered */ }
+}
 
-export function AdminTicketActions({ ticketId, status }: { ticketId: string; status: TicketStatus }) {
+/**
+ * Status dropdown. The saved status is the only truth: the control shows what
+ * the server last confirmed, success is announced only after the server
+ * accepted the change, and a failure leaves the value untouched. Closing is
+ * final, so it asks for confirmation first.
+ */
+export function TicketStatusControl({
+  ticketId,
+  status,
+  onChanged,
+}: {
+  ticketId: string;
+  status: TicketStatus;
+  onChanged: (status: TicketStatus) => void;
+}) {
   const { csrfToken } = useAdminSession();
-  const router = useRouter();
-  const reply = useOperationId();
   const change = useOperationId();
+  const [changing, setChanging] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
+  const reachable = new Set<TicketStatus>([status, ...NEXT_STATUSES[status]]);
+
+  async function apply(next: TicketStatus) {
+    setChanging(true);
+    try {
+      const result = await adminMutate<{ status: TicketStatus; changed: boolean | null }>(`/tickets/${ticketId}/status`, "POST", csrfToken, { operationId: change.operationId, status: next });
+      change.rotate();
+      onChanged(result.status);
+      if (result.changed === false) toast.info(`The ticket was already ${STATUS_LABELS[result.status].toLowerCase()}.`);
+      else toast.success(result.status === "closed" ? "Ticket closed." : `Ticket status set to “${STATUS_LABELS[result.status]}”.`);
+    } catch (error) {
+      // A definitive rejection will never succeed with the same key; an unknown outcome (network) keeps it so a retry cannot double-apply.
+      if (isDefinitiveFailure(error)) change.rotate();
+      toast.error(ticketErrorMessage(error, "The status could not be changed."));
+    } finally {
+      setChanging(false);
+      setConfirmClose(false);
+    }
+  }
+
+  return (
+    <>
+      <Select
+        value={status}
+        disabled={changing || status === "closed"}
+        onValueChange={(value) => {
+          const next = value as TicketStatus;
+          if (next === status) return;
+          if (next === "closed") setConfirmClose(true);
+          else void apply(next);
+        }}
+      >
+        <SelectTrigger className="h-8 w-[10.5rem] text-xs" aria-label="Ticket status">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {TICKET_STATUSES.map((value) => (
+            <SelectItem key={value} value={value} disabled={!reachable.has(value)}>{STATUS_LABELS[value]}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      <AlertDialog open={confirmClose} onOpenChange={(open) => { if (!open && !changing) setConfirmClose(false); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Close ticket {ticketId}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Nobody can send messages to a closed ticket and it cannot be reopened. The full history stays available here, and the customer is notified and can open a new ticket if they still need help.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={changing}>Cancel</AlertDialogCancel>
+            <AlertDialogAction disabled={changing} onClick={(event) => { event.preventDefault(); void apply("closed"); }}>
+              {changing ? "Closing…" : "Close ticket"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+/**
+ * Message composer. Enter sends, Shift+Enter inserts a newline (and Enter is
+ * left alone while an IME composition is active). The text stays in the box
+ * until the server accepts it, so a failed send never loses a reply, and the
+ * same operationId is reused for retries after an unknown outcome so a reply
+ * can never be delivered twice. An unsent draft survives a page refresh.
+ */
+export function TicketComposer({
+  ticketId,
+  disabled,
+  onSent,
+  onRejected,
+}: {
+  ticketId: string;
+  disabled: boolean;
+  onSent: (result: { status: TicketStatus | null }) => void;
+  onRejected: () => void;
+}) {
+  const { csrfToken } = useAdminSession();
+  const reply = useOperationId();
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pendingStatus, setPendingStatus] = useState<TicketStatus | null>(null);
-  const [changing, setChanging] = useState(false);
-  const closed = status === "closed";
+  const area = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    setText(readDraft(ticketId));
+    setError(null);
+  }, [ticketId]);
+
+  // Grow with the content up to a cap, then scroll.
+  useLayoutEffect(() => {
+    const element = area.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${Math.min(element.scrollHeight, 160)}px`;
+  }, [text]);
+
+  function update(value: string) {
+    setText(value);
+    writeDraft(ticketId, value);
+  }
 
   async function send() {
     const body = text.trim();
-    if (!body || sending) return;
+    if (!body || sending || disabled) return;
     setSending(true);
     setError(null);
     try {
-      const result = await adminMutate<{ delivered: boolean | null; replayed?: boolean }>(`/tickets/${ticketId}/reply`, "POST", csrfToken, { operationId: reply.operationId, text: body });
-      if (result.delivered === false) toast.warning("پاسخ ذخیره شد اما ارسال به تلگرام مشتری ناموفق بود. مشتری آن را در پنل وب می‌بیند.");
-      else toast.success(result.replayed ? "این پاسخ قبلاً ارسال شده بود؛ دوباره ارسال نشد." : "پاسخ ارسال شد.");
+      const result = await adminMutate<{ status: TicketStatus | null; delivered: boolean | null; replayed?: boolean }>(
+        `/tickets/${ticketId}/reply`,
+        "POST",
+        csrfToken,
+        { operationId: reply.operationId, text: body }
+      );
       reply.rotate();
-      setText("");
-      window.dispatchEvent(new Event("swift:ticket-sync"));
-      router.refresh();
+      update("");
+      if (result.delivered === false) {
+        toast.warning("Reply saved, but the Telegram notification could not be sent. The customer will see it when they open the ticket.");
+      }
+      onSent({ status: result.status });
     } catch (sendError) {
-      // The same operationId is kept, so a retry cannot deliver the reply twice.
-      setError(ticketErrorMessage(sendError));
+      if (isDefinitiveFailure(sendError)) {
+        reply.rotate();
+        onRejected();
+      }
+      setError(ticketErrorMessage(sendError, "The reply could not be sent."));
     } finally {
       setSending(false);
     }
   }
 
-  async function applyStatus(next: TicketStatus) {
-    setChanging(true);
-    try {
-      await adminMutate(`/tickets/${ticketId}/status`, "POST", csrfToken, { operationId: change.operationId, status: next });
-      toast.success(`وضعیت تیکت: ${STATUS_LABELS[next]}`);
-      change.rotate();
-      router.refresh();
-    } catch (changeError) {
-      toast.error(ticketErrorMessage(changeError));
-    } finally {
-      setChanging(false);
-      setPendingStatus(null);
-    }
-  }
-
   return (
-    <div className="space-y-4" dir="rtl" lang="fa">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm text-muted-foreground">تغییر وضعیت:</span>
-        {NEXT_STATUSES[status].map((next) => (
-          <Button
-            key={next}
-            size="sm"
-            variant={next === "closed" ? "destructive" : "outline"}
-            disabled={changing}
-            onClick={() => (next === "closed" ? setPendingStatus(next) : void applyStatus(next))}
-          >
-            {STATUS_LABELS[next]}
-          </Button>
-        ))}
-      </div>
-
-      {closed ? (
-        <p className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
-          این تیکت بسته است. برای پاسخ، ابتدا آن را دوباره باز کنید.
-        </p>
-      ) : (
-        <form
-          className="space-y-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void send();
+    <form
+      className="space-y-1.5"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void send();
+      }}
+    >
+      <div className="flex items-end gap-2">
+        <label htmlFor="ticket-reply" className="sr-only">Reply to customer</label>
+        <Textarea
+          ref={area}
+          id="ticket-reply"
+          rows={1}
+          maxLength={MAX_MESSAGE_LENGTH}
+          value={text}
+          disabled={disabled}
+          onChange={(event) => update(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              void send();
+            }
           }}
-        >
-          <label htmlFor="ticket-reply" className="text-sm font-medium">پاسخ به مشتری</label>
-          <Textarea id="ticket-reply" rows={5} maxLength={MAX_LENGTH} value={text} onChange={(event) => setText(event.target.value)} dir="auto" placeholder="پاسخ شما از طریق ربات تلگرام برای مشتری ارسال می‌شود." />
-          <div className="flex items-center justify-between">
-            <span className={`text-xs ${text.length > MAX_LENGTH - 200 ? "text-warning" : "text-muted-foreground"}`}>
-              {text.length.toLocaleString("fa-IR")} / {MAX_LENGTH.toLocaleString("fa-IR")}
-            </span>
-            <Button type="submit" disabled={sending || !text.trim()}>{sending ? "در حال ارسال…" : "ارسال پاسخ"}</Button>
-          </div>
-          {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
-        </form>
-      )}
-
-      <AlertDialog open={pendingStatus !== null} onOpenChange={(open) => { if (!open && !changing) setPendingStatus(null); }}>
-        <AlertDialogContent dir="rtl">
-          <AlertDialogHeader>
-            <AlertDialogTitle>بستن تیکت {ticketId}؟</AlertDialogTitle>
-            <AlertDialogDescription>پس از بستن، هیچ‌کدام از طرفین نمی‌توانند پیام جدیدی ارسال کنند تا تیکت دوباره باز شود. مشتری از بسته شدن مطلع می‌شود.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={changing}>انصراف</AlertDialogCancel>
-            <AlertDialogAction disabled={changing} onClick={(event) => { event.preventDefault(); if (pendingStatus) void applyStatus(pendingStatus); }}>
-              {changing ? "در حال بستن…" : "بستن تیکت"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
+          dir="auto"
+          placeholder={disabled ? "This ticket is closed." : "Write a reply… (Enter to send, Shift+Enter for a new line)"}
+          className="max-h-40 min-h-[2.5rem] resize-none"
+        />
+        <Button type="submit" disabled={disabled || sending || !text.trim()}>{sending ? "Sending…" : "Send"}</Button>
+      </div>
+      <div className="flex items-center justify-between gap-2 px-0.5 text-xs">
+        <span className="text-destructive" role="alert">{error}</span>
+        {text.length > MAX_MESSAGE_LENGTH - 500 ? (
+          <span className={text.length > MAX_MESSAGE_LENGTH - 100 ? "text-warning" : "text-muted-foreground"}>
+            {text.length.toLocaleString("en-US")} / {MAX_MESSAGE_LENGTH.toLocaleString("en-US")}
+          </span>
+        ) : null}
+      </div>
+    </form>
   );
 }

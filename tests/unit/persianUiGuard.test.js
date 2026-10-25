@@ -91,9 +91,12 @@ describe("Persian-only UI (static guard)", () => {
   });
 
   test("support/contact copy is Persian in messages/", () => {
+    // The wording lives in messages/supportCopy.js; supportContact.js only decides what to show.
+    const copy = readFileSync(join(root, "messages/supportCopy.js"), "utf8");
+    assert.match(copy, /ارتباط مستقیم با پشتیبانی/);
+    assert.match(copy, /قوانین و شرایط استفاده/);
     const support = readFileSync(join(root, "messages/supportContact.js"), "utf8");
-    assert.match(support, /گفتگو با پشتیبانی/);
-    assert.match(support, /قوانین و مقررات/);
+    assert.match(support, /SUPPORT_COPY/);
     // The support handle must come from the environment, never be hardcoded:
     // strip comments, then require that the ONLY string feeding the contact
     // lookup is the env read.

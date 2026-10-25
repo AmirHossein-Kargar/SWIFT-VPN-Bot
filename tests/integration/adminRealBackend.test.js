@@ -164,12 +164,17 @@ describe("live ticket sync on real MongoDB (web <-> Telegram)", () => {
     for (const bad of ["x", "{$gt:''}", { $ne: null }, ["a"], "../x"]) assert.deepEqual(texts(await poll(id, { afterId: bad })), ["سلام، سرویس وصل نمی‌شود"]);
   });
 
-  skip("a very long ticket keeps the NEWEST 500 messages on a full load", async () => {
+  skip("a very long ticket loads the NEWEST page first (admin 40 by default, customer 500) and says older messages exist", async () => {
     const id = await open();
     await SupportTicketMessage.insertMany(Array.from({ length: 520 }, (_, i) => ({ ticketId: id, author: "customer", text: `n${i}`, dedupeKey: `bulk:${id}:${i}` })));
-    const full = await tickets.getAdminTicket({ ticketId: id, markRead: false });
-    assert.equal(full.messages.length, 500);
-    assert.equal(full.messages.at(-1).text, "n519");
+    const admin = await tickets.getAdminTicket({ ticketId: id, markRead: false });
+    assert.equal(admin.messages.length, tickets.ADMIN_PAGE_SIZE);
+    assert.equal(admin.messages.at(-1).text, "n519");
+    assert.equal(admin.hasOlder, true);
+    const customer = await tickets.getCustomerTicket({ userId: 900001, ticketId: id, markRead: false });
+    assert.equal(customer.messages.length, 500);
+    assert.equal(customer.messages.at(-1).text, "n519");
+    assert.equal(customer.hasOlder, true);
   });
 });
 

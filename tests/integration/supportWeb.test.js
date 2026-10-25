@@ -129,21 +129,19 @@ describe("customer ticket API", () => {
     assert.equal(deps.Ticket.docs.length, 0);
   });
 
-  test("creates a ticket, forwards it to the admin group, and replays the same operationId without duplicating", async () => {
+  test("creates a ticket for the inbox (nothing is posted to the admin group) and replays the same operationId without duplicating", async () => {
     const session = await customerLogin("1001");
     const created = await createTicket(session, 1);
     assert.equal(created.status, 201);
     assert.match(created.data.data.ticket.ticketId, /^T-/);
-    assert.equal(created.data.data.forwarded, true);
-    const groupPosts = bot.of("sendMessage").filter((c) => String(c.args[0]) === "-100777");
-    assert.equal(groupPosts.length, 1);
-    assert.ok(groupPosts[0].args[1].includes(created.data.data.ticket.ticketId));
+    assert.equal("forwarded" in created.data.data, false);
+    assert.equal(bot.of("sendMessage").filter((c) => String(c.args[0]) === "-100777").length, 0);
 
     const replay = await createTicket(session, 1);
     assert.equal(replay.status, 200);
     assert.equal(replay.data.data.replayed, true);
     assert.equal(deps.Ticket.docs.length, 1);
-    assert.equal(bot.of("sendMessage").filter((c) => String(c.args[0]) === "-100777").length, 1, "no second forward");
+    assert.equal(deps.Message.docs.length, 1);
   });
 
   test("validates input and rejects bad operation ids", async () => {
@@ -191,16 +189,31 @@ describe("customer ticket API", () => {
     assert.equal(closed.status, 409);
     assert.equal(closed.data.error, "ticket_closed");
     assert.equal((await call("POST", `/api/support/tickets/${id}/status`, { ...session, body: { status: "resolved" } })).status, 400, "customers cannot pick arbitrary statuses");
-    assert.equal((await call("POST", `/api/support/tickets/${id}/status`, { ...session, body: { status: "open" } })).status, 200, "reopen");
+    const again = await call("POST", `/api/support/tickets/${id}/status`, { ...session, body: { status: "closed" } });
+    assert.equal(again.status, 200, "closing twice is idempotent");
+    const reopen = await call("POST", `/api/support/tickets/${id}/status`, { ...session, body: { status: "open" } });
+    assert.equal(reopen.status, 409, "a closed ticket cannot be reopened");
+    assert.equal(reopen.data.error, "reopen_not_allowed");
+    assert.equal(deps.Ticket.docs[0].status, "closed");
+    const stale = await call("POST", `/api/support/tickets/${id}/messages`, { ...session, body: { operationId: OP(7), text: "after the refused reopen" } });
+    assert.equal(stale.status, 409);
+    assert.equal(deps.Message.docs.length, 2, "still only the two accepted messages");
   });
 
-  test("Telegram being down does not lose the ticket: it is saved and the API says forwarding failed", async () => {
+  test("Telegram being down does not affect ticket creation: it is saved in the inbox", async () => {
     setBotInstance(makeFakeBot({ failOn: ["sendMessage"] }));
     const session = await customerLogin("1001");
     const created = await createTicket(session, 1);
     assert.equal(created.status, 201);
-    assert.equal(created.data.data.forwarded, false);
-    assert.equal(deps.Message.docs[0].delivery, "failed");
+    assert.equal(deps.Message.docs.length, 1);
+  });
+
+  test("customers cannot reach admin ticket endpoints, history or attachments with their session", async () => {
+    const session = await customerLogin("1001");
+    const id = (await createTicket(session, 1)).data.data.ticket.ticketId;
+    for (const path of ["/api/admin/tickets", `/api/admin/tickets/${id}`, `/api/admin/tickets/${id}/messages?before=${"a".repeat(24)}`, `/api/admin/tickets/${id}/updates`]) {
+      assert.equal((await call("GET", path, session)).status, 401, path);
+    }
   });
 
   test("responses are never cacheable and errors do not leak internals", async () => {
@@ -236,6 +249,46 @@ describe("admin ticket API", () => {
     assert.equal(detail.ticket.userTelegramId, "1001");
     assert.equal((await call("GET", "/api/admin/tickets?unread=1", admin)).data.data.total, 1, "opened ticket is no longer unread");
     assert.equal((await call("GET", "/api/admin/tickets/T-ZZZZZZ", admin)).status, 404);
+  });
+
+  test("admin read errors are English over HTTP (mutation errors are covered through the audited service layer)", async () => {
+    const id = (await createTicket(await customerLogin("1001"), 1)).data.data.ticket.ticketId;
+    const admin = await adminLogin();
+    const arabicScript = new RegExp(`[${String.fromCharCode(0x600)}-${String.fromCharCode(0x6ff)}]`);
+    const results = [
+      [await call("GET", `/api/admin/tickets/${id}/messages?before=oops`, admin), 400, "invalid_cursor"],
+      [await call("GET", `/api/admin/tickets/${id}/messages`, admin), 400, "invalid_cursor"],
+      [await call("GET", "/api/admin/tickets/T-ZZZZZZ/messages?before=" + "a".repeat(24), admin), 404, "ticket_not_found"],
+      [await call("GET", "/api/admin/tickets/T-ZZZZZZ", admin), 404, "ticket_not_found"],
+      [await call("GET", "/api/admin/tickets?status=resolved", admin), 400, "invalid_status"],
+    ];
+    for (const [response, status, code] of results) {
+      assert.equal(response.status, status, code);
+      assert.equal(response.data.error, code);
+      assert.doesNotMatch(response.data.message, arabicScript, `${code}: ${response.data.message}`);
+    }
+  });
+
+  test("history pages load newest first, then older, with stable ids and no overlap", async () => {
+    const customer = await customerLogin("1001");
+    const first1 = await createTicket(customer, 1);
+    const id = first1.data.data.ticket.ticketId;
+    for (let i = 2; i <= 12; i += 1) {
+      await call("POST", `/api/support/tickets/${id}/messages`, { ...customer, body: { operationId: OP(100 + i), text: `message ${i}` } });
+    }
+    const admin = await adminLogin();
+    const first = (await call("GET", `/api/admin/tickets/${id}?limit=5`, admin)).data.data;
+    assert.equal(first.messages.length, 5);
+    assert.equal(first.hasOlder, true);
+    assert.equal(first.messages.at(-1).text, "message 12");
+    const second = (await call("GET", `/api/admin/tickets/${id}/messages?before=${first.oldestCursor}&limit=5`, admin)).data.data;
+    const third = (await call("GET", `/api/admin/tickets/${id}/messages?before=${second.oldestCursor}&limit=5`, admin)).data.data;
+    assert.equal(second.hasOlder, true);
+    assert.equal(third.hasOlder, false);
+    const all = [...third.messages, ...second.messages, ...first.messages];
+    assert.equal(all.length, 12);
+    assert.equal(new Set(all.map((m) => m.id)).size, 12);
+    assert.ok(all.every((m) => m.author === "customer" && m.delivery === null && m.adminId === null));
   });
 
   test("reply and status mutations require CSRF and a valid operationId", async () => {

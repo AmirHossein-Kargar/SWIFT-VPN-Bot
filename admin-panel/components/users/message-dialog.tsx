@@ -14,8 +14,6 @@ import { describeError } from "@/lib/errors";
 import type { AdminUser } from "@/lib/types";
 
 const MAX_LENGTH = 3500;
-// Mirrors the header services/admin/userMessaging.js prepends (Persian, as all customer messages are).
-const HEADER = "🔔 پیام از پشتیبانی";
 
 export function MessageDialog({ user, open, onOpenChange }: { user: AdminUser; open: boolean; onOpenChange: (open: boolean) => void }) {
   const { csrfToken } = useAdminSession();
@@ -65,7 +63,7 @@ export function MessageDialog({ user, open, onOpenChange }: { user: AdminUser; o
           <div className="space-y-2">
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Preview</p>
             <div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-md border border-border bg-muted/40 p-3 text-sm" dir="auto">
-              <p className="font-semibold" dir="rtl">{HEADER}</p>
+              <p className="text-xs font-medium text-muted-foreground">The customer sees this under a “Message from Support” header (sent in Persian).</p>
               <p className="mt-2">{trimmed}</p>
             </div>
             <p className="text-xs text-muted-foreground">Formatting is sent as plain text. A support-contact button is attached when one is configured.</p>

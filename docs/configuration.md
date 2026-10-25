@@ -56,6 +56,8 @@ malformed.
 | `USER_SPEND_HOOK` / `USER_SPEND_SWEEPER` | on | `off` disables the post-completion counter recompute / the background sweeper that repairs the counters; see [Persisted user spend](user-spend.md) |
 | `ADMIN_PENDING_DELETE_MIN_HOURS` | `72` (minimum `24`) | Minimum age before the admin panel may delete a still-pending or expired top-up record; see [Deleting payment records](admin.md#deleting-payment-records-admin-panel) |
 | `SUPPORT_CONTACT` | empty | Support contact shown to users (`@username` or numeric ID). If empty, the direct-support buttons are hidden |
+| `SUPPORT_TERMS_URL` | empty | https URL of the terms page, shown as a button before a support ticket is created. Ignored unless https |
+| `SUPPORT_GROUP_ALERTS` | off | `1` posts one content-free "new ticket" alert (id + panel link) in `GROUP_ID`; support conversations are never copied to the group; see [support](support.md) |
 | `BOT_USERNAME` | from Telegram `getMe()` | Bot username (no `@`) for storefront checkout deep links |
 | `MOCK_TESTS_ENABLED` | `false` | Must be exactly `true` to let admins run the isolated [mock-test harness](admin.md#mock-tests) |
 

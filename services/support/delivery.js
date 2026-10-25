@@ -1,24 +1,26 @@
 /**
- * Telegram side of the support workflow: copies customer messages into the
- * admin group (with the ticket id) and delivers admin replies to customers.
+ * Telegram side of the support workflow: tells customers about admin replies
+ * and closures. The admin panel's ticket inbox is the only place conversations
+ * are read and answered, so no message body, attachment or customer identity is
+ * ever copied into the admin group. The group can optionally receive one
+ * content-free "new ticket" alert (SUPPORT_GROUP_ALERTS=1).
  *
  * Persistence has already happened by the time these run, so a Telegram
  * failure never loses a message: the row is marked `failed` and stays visible
  * in the panel. Errors are logged by type/status only — never message text,
  * file ids or user data.
  */
-import escapeHtml from "../../utils/escapeHtml.js";
-import { recordGroupMessage, recordDelivery } from "./tickets.js";
+import { recordDelivery } from "./tickets.js";
+import {
+  SUPPORT_COPY,
+  customerStatusLabel,
+  groupNewTicketAlert,
+  ticketClosedNotice,
+} from "../../messages/supportCopy.js";
 
-const STATUS_LABELS = Object.freeze({
-  open: "🟢 باز",
-  pending: "🟡 در انتظار پاسخ مشتری",
-  resolved: "🔵 حل‌شده",
-  closed: "⚫️ بسته",
-});
-
+/** Persian status label for customer-facing surfaces. */
 export function statusLabel(status) {
-  return STATUS_LABELS[status] || status;
+  return customerStatusLabel(status);
 }
 
 function logFailure(event, error) {
@@ -32,82 +34,53 @@ function logFailure(event, error) {
   }));
 }
 
-function customerLabel(from) {
-  const name = from?.first_name ? escapeHtml(String(from.first_name).slice(0, 40)) : "نامشخص";
-  const username = from?.username ? `@${escapeHtml(from.username)}` : "ندارد";
-  return { name, username };
+const HOME_ROW = [{ text: SUPPORT_COPY.backToMenu, callback_data: "back_to_home" }];
+
+/** Buttons under a notification: jump straight into the ticket, or start a new one when it is closed. */
+export function customerTicketKeyboard(ticketId, { closed = false } = {}) {
+  const row = closed
+    ? [{ text: SUPPORT_COPY.newTicket, callback_data: "sup_new" }, { text: SUPPORT_COPY.myTickets, callback_data: "sup_list" }]
+    : [{ text: SUPPORT_COPY.viewTicket, callback_data: `sup_open:${ticketId}` }];
+  return { inline_keyboard: [row, HOME_ROW] };
 }
 
-/** Header placed at the top of every copy in the admin group; the ticket id is what admins reply against. */
-export function buildGroupHeader({ ticket, from, userTelegramId }) {
-  const { name, username } = customerLabel(from);
-  return (
-    `🎫 <b>تیکت ${escapeHtml(ticket.ticketId)}</b> — ${statusLabel(ticket.status)}\n` +
-    `📌 ${escapeHtml(ticket.subject)}\n` +
-    `👤 ${name} | ${username} | <code>${escapeHtml(userTelegramId)}</code>\n` +
-    `↩️ برای پاسخ، روی همین پیام «Reply» بزنید.`
-  );
+function panelBaseUrl() {
+  const raw = String(process.env.WEBHOOK_BASE_URL || "").trim().replace(/\/+$/, "");
+  return /^https:\/\//i.test(raw) ? raw : null;
+}
+
+export function groupAlertsEnabled() {
+  return ["1", "true"].includes(String(process.env.SUPPORT_GROUP_ALERTS || "").trim().toLowerCase());
 }
 
 /**
- * Posts a customer message into the admin group. Returns true when Telegram
- * accepted every part; the group message ids are stored for reply routing.
+ * Optional, content-free heads-up in the admin group that a NEW ticket exists.
+ * It carries the ticket id and a panel link only: no subject, text, name,
+ * username or Telegram id. Off by default; failures never affect the ticket.
  */
-export async function forwardToAdminGroup({ bot, groupId = process.env.GROUP_ID, ticket, message, from, userTelegramId }) {
-  if (!groupId || !bot) {
-    await recordDelivery({ dedupeKey: message.dedupeKey, delivery: "failed" }).catch(() => {});
-    return false;
-  }
-  const header = buildGroupHeader({ ticket, from, userTelegramId });
-  const body = message.text ? `\n\n${escapeHtml(message.text)}` : "";
+export async function alertNewTicket({ bot, ticketId, groupId = process.env.GROUP_ID }) {
+  if (!bot || !groupId || !groupAlertsEnabled()) return false;
+  const base = panelBaseUrl();
   try {
-    const sent = [];
-    if (message.attachment) {
-      const send = message.attachment.kind === "photo" ? bot.sendPhoto.bind(bot) : bot.sendVideo.bind(bot);
-      sent.push(await send(groupId, message.attachment.fileId, { caption: header, parse_mode: "HTML" }));
-      if (message.text) {
-        sent.push(await bot.sendMessage(groupId, `💬 ${escapeHtml(message.text)}`, {
-          parse_mode: "HTML",
-          reply_to_message_id: sent[0].message_id,
-        }));
-      }
-    } else {
-      sent.push(await bot.sendMessage(groupId, `${header}${body}`, { parse_mode: "HTML" }));
-    }
-    for (const item of sent) {
-      await recordGroupMessage({ dedupeKey: message.dedupeKey, groupMessageId: item?.message_id });
-    }
+    await bot.sendMessage(groupId, groupNewTicketAlert(ticketId), base
+      ? { reply_markup: { inline_keyboard: [[{ text: SUPPORT_COPY.groupOpenPanel, url: `${base}/panel/tickets?t=${ticketId}` }]] } }
+      : undefined);
     return true;
   } catch (error) {
-    logFailure("group_forward_failed", error);
-    await recordDelivery({ dedupeKey: message.dedupeKey, delivery: "failed" }).catch(() => {});
+    logFailure("group_alert_failed", error);
     return false;
   }
 }
 
-export function customerTicketKeyboard(ticketId, { closed = false } = {}) {
-  const row = closed
-    ? [{ text: "🔓 بازگشایی تیکت", callback_data: `sup_reopen:${ticketId}` }]
-    : [
-        { text: "💬 ادامه گفتگو", callback_data: `sup_open:${ticketId}` },
-        { text: "🔒 بستن تیکت", callback_data: `sup_close:${ticketId}` },
-      ];
-  return { inline_keyboard: [row, [{ text: "🏠 بازگشت به منوی اصلی", callback_data: "back_to_home" }]] };
-}
-
-/** Sends an admin reply to the ticket owner. Returns true only when Telegram accepted it. */
+/**
+ * Tells the ticket owner that support replied. The reply itself is read inside
+ * the ticket, so the notification carries no message text. Returns true only
+ * when Telegram accepted the notification.
+ */
 export async function deliverToCustomer({ bot, customerId, ticket, message }) {
   if (!bot) return false;
-  const header = `🎫 <b>پاسخ پشتیبانی — تیکت ${escapeHtml(ticket.ticketId)}</b>`;
-  const reply_markup = customerTicketKeyboard(ticket.ticketId);
   try {
-    if (message.attachment) {
-      const send = message.attachment.kind === "photo" ? bot.sendPhoto.bind(bot) : bot.sendVideo.bind(bot);
-      const caption = `${header}${message.text ? `\n\n${escapeHtml(message.text).slice(0, 800)}` : ""}`;
-      await send(customerId, message.attachment.fileId, { caption, parse_mode: "HTML", reply_markup });
-    } else {
-      await bot.sendMessage(customerId, `${header}\n\n${escapeHtml(message.text)}`, { parse_mode: "HTML", reply_markup });
-    }
+    await bot.sendMessage(customerId, SUPPORT_COPY.adminReply, { reply_markup: customerTicketKeyboard(ticket.ticketId) });
     await recordDelivery({ dedupeKey: message.dedupeKey, delivery: "sent" });
     return true;
   } catch (error) {
@@ -117,14 +90,11 @@ export async function deliverToCustomer({ bot, customerId, ticket, message }) {
   }
 }
 
-/** Best-effort notice to the customer when support changes the ticket status. */
+/** Best-effort notice to the customer when support closes their ticket. Other status changes are internal. */
 export async function notifyStatusChange({ bot, customerId, ticket }) {
-  if (!bot) return false;
+  if (!bot || ticket.status !== "closed") return false;
   try {
-    await bot.sendMessage(customerId, `🎫 وضعیت تیکت <b>${escapeHtml(ticket.ticketId)}</b> تغییر کرد: ${statusLabel(ticket.status)}`, {
-      parse_mode: "HTML",
-      reply_markup: customerTicketKeyboard(ticket.ticketId, { closed: ticket.status === "closed" }),
-    });
+    await bot.sendMessage(customerId, ticketClosedNotice(ticket.ticketId), { reply_markup: customerTicketKeyboard(ticket.ticketId, { closed: true }) });
     return true;
   } catch (error) {
     logFailure("status_notice_failed", error);

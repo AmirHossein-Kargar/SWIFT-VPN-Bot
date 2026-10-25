@@ -1,33 +1,27 @@
 /**
  * Orchestration shared by every entry point (Telegram bot, customer web area,
- * admin panel): persist first, then deliver. A redelivered event is detected
- * by its dedupeKey and never forwarded twice.
+ * admin panel): persist first, then notify. A redelivered event is detected by
+ * its dedupeKey and never notified twice.
+ *
+ * Conversations are not forwarded anywhere: admins read and answer them in the
+ * panel's ticket inbox (see delivery.js for the only Telegram side effects).
  */
-import escapeHtml from "../../utils/escapeHtml.js";
 import {
   createTicket,
   addCustomerMessage,
   addAdminReply,
   changeStatus,
 } from "./tickets.js";
-import { forwardToAdminGroup, deliverToCustomer, notifyStatusChange, statusLabel } from "./delivery.js";
+import { alertNewTicket, deliverToCustomer, notifyStatusChange } from "./delivery.js";
 
-export async function customerOpenTicket({ bot, from, userId, subject, text, attachment, dedupeKey, channel }, deps) {
+export async function customerOpenTicket({ bot, userId, subject, text, attachment, dedupeKey, channel }, deps) {
   const result = await createTicket({ userId, subject, text, attachment, dedupeKey, channel }, deps);
-  if (result.duplicate) return { ...result, forwarded: null };
-  const forwarded = await forwardToAdminGroup({
-    bot, ticket: result.ticket, message: result.message, from, userTelegramId: String(userId),
-  });
-  return { ...result, forwarded };
+  if (result.created) await alertNewTicket({ bot, ticketId: result.ticket.ticketId });
+  return result;
 }
 
-export async function customerReply({ bot, from, userId, ticketId, text, attachment, dedupeKey }, deps) {
-  const result = await addCustomerMessage({ ticketId, userId, text, attachment, dedupeKey }, deps);
-  if (result.duplicate) return { ...result, forwarded: null };
-  const forwarded = await forwardToAdminGroup({
-    bot, ticket: result.ticket, message: result.message, from, userTelegramId: String(userId),
-  });
-  return { ...result, forwarded };
+export async function customerReply({ userId, ticketId, text, attachment, dedupeKey }, deps) {
+  return addCustomerMessage({ ticketId, userId, text, attachment, dedupeKey }, deps);
 }
 
 export async function adminReply({ bot, adminId, ticketId, text, attachment, dedupeKey }, deps) {
@@ -39,21 +33,13 @@ export async function adminReply({ bot, adminId, ticketId, text, attachment, ded
   return { ...result, delivered };
 }
 
-export async function adminSetStatus({ bot, ticketId, status }, deps) {
-  const result = await changeStatus({ ticketId, status, actor: { role: "admin" } }, deps);
+export async function adminSetStatus({ bot, ticketId, status, adminId }, deps) {
+  const result = await changeStatus({ ticketId, status, actor: { role: "admin", id: adminId } }, deps);
   if (result.changed) await notifyStatusChange({ bot, customerId: result.customerId, ticket: result.ticket });
   return result;
 }
 
-/** Customer close/reopen. Support is told in the admin group so a closed ticket never lingers unnoticed. */
-export async function customerSetStatus({ bot, userId, ticketId, status, groupId = process.env.GROUP_ID }, deps) {
-  const result = await changeStatus({ ticketId, status, actor: { role: "customer", id: userId } }, deps);
-  if (result.changed && bot && groupId) {
-    try {
-      await bot.sendMessage(groupId, `🎫 تیکت <b>${escapeHtml(ticketId)}</b> توسط مشتری تغییر وضعیت یافت: ${statusLabel(result.ticket.status)}`, { parse_mode: "HTML" });
-    } catch (error) {
-      console.error(JSON.stringify({ ts: new Date().toISOString(), service: "support", level: "error", event: "group_notice_failed", errorType: error?.name || "Error" }));
-    }
-  }
-  return result;
+/** Customer-initiated close. Reopening is deliberately not offered: a closed ticket is final. */
+export async function customerSetStatus({ userId, ticketId, status }, deps) {
+  return changeStatus({ ticketId, status, actor: { role: "customer", id: userId } }, deps);
 }

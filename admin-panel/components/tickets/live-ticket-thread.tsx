@@ -1,146 +1,263 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ArrowDown, ArrowLeft, Lock } from "lucide-react";
 
-import { TicketThread } from "@/components/tickets/ticket-thread";
-import type { TicketMessage, TicketStatus } from "@/lib/tickets";
-import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useAdminSession } from "@/components/session-provider";
+import { ConnectionStatus, useVisiblePolling } from "@/components/tickets/live-refresh";
+import { MessageList, TicketStatusBadge } from "@/components/tickets/ticket-thread";
+import { TicketComposer, TicketStatusControl } from "@/components/tickets/admin-ticket-actions";
+import { adminGet } from "@/lib/adminApi.client";
+import { BASE_PATH } from "@/lib/basePath";
+import { AdminApiError } from "@/lib/types";
+import {
+  formatTicketDateTime,
+  ticketErrorMessage,
+  type TicketDetail,
+  type TicketHistoryPage,
+  type TicketMessage,
+  type TicketStatus,
+  type TicketSummary,
+  type TicketUpdates,
+} from "@/lib/tickets";
 
-/** Dispatched by the reply / status forms so the thread refreshes immediately instead of waiting for the next tick. */
-export const TICKET_SYNC_EVENT = "swift:ticket-sync";
+const POLL_MS = 3_000;
+const PAGE = 40;
+/** Distance from the bottom (px) within which the view counts as "following" the conversation. */
+const FOLLOW_THRESHOLD = 80;
 
-const POLL_MS = 4_000;
-const MAX_BACKOFF_MS = 30_000;
-
-interface UpdatesResponse {
-  ticket: { status: TicketStatus; messageCount: number; lastMessageAt: string };
-  messages: TicketMessage[];
-  cursor: string | null;
-  hasMore: boolean;
-}
-
-type Connection = "live" | "reconnecting" | "paused";
-
-/** Merge by id (de-duplicates repeated or overlapping polls) and keep server insertion order. */
-export function mergeMessages(current: TicketMessage[], incoming: TicketMessage[]): TicketMessage[] {
+/** Merge by id: overlapping polls, a sent reply echoed by the next poll, or a double-loaded page never render twice. */
+export function mergeById(current: TicketMessage[], incoming: TicketMessage[], position: "append" | "prepend" = "append"): TicketMessage[] {
   if (!incoming.length) return current;
   const known = new Set(current.map((message) => message.id));
-  const fresh = incoming.filter((message) => !known.has(message.id));
-  return fresh.length ? [...current, ...fresh] : current;
+  const fresh = incoming.filter((message, index) => !known.has(message.id) && incoming.findIndex((other) => other.id === message.id) === index);
+  if (!fresh.length) return current;
+  return position === "append" ? [...current, ...fresh] : [...fresh, ...current];
 }
 
+type Phase = "loading" | "ready" | "missing" | "failed";
+
 /**
- * Conversation that keeps itself current. Transport is authenticated polling:
- * the app runs as a single Express process behind a proxy, where long-lived
- * connections are not guaranteed to survive, while a plain GET works everywhere
- * and reuses the existing session + CSRF-free read path. Messages typically
- * appear within one poll interval (about 4s) while the tab is visible; hidden
- * tabs pause and catch up the moment they become visible or the network returns.
+ * One ticket as a chat: history on top (newest page first, older pages on
+ * demand), live updates appended by polling, and the composer at the bottom.
+ * The server's stored messages are the only source of truth; connection loss
+ * just delays updates, and every reconnect resumes from the last cursor.
  */
 export function LiveTicketThread({
   ticketId,
-  endpoint,
-  attachmentBase,
-  viewer,
-  initialMessages,
-  initialCursor,
-  initialStatus,
-  initialMessageCount,
+  onBack,
+  onTicketChange,
 }: {
   ticketId: string;
-  endpoint: string;
-  attachmentBase: string;
-  viewer: "customer" | "admin";
-  initialMessages: TicketMessage[];
-  initialCursor: string | null;
-  initialStatus: TicketStatus;
-  initialMessageCount: number;
+  onBack: () => void;
+  onTicketChange: (ticket: TicketSummary) => void;
 }) {
-  const router = useRouter();
-  const [messages, setMessages] = useState(initialMessages);
-  const [connection, setConnection] = useState<Connection>("live");
-  const cursor = useRef<string | null>(initialCursor);
-  const known = useRef({ status: initialStatus, count: initialMessageCount });
-  const failures = useRef(0);
-  const inFlight = useRef(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const stopped = useRef(false);
+  const { actorTelegramId } = useAdminSession();
+  const [phase, setPhase] = useState<Phase>("loading");
+  const [failure, setFailure] = useState<string | null>(null);
+  const [ticket, setTicket] = useState<TicketSummary | null>(null);
+  const [messages, setMessages] = useState<TicketMessage[]>([]);
+  const [hasOlder, setHasOlder] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderError, setOlderError] = useState<string | null>(null);
+  const [unseen, setUnseen] = useState(0);
 
-  // The server component re-renders after our own sends and status changes: fold its snapshot in (by id), never replace.
-  useEffect(() => {
-    setMessages((current) => mergeMessages(current, initialMessages));
-    if (initialCursor && (!cursor.current || initialCursor > cursor.current)) cursor.current = initialCursor;
-    known.current = { status: initialStatus, count: Math.max(known.current.count, initialMessageCount) };
-  }, [initialMessages, initialCursor, initialStatus, initialMessageCount]);
+  const scroller = useRef<HTMLDivElement>(null);
+  const newest = useRef<string | null>(null);
+  const oldest = useRef<string | null>(null);
+  const following = useRef(true);
+  const restore = useRef<{ height: number } | null>(null);
+  const ready = useRef(false);
+  const onTicketChangeRef = useRef(onTicketChange);
+  useEffect(() => { onTicketChangeRef.current = onTicketChange; });
 
-  const schedule = useCallback((delay: number) => {
-    if (stopped.current) return;
-    if (timer.current) clearTimeout(timer.current);
-    // eslint-disable-next-line @typescript-eslint/no-use-before-define
-    timer.current = setTimeout(() => void poll(), delay);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const scrollToBottom = useCallback(() => {
+    const element = scroller.current;
+    if (element) element.scrollTop = element.scrollHeight;
+    following.current = true;
+    setUnseen(0);
+  }, []);
 
-  const poll = useCallback(async () => {
-    if (stopped.current || inFlight.current) return;
-    if (document.visibilityState === "hidden") { setConnection("paused"); return; } // resumed by visibilitychange
-    inFlight.current = true;
+  const signOut = useCallback(() => {
+    window.location.assign(`${BASE_PATH}/sign-in`);
+  }, []);
+
+  const applyTicket = useCallback((next: TicketSummary) => {
+    setTicket(next);
+    onTicketChangeRef.current(next);
+  }, []);
+
+  const load = useCallback(async () => {
+    setPhase("loading");
+    setFailure(null);
+    ready.current = false;
     try {
-      const params = new URLSearchParams({ markRead: "1" });
-      if (cursor.current) params.set("after", cursor.current);
-      const response = await fetch(`${endpoint}?${params}`, { headers: { accept: "application/json" }, cache: "no-store" });
-      if (response.status === 401) { router.refresh(); return; } // session expired: let the server render the sign-in state
-      const body = await response.json().catch(() => null);
-      if (!response.ok || !body?.ok) throw new Error("poll failed");
-      const data = body.data as UpdatesResponse;
-
-      failures.current = 0;
-      setConnection("live");
-      if (data.messages.length) setMessages((current) => mergeMessages(current, data.messages));
-      if (data.cursor) cursor.current = data.cursor;
-
-      const changed = data.ticket.status !== known.current.status || data.ticket.messageCount !== known.current.count;
-      known.current = { status: data.ticket.status, count: data.ticket.messageCount };
-      // Status badge, action buttons and the closed/reopen controls are server-rendered: refresh them only when something actually changed.
-      if (changed) router.refresh();
-      schedule(data.hasMore ? 200 : POLL_MS);
-    } catch {
-      failures.current += 1;
-      setConnection("reconnecting");
-      schedule(Math.min(MAX_BACKOFF_MS, POLL_MS * 2 ** Math.min(failures.current, 4)));
-    } finally {
-      inFlight.current = false;
+      const detail = await adminGet<TicketDetail>(`/tickets/${encodeURIComponent(ticketId)}`, { limit: PAGE });
+      newest.current = detail.cursor ?? null;
+      oldest.current = detail.oldestCursor ?? null;
+      following.current = true;
+      setMessages(detail.messages);
+      setHasOlder(Boolean(detail.hasOlder));
+      applyTicket(detail.ticket);
+      setPhase("ready");
+      ready.current = true;
+    } catch (error) {
+      if (error instanceof AdminApiError && error.status === 401) return signOut();
+      if (error instanceof AdminApiError && error.status === 404) return setPhase("missing");
+      setFailure(ticketErrorMessage(error, "The ticket could not be loaded."));
+      setPhase("failed");
     }
-  }, [endpoint, router, schedule]);
+  }, [ticketId, applyTicket, signOut]);
 
-  useEffect(() => {
-    stopped.current = false;
-    void poll();
-    const wake = () => { if (document.visibilityState === "visible") { failures.current = 0; void poll(); } };
-    const sync = () => { failures.current = 0; void poll(); };
-    document.addEventListener("visibilitychange", wake);
-    window.addEventListener("online", wake);
-    window.addEventListener(TICKET_SYNC_EVENT, sync);
-    return () => {
-      stopped.current = true;
-      if (timer.current) clearTimeout(timer.current);
-      document.removeEventListener("visibilitychange", wake);
-      window.removeEventListener("online", wake);
-      window.removeEventListener(TICKET_SYNC_EVENT, sync);
-    };
-  }, [poll]);
+  useEffect(() => { void load(); }, [load]);
+
+  const { connection, trigger } = useVisiblePolling(
+    async () => {
+      if (!ready.current) return { again: false };
+      try {
+        const data = await adminGet<TicketUpdates>(`/tickets/${encodeURIComponent(ticketId)}/updates`, {
+          after: newest.current ?? undefined,
+          markRead: "1",
+        });
+        if (data.cursor) newest.current = data.cursor;
+        if (data.messages.length) {
+          if (!following.current) setUnseen((count) => count + data.messages.filter((message) => message.author === "customer").length);
+          setMessages((current) => mergeById(current, data.messages));
+        }
+        applyTicket(data.ticket);
+        return { again: data.hasMore };
+      } catch (error) {
+        if (error instanceof AdminApiError && error.status === 401) { signOut(); return { stop: true }; }
+        if (error instanceof AdminApiError && error.status === 404) { setPhase("missing"); return { stop: true }; }
+        throw error;
+      }
+    },
+    { intervalMs: POLL_MS, resetKey: ticketId }
+  );
+
+  // Keep the view where the admin is: follow new messages only when already at the bottom; after loading earlier ones, hold position.
+  useLayoutEffect(() => {
+    const element = scroller.current;
+    if (!element) return;
+    if (restore.current) {
+      element.scrollTop += element.scrollHeight - restore.current.height;
+      restore.current = null;
+      return;
+    }
+    if (following.current) element.scrollTop = element.scrollHeight;
+  }, [messages, phase]);
+
+  function onScroll() {
+    const element = scroller.current;
+    if (!element) return;
+    const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < FOLLOW_THRESHOLD;
+    following.current = atBottom;
+    if (atBottom) setUnseen(0);
+  }
+
+  async function loadOlder() {
+    if (loadingOlder || !oldest.current) return;
+    setLoadingOlder(true);
+    setOlderError(null);
+    try {
+      const page = await adminGet<TicketHistoryPage>(`/tickets/${encodeURIComponent(ticketId)}/messages`, { before: oldest.current, limit: PAGE });
+      if (scroller.current) restore.current = { height: scroller.current.scrollHeight };
+      if (page.oldestCursor) oldest.current = page.oldestCursor;
+      setHasOlder(page.hasOlder);
+      setMessages((current) => mergeById(current, page.messages, "prepend"));
+    } catch (error) {
+      if (error instanceof AdminApiError && error.status === 401) return signOut();
+      setOlderError(ticketErrorMessage(error, "Earlier messages could not be loaded."));
+    } finally {
+      setLoadingOlder(false);
+    }
+  }
+
+  const closed = ticket?.status === "closed";
+
+  if (phase === "loading" || (phase === "ready" && !ticket)) {
+    return (
+      <div className="flex h-full flex-col gap-3 p-4" aria-busy="true" aria-label="Loading conversation">
+        <Skeleton className="h-8 w-1/2" />
+        <Skeleton className="h-16 w-2/3" />
+        <Skeleton className="ml-auto h-16 w-2/3" />
+        <Skeleton className="h-12 w-1/2" />
+      </div>
+    );
+  }
+  if (phase === "missing" || phase === "failed" || !ticket) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+        <p className="text-sm font-medium">{phase === "missing" ? "This ticket does not exist." : failure}</p>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={onBack}>Back to inbox</Button>
+          {phase === "failed" ? <Button size="sm" onClick={() => void load()}>Try again</Button> : null}
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-2" data-ticket-id={ticketId}>
-      <p
-        className={cn("flex items-center gap-1.5 text-xs", connection === "reconnecting" ? "text-warning" : "text-muted-foreground")}
-        role="status"
-        aria-live="polite"
-      >
-        <span aria-hidden className={cn("inline-block h-2 w-2 rounded-full", connection === "live" ? "bg-success" : connection === "reconnecting" ? "bg-warning" : "bg-muted-foreground")} />
-        {connection === "live" ? "به‌روزرسانی خودکار فعال است" : connection === "reconnecting" ? "ارتباط قطع شد؛ در حال تلاش مجدد…" : "به‌روزرسانی متوقف شد (تب پنهان است)"}
-      </p>
-      <TicketThread messages={messages} attachmentBase={attachmentBase} viewer={viewer} />
+    <div className="flex h-full min-h-0 flex-col" data-ticket-id={ticket.ticketId}>
+      <header className="space-y-2 border-b border-border p-3 sm:p-4">
+        <div className="flex items-start gap-2">
+          <Button variant="ghost" size="icon" className="-ml-2 shrink-0 md:hidden" onClick={onBack} aria-label="Back to inbox">
+            <ArrowLeft />
+          </Button>
+          <div className="min-w-0 flex-1">
+            <h2 className="truncate text-base font-semibold" dir="auto">{ticket.subject}</h2>
+            <p className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+              <span className="font-mono">{ticket.ticketId}</span>
+              <span>Customer <span className="font-mono">{ticket.userTelegramId}</span></span>
+              <span>{ticket.channel === "web" ? "Web" : "Telegram"}</span>
+              <span>Opened {formatTicketDateTime(ticket.createdAt)}</span>
+            </p>
+          </div>
+          <div className="flex shrink-0 flex-col items-end gap-1.5">
+            <TicketStatusControl ticketId={ticket.ticketId} status={ticket.status} onChanged={(status: TicketStatus) => { setTicket((current) => (current ? { ...current, status } : current)); trigger(); }} />
+            <ConnectionStatus connection={connection} />
+          </div>
+        </div>
+      </header>
+
+      <div className="relative min-h-0 flex-1">
+        <div ref={scroller} onScroll={onScroll} className="h-full overflow-y-auto px-3 py-4 sm:px-4" role="log" aria-label="Conversation" aria-live="polite" tabIndex={0}>
+          {hasOlder ? (
+            <div className="mb-4 flex flex-col items-center gap-1">
+              <Button variant="outline" size="sm" onClick={() => void loadOlder()} disabled={loadingOlder}>
+                {loadingOlder ? "Loading…" : "Load earlier messages"}
+              </Button>
+              {olderError ? <p className="text-xs text-destructive" role="alert">{olderError}</p> : null}
+            </div>
+          ) : null}
+          <MessageList messages={messages} actorId={actorTelegramId} />
+        </div>
+        {unseen > 0 ? (
+          <Button size="sm" className="absolute bottom-3 left-1/2 -translate-x-1/2 shadow-lg" onClick={scrollToBottom}>
+            <ArrowDown /> {unseen} new {unseen === 1 ? "message" : "messages"}
+          </Button>
+        ) : null}
+      </div>
+
+      <footer className="space-y-2 border-t border-border p-3 sm:p-4">
+        {closed ? (
+          <p className="flex items-start gap-2 rounded-md border border-border bg-muted p-3 text-sm text-muted-foreground">
+            <Lock className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+            <span>
+              This ticket was closed{ticket.closedAt ? ` on ${formatTicketDateTime(ticket.closedAt)}` : ""}
+              {ticket.closedBy === "customer" ? " by the customer" : ticket.closedBy === "admin" ? " by support" : ""}. It is read-only and cannot be reopened; the customer can open a new ticket if they still need help.
+            </span>
+          </p>
+        ) : null}
+        <TicketComposer
+          ticketId={ticket.ticketId}
+          disabled={closed}
+          onSent={() => { following.current = true; trigger(); }}
+          onRejected={() => trigger()}
+        />
+      </footer>
     </div>
   );
 }

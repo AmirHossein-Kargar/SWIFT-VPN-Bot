@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { customerMutate } from "@/lib/customerApi.client";
-import { ticketErrorMessage } from "@/lib/tickets";
+import { customerErrorMessage } from "@/lib/customerTickets";
 
 /**
  * Exchanges the one-time code from the bot's link for a session. The code
@@ -34,7 +34,7 @@ export function LoginHandler() {
         router.refresh();
       })
       .catch((error) => {
-        setMessage(ticketErrorMessage(error, "ورود انجام نشد."));
+        setMessage(customerErrorMessage(error, "ورود انجام نشد."));
         setState("failed");
       });
   }, [router]);

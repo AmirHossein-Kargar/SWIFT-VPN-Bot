@@ -1,4 +1,5 @@
 import connectDB from "./config/db.js";
+import { migrateLegacyTicketStatuses } from "./services/support/tickets.js";
 import TelegramBot from "node-telegram-bot-api";
 import trxScanner from "./services/trxWalletScanner.js";
 import { setBotInstance } from "./config/botInstance.js";
@@ -142,6 +143,17 @@ export default async function startBot() {
       failure.code = error.code;
     }
     throw failure;
+  }
+
+  // Rewrite tickets stored with the pre-simplification statuses. Idempotent and
+  // non-fatal: readers already treat the old values as their canonical equivalents.
+  try {
+    const migrated = await migrateLegacyTicketStatuses();
+    if (migrated.pending || migrated.resolved) {
+      console.log(`✔ Support tickets migrated (pending: ${migrated.pending}, resolved: ${migrated.resolved})`);
+    }
+  } catch (error) {
+    console.warn("⚠️  Support ticket status migration skipped:", error?.name || "DatabaseError");
   }
 
   // Create Telegram bot (polling mode)

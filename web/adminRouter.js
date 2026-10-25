@@ -34,8 +34,8 @@ import { listAdmins, addAdmin, removeAdmin } from "../services/admin/adminRegist
 import { getUserProfilePhoto } from "../services/admin/userPhoto.js";
 import { sendUserMessage } from "../services/admin/userMessaging.js";
 import { getSettingsOverview } from "../services/admin/settings.js";
-import { listSupportTickets, getSupportTicket, getSupportTicketUpdates, replyToSupportTicket, setSupportTicketStatus } from "../services/admin/tickets.js";
-import { getMessageAttachment } from "../services/support/tickets.js";
+import { listSupportTickets, getSupportTicket, getSupportTicketUpdates, getSupportTicketHistory, replyToSupportTicket, setSupportTicketStatus } from "../services/admin/tickets.js";
+import { getMessageAttachment, toAdminError } from "../services/support/tickets.js";
 import { streamAttachment } from "../services/support/attachments.js";
 import { default as botInstance } from "../config/botInstance.js";
 import { attachAdminSession, requireAdminSession, requireCsrfToken, requireSameOrigin, adminApiHeaders, rateLimitMiddleware, clientIp, sessionCookieOptions, clearSessionCookieOptions, LEGACY_SESSION_COOKIE_PATH, NEXT_PANEL_SESSION_COOKIE_PATH, RETIRED_PANEL_COOKIE_PATH, adminApiErrorHandler } from "./adminMiddleware.js";
@@ -735,8 +735,8 @@ router.get("/tickets", async (req, res, next) => {
 router.get("/tickets/attachments/:messageId", async (req, res, next) => {
   try {
     assertAdminUser(req.adminActorId);
-    const attachment = await getMessageAttachment({ messageId: req.params.messageId });
-    await streamAttachment({ bot: botInstance.bot, attachment, res });
+    const attachment = await getMessageAttachment({ messageId: req.params.messageId }).catch((error) => { throw toAdminError(error); });
+    await streamAttachment({ bot: botInstance.bot, attachment, res }).catch((error) => { throw toAdminError(error); });
   } catch (error) { next(error); }
 });
 
@@ -746,8 +746,14 @@ router.get("/tickets/:ticketId/updates", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+router.get("/tickets/:ticketId/messages", async (req, res, next) => {
+  try {
+    res.json({ ok: true, data: await getSupportTicketHistory({ actorId: req.adminActorId, ticketId: req.params.ticketId, beforeId: req.query.before, limit: req.query.limit }) });
+  } catch (error) { next(error); }
+});
+
 router.get("/tickets/:ticketId", async (req, res, next) => {
-  try { res.json({ ok: true, data: await getSupportTicket({ actorId: req.adminActorId, ticketId: req.params.ticketId }) }); }
+  try { res.json({ ok: true, data: await getSupportTicket({ actorId: req.adminActorId, ticketId: req.params.ticketId, limit: req.query.limit }) }); }
   catch (error) { next(error); }
 });
 
