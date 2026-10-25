@@ -39,7 +39,7 @@ function testServiceLabel(testService: UserDetail["testService"]) {
   return <Badge variant="outline">{testService.status ?? "Unknown"}</Badge>;
 }
 
-export function UserDetailSheet({ telegramId, open, onOpenChange }: { telegramId: string | null; open: boolean; onOpenChange: (open: boolean) => void }) {
+export function UserDetailSheet({ telegramId, open, onOpenChange, onCloseAutoFocus }: { telegramId: string | null; open: boolean; onOpenChange: (open: boolean) => void; onCloseAutoFocus?: (event: Event) => void }) {
   const router = useRouter();
   const [detail, setDetail] = useState<UserDetail | null>(null);
   const [loading, setLoading] = useState(false);
@@ -77,7 +77,7 @@ export function UserDetailSheet({ telegramId, open, onOpenChange }: { telegramId
   return (
     <>
       <Sheet open={open} onOpenChange={onOpenChange}>
-        <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
+        <SheetContent className="w-full overflow-y-auto sm:max-w-xl" onCloseAutoFocus={onCloseAutoFocus}>
           <SheetHeader>
             <div className="flex items-center gap-3">
               {telegramId ? <UserAvatar key={telegramId} telegramId={telegramId} label={user ? user.name ?? user.username ?? telegramId : telegramId} /> : null}

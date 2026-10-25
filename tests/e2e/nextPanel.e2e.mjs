@@ -973,6 +973,33 @@ for (const theme of ["light", "dark"]) {
   }
 }
 
+await step("tickets: the customer in the header opens that user's detail sheet (mouse and keyboard) without leaving the conversation", async () => {
+  const id = await openTicket(910020, "Profile link", "Who is this customer?");
+  const page = await newPage();
+  await go(page, `/tickets?t=${id}`);
+  await conversation(page).getByText("Who is this customer?").waitFor();
+  const customer = page.getByTestId("ticket-customer");
+  await customer.getByText("910020").waitFor();
+  assert.equal(await customer.evaluate((el) => el.tagName), "BUTTON", "the profile is a real button, so it is keyboard reachable");
+
+  const requested = page.waitForRequest((request) => new URL(request.url()).pathname.endsWith("/users/910020") && !request.url().endsWith("/photo"));
+  await customer.click();
+  await requested;
+  const sheet = page.getByRole("dialog");
+  await sheet.getByText("Telegram ID 910020").waitFor();
+  assert.ok(new URL(page.url()).searchParams.get("t") === id, "the open ticket stays selected");
+  await page.keyboard.press("Escape");
+  await sheet.waitFor({ state: "hidden" });
+  await conversation(page).getByText("Who is this customer?").waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("data-testid")), "ticket-customer", "focus returns to the profile button when the sheet closes");
+
+  await customer.focus();
+  await page.keyboard.press("Enter");
+  await page.getByRole("dialog").getByText("Telegram ID 910020").waitFor();
+  await page.keyboard.press("Escape");
+  await page.context().close();
+});
+
 // ── Layout matrix: viewports × themes ───────────────────────────────────────
 const VIEWPORTS = [320, 360, 375, 390, 430, 768, 1024, 1440];
 const SCREENS = [
