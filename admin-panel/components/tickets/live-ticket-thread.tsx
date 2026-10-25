@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAdminSession } from "@/components/session-provider";
 import { ConnectionStatus, useVisiblePolling } from "@/components/tickets/live-refresh";
+import { TicketCustomer } from "@/components/tickets/ticket-customer";
 import { MessageList, TicketStatusBadge } from "@/components/tickets/ticket-thread";
 import { TicketComposer, TicketStatusControl } from "@/components/tickets/admin-ticket-actions";
 import { adminGet } from "@/lib/adminApi.client";
@@ -210,7 +211,6 @@ export function LiveTicketThread({
             <h2 className="truncate text-base font-semibold" dir="auto">{ticket.subject}</h2>
             <p className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
               <span className="font-mono">{ticket.ticketId}</span>
-              <span>Customer <span className="font-mono">{ticket.userTelegramId}</span></span>
               <span>{ticket.channel === "web" ? "Web" : "Telegram"}</span>
               <span>Opened {formatTicketDateTime(ticket.createdAt)}</span>
             </p>
@@ -220,6 +220,7 @@ export function LiveTicketThread({
             <ConnectionStatus connection={connection} />
           </div>
         </div>
+        {ticket.userTelegramId ? <TicketCustomer key={ticket.userTelegramId} telegramId={ticket.userTelegramId} /> : null}
       </header>
 
       <div className="relative min-h-0 flex-1">

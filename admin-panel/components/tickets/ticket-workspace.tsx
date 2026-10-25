@@ -54,8 +54,8 @@ function readLocation(): { filters: InboxFilters; page: number; selectedId: stri
 }
 
 /**
- * Inbox + conversation, like a messaging app: the list of tickets on the left,
- * the selected conversation on the right (one at a time on a phone). All data
+ * Inbox + conversation, like a messaging app: the selected conversation on the left,
+ * the list of tickets on the right (one at a time on a phone). All data
  * is fetched client-side from the admin API with the signed-in session, and
  * both the list and the open conversation keep themselves current by polling.
  */
@@ -162,9 +162,20 @@ export function TicketWorkspace({ initial }: { initial: WorkspaceInitial }) {
 
   return (
     <div className="flex h-[calc(100dvh-3.5rem-3rem)] min-h-[30rem] overflow-hidden rounded-lg border border-border bg-card">
+      <section aria-label="Conversation" className={cn("min-h-0 min-w-0 flex-1 md:block", selectedId ? "block" : "hidden")}>
+        {selectedId ? (
+          <LiveTicketThread key={selectedId} ticketId={selectedId} onBack={() => select(null)} onTicketChange={onTicketChange} />
+        ) : (
+          <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-muted-foreground">
+            <MessageSquareText className="h-8 w-8" aria-hidden />
+            <p className="text-sm">Select a ticket to read and reply.</p>
+          </div>
+        )}
+      </section>
+
       <section
         aria-label="Ticket inbox"
-        className={cn("min-h-0 w-full flex-col border-border md:flex md:w-[22rem] md:shrink-0 md:border-r", selectedId ? "hidden" : "flex")}
+        className={cn("min-h-0 w-full flex-col border-border md:flex md:w-[22rem] md:shrink-0 md:border-l", selectedId ? "hidden" : "flex")}
       >
         <div className="space-y-3 border-b border-border p-3">
           <div className="flex items-center justify-between gap-2">
@@ -188,17 +199,6 @@ export function TicketWorkspace({ initial }: { initial: WorkspaceInitial }) {
           onPage={changePage}
           onRetry={() => trigger()}
         />
-      </section>
-
-      <section aria-label="Conversation" className={cn("min-h-0 min-w-0 flex-1 md:block", selectedId ? "block" : "hidden")}>
-        {selectedId ? (
-          <LiveTicketThread key={selectedId} ticketId={selectedId} onBack={() => select(null)} onTicketChange={onTicketChange} />
-        ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-muted-foreground">
-            <MessageSquareText className="h-8 w-8" aria-hidden />
-            <p className="text-sm">Select a ticket to read and reply.</p>
-          </div>
-        )}
       </section>
     </div>
   );
