@@ -13,10 +13,15 @@ const {
   getSupportContact,
   getSupportContactUrl,
   getSupportMessage,
+  getNewTicketMessage,
+  getUnsupportedMediaMessage,
+  getSupportTermsUrl,
+  getSupportTermsButton,
   getSupportDirectButton,
 } = await import("../../messages/supportContact.js");
+const { SUPPORT_COPY } = await import("../../messages/supportCopy.js");
 
-const ENV_KEYS = ["SUPPORT_CONTACT"];
+const ENV_KEYS = ["SUPPORT_CONTACT", "SUPPORT_TERMS_URL"];
 
 beforeEach(() => {
   for (const key of ENV_KEYS) delete process.env[key];
@@ -64,27 +69,41 @@ describe("getSupportContactUrl", () => {
 });
 
 describe("getSupportMessage", () => {
-  test("includes the direct-contact block only when configured", () => {
+  test("is the approved title and description; direct contact is a button, never inline text", () => {
     process.env.SUPPORT_CONTACT = "@swift_support";
     const withContact = getSupportMessage();
-    assert.match(withContact, /@swift_support/);
-    assert.match(withContact, /ارتباط به صورت مستقیم/);
+    assert.equal(withContact, `<b>${SUPPORT_COPY.title}</b>
 
+${SUPPORT_COPY.description}`);
+    assert.doesNotMatch(withContact, /@swift_support|t.me/);
     delete process.env.SUPPORT_CONTACT;
-    const withoutContact = getSupportMessage();
-    assert.doesNotMatch(withoutContact, /t\.me/);
-    assert.match(withoutContact, /پشتیبانی/);
-    assert.match(withoutContact, /قوانین و مقررات/);
+    assert.equal(getSupportMessage(), withContact, "the text does not depend on configuration");
   });
 
-  test("message is Persian end-to-end (no English UI fragments)", () => {
-    process.env.SUPPORT_CONTACT = "@swift_support";
-    const text = getSupportMessage();
-    // English UI wording must not leak into the user-facing message (the
-    // configured handle itself may legitimately contain latin characters).
-    assert.doesNotMatch(text, /before sending|allowed files|support rules|read the rules|please type/i);
-    assert.match(text, /پشتیبانی/);
-    assert.match(text, /فایل‌های مجاز/);
+  test("the new-ticket prompt carries the terms notice, the instruction and the supported file types", () => {
+    const text = getNewTicketMessage();
+    for (const line of [SUPPORT_COPY.termsNotice, SUPPORT_COPY.newTicketPrompt, SUPPORT_COPY.allowedFiles]) assert.ok(text.includes(line));
+    assert.doesNotMatch(text, /[A-Za-z]{4,}/, "Persian end-to-end (no English UI fragments)");
+  });
+
+  test("the unsupported-media notice lists the allowed types", () => {
+    assert.ok(getUnsupportedMediaMessage().includes(SUPPORT_COPY.allowedFiles));
+  });
+});
+
+describe("getSupportTermsUrl / button", () => {
+  test("only an https URL is used; nothing is invented when unset or malformed", () => {
+    delete process.env.SUPPORT_TERMS_URL;
+    assert.equal(getSupportTermsUrl(), null);
+    assert.deepEqual(getSupportTermsButton(), []);
+    for (const bad of ["http://example.test/terms", "ftp://x/y", "javascript:alert(1)", "terms", "   "]) {
+      process.env.SUPPORT_TERMS_URL = bad;
+      assert.equal(getSupportTermsUrl(), null, bad);
+    }
+    process.env.SUPPORT_TERMS_URL = "https://example.test/terms";
+    assert.equal(getSupportTermsUrl(), "https://example.test/terms");
+    assert.deepEqual(getSupportTermsButton(), [[{ text: SUPPORT_COPY.terms, url: "https://example.test/terms" }]]);
+    delete process.env.SUPPORT_TERMS_URL;
   });
 });
 
@@ -94,7 +113,8 @@ describe("getSupportDirectButton", () => {
     const rows = getSupportDirectButton();
     assert.equal(rows.length, 1);
     const button = rows[0][0];
-    assert.equal(button.text, "📩 گفتگو با پشتیبانی");
+    assert.equal(button.text, SUPPORT_COPY.directContact);
+    assert.equal(button.text, "ارتباط مستقیم با پشتیبانی");
     assert.equal(button.url, "https://t.me/swift_support");
   });
 

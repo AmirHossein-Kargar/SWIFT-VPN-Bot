@@ -99,11 +99,16 @@ describe("cursor-based updates", () => {
   test("a very long ticket keeps the NEWEST messages on a full load (the oldest are trimmed, not the latest)", async () => {
     const id = await openTicket();
     for (let i = 0; i < 520; i += 1) await customerSays(id, `n${i}`);
-    const full = await getAdminTicket({ ticketId: id });
-    assert.equal(full.messages.length, 500);
+    const full = await getAdminTicket({ ticketId: id, limit: 100 });
+    assert.equal(full.messages.length, 100);
     assert.equal(full.messages.at(-1).text, "n519");
+    assert.equal(full.hasOlder, true);
     const afterFull = await poll(id, { afterId: full.cursor });
     assert.deepEqual(afterFull.messages, []);
+    // The customer view still loads up to 500, newest first-kept.
+    const customer = await getCustomerTicket({ userId: ALICE, ticketId: id });
+    assert.equal(customer.messages.length, 500);
+    assert.equal(customer.messages.at(-1).text, "n519");
   });
 });
 
@@ -121,10 +126,10 @@ describe("web <-> Telegram synchronization", () => {
   test("status changes appear on the next poll for both sides", async () => {
     const id = await openTicket();
     assert.equal((await poll(id)).ticket.status, "open");
-    await workflow.adminSetStatus({ bot, ticketId: id, status: "resolved" });
-    assert.equal((await poll(id)).ticket.status, "resolved");
-    assert.equal((await getTicketUpdates({ audience: "customer", userId: ALICE, ticketId: id })).ticket.status, "resolved");
-    await workflow.customerSetStatus({ bot, userId: ALICE, ticketId: id, status: "closed" });
+    await workflow.adminSetStatus({ bot, ticketId: id, status: "pending_customer", adminId: "9" });
+    assert.equal((await poll(id)).ticket.status, "pending_customer");
+    assert.equal((await getTicketUpdates({ audience: "customer", userId: ALICE, ticketId: id })).ticket.status, "pending_customer");
+    await workflow.customerSetStatus({ userId: ALICE, ticketId: id, status: "closed" });
     assert.equal((await poll(id)).ticket.status, "closed");
   });
 

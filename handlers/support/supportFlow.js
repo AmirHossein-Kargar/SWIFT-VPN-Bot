@@ -8,9 +8,19 @@
  *   supportTicketId: string  ticket the next messages join (null = new ticket)
  *   supportMessageId: number the one message this flow edits
  *   supportAt: number        ms epoch of the last support interaction
+ *
+ * A closed ticket is final: it is shown read-only, and the only way forward is
+ * a new ticket. The server enforces that; the UI just does not offer the dead end.
+ * All wording comes from messages/supportCopy.js.
  */
 import { getSession, setSession } from "../../config/sessionStore.js";
-import { getSupportMessage, getSupportDirectButton } from "../../messages/supportContact.js";
+import {
+  getSupportMessage,
+  getNewTicketMessage,
+  getSupportDirectButton,
+  getSupportTermsButton,
+} from "../../messages/supportContact.js";
+import { SUPPORT_COPY } from "../../messages/supportCopy.js";
 import escapeHtml from "../../utils/escapeHtml.js";
 import {
   listCustomerTickets,
@@ -23,7 +33,9 @@ import { statusLabel } from "../../services/support/delivery.js";
 import { issueCustomerLoginCode } from "../../services/support/customerAuth.js";
 
 export const COMPOSE_TTL_MS = 30 * 60 * 1000;
-const HOME_ROW = [{ text: "🏠 بازگشت به منوی اصلی", callback_data: "back_to_home" }];
+const HOME_ROW = [{ text: SUPPORT_COPY.backToMenu, callback_data: "back_to_home" }];
+const BACK_TO_MENU_ROW = [{ text: SUPPORT_COPY.back, callback_data: "sup_menu" }];
+const RECENT_MESSAGES = 3;
 
 const locks = new Map();
 
@@ -63,9 +75,9 @@ function webBaseUrl() {
 
 export function menuKeyboard() {
   const rows = [
-    [{ text: "🎫 تیکت جدید", callback_data: "sup_new" }, { text: "📂 تیکت‌های من", callback_data: "sup_list" }],
+    [{ text: SUPPORT_COPY.newTicket, callback_data: "sup_new" }, { text: SUPPORT_COPY.myTickets, callback_data: "sup_list" }],
   ];
-  if (webBaseUrl()) rows.push([{ text: "🌐 مشاهده در پنل وب", callback_data: "sup_web" }]);
+  if (webBaseUrl()) rows.push([{ text: SUPPORT_COPY.webPanel, callback_data: "sup_web" }]);
   return { inline_keyboard: [...rows, ...getSupportDirectButton(), HOME_ROW] };
 }
 
@@ -96,7 +108,7 @@ async function leaveCompose(userId, extra = {}) {
 }
 
 /**
- * Entry point for the "🛠 پشتیبانی" button. Sends exactly one menu message: a
+ * Entry point for the support button. Sends exactly one menu message: a
  * previous support message (from an earlier tap) is removed first, so repeated
  * taps never stack up messages or sessions.
  */
@@ -121,38 +133,42 @@ export async function showSupportMenu(bot, chatId, userId, { messageId = null } 
 }
 
 function ticketLine(ticket) {
-  const unread = ticket.unread ? " 🔔" : "";
-  return `${ticket.ticketId} • ${statusLabel(ticket.status)}${unread}`;
+  const unread = ticket.unread ? " •" : "";
+  return `${ticket.ticketId} · ${statusLabel(ticket.status)}${unread}`;
 }
 
 async function showTicketList(bot, chatId, userId, messageId) {
   const tickets = await listCustomerTickets({ userId, limit: 8 });
   if (!tickets.length) {
-    return editOrSend(bot, chatId, messageId, "📂 هنوز تیکتی ثبت نکرده‌اید.", {
-      inline_keyboard: [[{ text: "🎫 تیکت جدید", callback_data: "sup_new" }], [{ text: "⬅️ بازگشت", callback_data: "sup_menu" }], HOME_ROW],
+    return editOrSend(bot, chatId, messageId, SUPPORT_COPY.noTickets, {
+      inline_keyboard: [[{ text: SUPPORT_COPY.newTicket, callback_data: "sup_new" }], BACK_TO_MENU_ROW, HOME_ROW],
     });
   }
   const rows = tickets.map((ticket) => [{ text: `${ticketLine(ticket)} — ${ticket.subject.slice(0, 24)}`, callback_data: `sup_open:${ticket.ticketId}` }]);
-  rows.push([{ text: "⬅️ بازگشت", callback_data: "sup_menu" }], HOME_ROW);
-  return editOrSend(bot, chatId, messageId, "📂 <b>تیکت‌های من</b>\nیکی را برای مشاهده یا ادامه گفتگو انتخاب کنید.", { inline_keyboard: rows });
+  rows.push(BACK_TO_MENU_ROW, HOME_ROW);
+  return editOrSend(bot, chatId, messageId, `<b>${SUPPORT_COPY.myTickets}</b>`, { inline_keyboard: rows });
+}
+
+function describeMessage(message) {
+  const who = message.author === "admin" ? "پشتیبانی" : "شما";
+  const body = message.text
+    ? escapeHtml(message.text.slice(0, 300))
+    : message.attachment ? (message.attachment.kind === "photo" ? "تصویر" : "ویدیو") : "";
+  return `<b>${who}:</b> ${body}`;
 }
 
 async function showTicket(bot, chatId, userId, messageId, ticketId) {
-  const { ticket, messages } = await getCustomerTicket({ userId, ticketId });
-  const recent = messages.slice(-3).map((message) => {
-    const who = message.author === "admin" ? "🛠 پشتیبانی" : "👤 شما";
-    const body = message.text ? escapeHtml(message.text.slice(0, 300)) : message.attachment ? (message.attachment.kind === "photo" ? "🖼 عکس" : "🎥 فیلم") : "";
-    return `${who}: ${body}`;
-  });
+  const { ticket, messages } = await getCustomerTicket({ userId, ticketId, limit: RECENT_MESSAGES });
   const closed = ticket.status === "closed";
+  const conversation = messages.length ? messages.map(describeMessage).join("\n\n") : SUPPORT_COPY.noMessages;
   const text =
-    `🎫 <b>تیکت ${escapeHtml(ticket.ticketId)}</b> — ${statusLabel(ticket.status)}\n📌 ${escapeHtml(ticket.subject)}\n\n` +
-    `${recent.join("\n\n")}\n\n` +
-    (closed ? "این تیکت بسته است." : "✍️ برای ادامه گفتگو، پیام خود را همین‌جا ارسال کنید.");
+    `<b>${escapeHtml(ticket.ticketId)}</b> · ${statusLabel(ticket.status)}\n${escapeHtml(ticket.subject)}\n\n` +
+    `${conversation}\n\n` +
+    (closed ? SUPPORT_COPY.closed : SUPPORT_COPY.messagePrompt);
   const rows = closed
-    ? [[{ text: "🔓 بازگشایی تیکت", callback_data: `sup_reopen:${ticketId}` }]]
-    : [[{ text: "🔒 بستن تیکت", callback_data: `sup_close:${ticketId}` }]];
-  rows.push([{ text: "⬅️ تیکت‌های من", callback_data: "sup_list" }], HOME_ROW);
+    ? [[{ text: SUPPORT_COPY.newTicket, callback_data: "sup_new" }]]
+    : [[{ text: SUPPORT_COPY.closeTicket, callback_data: `sup_closeq:${ticketId}` }]];
+  rows.push([{ text: SUPPORT_COPY.myTickets, callback_data: "sup_list" }], HOME_ROW);
   const liveId = await editOrSend(bot, chatId, messageId, text, { inline_keyboard: rows });
   if (closed) await leaveCompose(userId, { supportMessageId: liveId });
   else await saveSession(userId, { support: true, supportTicketId: ticketId, supportAt: Date.now(), supportMessageId: liveId });
@@ -163,30 +179,45 @@ async function startNewTicket(bot, chatId, userId, messageId) {
     bot,
     chatId,
     messageId,
-    "✍️ پیام خود را ارسال کنید (متن، عکس یا فیلم).\nبا اولین پیام، یک تیکت جدید ساخته می‌شود.",
-    { inline_keyboard: [[{ text: "❌ انصراف", callback_data: "sup_menu" }], HOME_ROW] },
+    getNewTicketMessage(),
+    { inline_keyboard: [...getSupportTermsButton(), [{ text: SUPPORT_COPY.cancel, callback_data: "sup_menu" }], HOME_ROW] },
   );
   await saveSession(userId, { support: true, supportTicketId: null, supportAt: Date.now(), supportMessageId: liveId });
 }
 
+async function askToClose(bot, chatId, userId, messageId, ticketId) {
+  // Closing is final, so it takes a second tap. Nothing is changed here.
+  await getCustomerTicket({ userId, ticketId, markRead: false, limit: 1 });
+  return editOrSend(bot, chatId, messageId, SUPPORT_COPY.confirmCloseQuestion, {
+    inline_keyboard: [
+      [{ text: SUPPORT_COPY.confirmClose, callback_data: `sup_close:${ticketId}` }],
+      [{ text: SUPPORT_COPY.cancel, callback_data: `sup_open:${ticketId}` }],
+    ],
+  });
+}
+
 async function sendWebLink(bot, chatId, userId) {
   const base = webBaseUrl();
-  if (!base) return "پنل وب در دسترس نیست.";
+  if (!base) return SUPPORT_COPY.webUnavailable;
   const { code } = await issueCustomerLoginCode(userId);
   const url = `${base}/panel/support/login#code=${code}`;
-  await bot.sendMessage(chatId, "🌐 لینک ورود یک‌بارمصرف به پنل پشتیبانی (۵ دقیقه معتبر است):", {
-    reply_markup: { inline_keyboard: [[{ text: "ورود به پنل پشتیبانی", url }]] },
+  await bot.sendMessage(chatId, SUPPORT_COPY.webLoginLink, {
+    reply_markup: { inline_keyboard: [[{ text: SUPPORT_COPY.webLoginButton, url }]] },
     protect_content: true,
   });
   return null;
 }
 
-const CALLBACK_PATTERN = /^sup_(menu|new|list|web|open|close|reopen)(?::(T-[A-HJ-NP-Z2-9]{6}))?$/;
+const CALLBACK_PATTERN = /^sup_(menu|new|list|web|open|closeq|close|reopen)(?::(T-[A-HJ-NP-Z2-9]{6}))?$/;
 
 /**
  * Handles every `sup_*` callback. Returns true when the callback belonged to
  * the support flow. The query is always answered exactly once, so Telegram's
  * button spinner stops on success, failure and stale taps alike.
+ *
+ * `sup_reopen` no longer exists as a feature. It stays in the pattern only so
+ * that a button from an old message gets a clear answer instead of silence:
+ * the server refuses it and the customer is pointed at "new ticket".
  */
 export async function handleSupportCallback(bot, query) {
   const match = CALLBACK_PATTERN.exec(String(query?.data || ""));
@@ -198,12 +229,15 @@ export async function handleSupportCallback(bot, query) {
   let answer = {};
 
   if (!userId || !chatId || !messageId || query.message?.chat?.type !== "private") {
-    await bot.answerCallbackQuery(query.id, { text: "⚠️ این دکمه دیگر معتبر نیست.", show_alert: true }).catch(() => {});
+    await bot.answerCallbackQuery(query.id, { text: SUPPORT_COPY.buttonExpired, show_alert: true }).catch(() => {});
     return true;
   }
 
   try {
     await withUserLock(userId, async () => {
+      const needTicket = () => {
+        if (!ticketId) throw new SupportError("تیکت یافت نشد.", { status: 404, code: "ticket_not_found" });
+      };
       switch (action) {
         case "menu":
           await leaveCompose(userId);
@@ -223,34 +257,39 @@ export async function handleSupportCallback(bot, query) {
           break;
         }
         case "open":
-          if (!ticketId) throw new SupportError("تیکت یافت نشد.", { status: 404, code: "ticket_not_found" });
+          needTicket();
           await showTicket(bot, chatId, userId, messageId, ticketId);
           break;
-        case "close":
-        case "reopen": {
-          if (!ticketId) throw new SupportError("تیکت یافت نشد.", { status: 404, code: "ticket_not_found" });
-          await customerSetStatus({ bot, userId, ticketId, status: action === "close" ? "closed" : "open" });
-          if (action === "close") {
-            await leaveCompose(userId);
-            const liveId = await editOrSend(bot, chatId, messageId, `🔒 تیکت <b>${escapeHtml(ticketId)}</b> بسته شد.`, {
-              inline_keyboard: [[{ text: "🔓 بازگشایی تیکت", callback_data: `sup_reopen:${ticketId}` }], [{ text: "⬅️ تیکت‌های من", callback_data: "sup_list" }], HOME_ROW],
-            });
-            await saveSession(userId, { supportMessageId: liveId });
-          } else {
-            await showTicket(bot, chatId, userId, messageId, ticketId);
-          }
+        case "closeq":
+          needTicket();
+          await askToClose(bot, chatId, userId, messageId, ticketId);
+          break;
+        case "close": {
+          needTicket();
+          await customerSetStatus({ userId, ticketId, status: "closed" });
+          await leaveCompose(userId);
+          const liveId = await editOrSend(bot, chatId, messageId, SUPPORT_COPY.closedByYou, {
+            inline_keyboard: [[{ text: SUPPORT_COPY.newTicket, callback_data: "sup_new" }], [{ text: SUPPORT_COPY.myTickets, callback_data: "sup_list" }], HOME_ROW],
+          });
+          await saveSession(userId, { supportMessageId: liveId });
           break;
         }
+        case "reopen":
+          needTicket();
+          // Always refused by the service (a closed ticket is final); the error carries the customer-facing explanation.
+          await customerSetStatus({ userId, ticketId, status: "open" });
+          break;
         default:
           break;
       }
     });
   } catch (error) {
     if (error instanceof SupportError) {
-      answer = { text: `⚠️ ${error.safeMessage}`, show_alert: true };
+      answer = { text: error.safeMessage, show_alert: true };
+      if (error.code === "reopen_not_allowed" || error.code === "ticket_closed") await leaveCompose(userId).catch(() => {});
     } else {
       logSupportError("support_callback_failed", error);
-      answer = { text: "❌ خطایی رخ داد. لطفاً دوباره تلاش کنید.", show_alert: true };
+      answer = { text: SUPPORT_COPY.genericError, show_alert: true };
     }
   }
   await bot.answerCallbackQuery(query.id, answer).catch(() => {});

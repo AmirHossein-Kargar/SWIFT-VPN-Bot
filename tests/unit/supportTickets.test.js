@@ -43,9 +43,10 @@ describe("createTicket", () => {
   });
 
   test("rejects empty content, control characters and over-long text", async () => {
-    for (const text of ["", "   ", "bad\u0000text", "x".repeat(tickets.MAX_MESSAGE_LENGTH + 1)]) {
+    for (const text of ["", "   ", "bad\u0000text"]) {
       await assert.rejects(tickets.createTicket({ userId: "1", text, dedupeKey: "d" + text.length }, deps), { code: "invalid_message" });
     }
+    await assert.rejects(tickets.createTicket({ userId: "1", text: "x".repeat(tickets.MAX_MESSAGE_LENGTH + 1), dedupeKey: "long" }, deps), { code: "message_too_long" });
   });
 
   test("caps how many open tickets one user can hold; closed ones do not count", async () => {
@@ -113,7 +114,7 @@ describe("conversation and lifecycle", () => {
   test("admin reply marks the ticket pending and unread for the customer; reading clears it", async () => {
     const { ticket } = await open("1001");
     const reply = await tickets.addAdminReply({ ticketId: ticket.ticketId, adminId: "9", text: "سلام", dedupeKey: "a1" }, deps);
-    assert.equal(reply.ticket.status, "pending");
+    assert.equal(reply.ticket.status, "pending_customer");
     assert.equal(reply.customerId, "1001");
     const [listed] = await tickets.listCustomerTickets({ userId: "1001" }, deps);
     assert.equal(listed.unread, 1);
@@ -121,9 +122,10 @@ describe("conversation and lifecycle", () => {
     assert.equal((await tickets.listCustomerTickets({ userId: "1001" }, deps))[0].unread, 0);
   });
 
-  test("a customer reply reopens a pending or resolved ticket", async () => {
+  test("a customer reply moves a pending_customer ticket back to open", async () => {
     const { ticket } = await open("1001");
-    await tickets.changeStatus({ ticketId: ticket.ticketId, status: "resolved", actor: { role: "admin" } }, deps);
+    await tickets.addAdminReply({ ticketId: ticket.ticketId, adminId: "9", text: "لطفاً توضیح دهید", dedupeKey: "a1" }, deps);
+    assert.equal((await tickets.listAdminTickets({}, deps)).tickets[0].status, "pending_customer");
     const after = await tickets.addCustomerMessage({ ticketId: ticket.ticketId, userId: "1001", text: "هنوز مشکل دارم", dedupeKey: "c2" }, deps);
     assert.equal(after.ticket.status, "open");
   });
@@ -149,27 +151,28 @@ describe("conversation and lifecycle", () => {
     await assert.rejects(tickets.addAdminReply({ ticketId: ticket.ticketId, adminId: "9", text: "x", dedupeKey: "z2" }, deps), { code: "ticket_closed" });
   });
 
-  test("customers may close and reopen (within the window) but not set arbitrary statuses", async () => {
+  test("customers may only close; every other status, and any reopen, is refused", async () => {
     const { ticket } = await open("1001");
     const actor = { role: "customer", id: "1001" };
-    await assert.rejects(tickets.changeStatus({ ticketId: ticket.ticketId, status: "resolved", actor }, deps), { code: "invalid_transition" });
-    await assert.rejects(tickets.changeStatus({ ticketId: ticket.ticketId, status: "pending", actor }, deps), { code: "invalid_transition" });
-    await tickets.changeStatus({ ticketId: ticket.ticketId, status: "closed", actor }, deps);
-    const reopened = await tickets.changeStatus({ ticketId: ticket.ticketId, status: "open", actor }, deps);
-    assert.equal(reopened.ticket.status, "open");
-    await tickets.changeStatus({ ticketId: ticket.ticketId, status: "closed", actor }, deps);
-    deps.Ticket.docs[0].closedAt = new Date(Date.now() - tickets.CUSTOMER_REOPEN_WINDOW_MS - 1000);
-    await assert.rejects(tickets.changeStatus({ ticketId: ticket.ticketId, status: "open", actor }, deps), { code: "reopen_window_expired" });
+    await assert.rejects(tickets.changeStatus({ ticketId: ticket.ticketId, status: "pending_customer", actor }, deps), { code: "invalid_transition" });
+    await assert.rejects(tickets.changeStatus({ ticketId: ticket.ticketId, status: "resolved", actor }, deps), { code: "invalid_status" });
+    const closed = await tickets.changeStatus({ ticketId: ticket.ticketId, status: "closed", actor }, deps);
+    assert.equal(closed.ticket.status, "closed");
+    await assert.rejects(tickets.changeStatus({ ticketId: ticket.ticketId, status: "open", actor }, deps), { code: "reopen_not_allowed" });
+    assert.equal((await tickets.listCustomerTickets({ userId: "1001" }, deps))[0].status, "closed");
   });
 
-  test("admin transitions follow the table and unknown statuses are refused", async () => {
+  test("admin transitions follow the table and unknown or legacy statuses are refused", async () => {
     const { ticket } = await open("1001");
-    const admin = { role: "admin" };
-    await assert.rejects(tickets.changeStatus({ ticketId: ticket.ticketId, status: "bogus", actor: admin }, deps), { code: "invalid_status" });
+    const admin = { role: "admin", id: "9" };
+    for (const bad of ["bogus", "pending", "resolved"]) {
+      await assert.rejects(tickets.changeStatus({ ticketId: ticket.ticketId, status: bad, actor: admin }, deps), { code: "invalid_status" }, bad);
+    }
+    assert.equal((await tickets.changeStatus({ ticketId: ticket.ticketId, status: "pending_customer", actor: admin }, deps)).ticket.status, "pending_customer");
+    assert.equal((await tickets.changeStatus({ ticketId: ticket.ticketId, status: "open", actor: admin }, deps)).ticket.status, "open");
     await tickets.changeStatus({ ticketId: ticket.ticketId, status: "closed", actor: admin }, deps);
-    await assert.rejects(tickets.changeStatus({ ticketId: ticket.ticketId, status: "resolved", actor: admin }, deps), { code: "invalid_transition" });
-    const same = await tickets.changeStatus({ ticketId: ticket.ticketId, status: "closed", actor: admin }, deps);
-    assert.equal(same.changed, false, "repeating a transition is a no-op, not an error");
+    await assert.rejects(tickets.changeStatus({ ticketId: ticket.ticketId, status: "open", actor: admin }, deps), { code: "reopen_not_allowed" });
+    await assert.rejects(tickets.changeStatus({ ticketId: ticket.ticketId, status: "pending_customer", actor: admin }, deps), { code: "reopen_not_allowed" });
   });
 });
 
@@ -178,9 +181,9 @@ describe("admin listing", () => {
     const a = (await open("1001", { subject: "مشکل پرداخت" })).ticket;
     await open("2002", { subject: "اتصال قطع" });
     await open("2002", { subject: "راهنمای نصب" });
-    await tickets.changeStatus({ ticketId: a.ticketId, status: "resolved", actor: { role: "admin" } }, deps);
+    await tickets.changeStatus({ ticketId: a.ticketId, status: "pending_customer", actor: { role: "admin" } }, deps);
 
-    assert.equal((await tickets.listAdminTickets({ status: "resolved" }, deps)).total, 1);
+    assert.equal((await tickets.listAdminTickets({ status: "pending_customer" }, deps)).total, 1);
     assert.equal((await tickets.listAdminTickets({ query: a.ticketId.toLowerCase() }, deps)).total, 1);
     assert.equal((await tickets.listAdminTickets({ query: "2002" }, deps)).total, 2);
     assert.equal((await tickets.listAdminTickets({ query: "اتصال" }, deps)).total, 1);

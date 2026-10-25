@@ -6,7 +6,6 @@
  */
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import express from "express";
-import mongoose from "mongoose";
 import { default as botInstance } from "../config/botInstance.js";
 import {
   CUSTOMER_SESSION_COOKIE,
@@ -24,7 +23,6 @@ import {
 } from "../services/support/tickets.js";
 import { customerOpenTicket, customerReply, customerSetStatus } from "../services/support/workflow.js";
 import { streamAttachment } from "../services/support/attachments.js";
-import User from "../models/User.js";
 import {
   adminApiHeaders,
   requireSameOrigin,
@@ -128,18 +126,6 @@ router.use((req, res, next) => {
 });
 router.use(limited({ limit: 120, scope: "api" }));
 
-/**
- * Display name for the admin-group header. Purely cosmetic, so it is bounded
- * (a slow or disconnected database must never delay or fail ticket creation).
- */
-async function telegramProfile(userId) {
-  const profile = { id: Number(userId), first_name: "", username: "" };
-  if (mongoose.connection.readyState !== 1) return profile;
-  const lookup = User.findOne({ telegramId: String(userId) }).select("firstName username").lean().maxTimeMS(1000).catch(() => null);
-  const user = await Promise.race([lookup, new Promise((resolve) => { const timer = setTimeout(() => resolve(null), 1000); timer.unref?.(); })]);
-  return { ...profile, first_name: user?.firstName || "", username: user?.username || "" };
-}
-
 router.get("/tickets", async (req, res, next) => {
   try { res.json({ ok: true, data: { tickets: await listCustomerTickets({ userId: req.customerId, limit: req.query.limit }) } }); }
   catch (error) { next(error); }
@@ -150,14 +136,13 @@ router.post("/tickets", limited({ limit: 10, scope: "create" }), requireBody(), 
     const operationId = parseOperationId(req.body);
     const result = await customerOpenTicket({
       bot: botInstance.bot,
-      from: await telegramProfile(req.customerId),
       userId: req.customerId,
       subject: req.body.subject,
       text: req.body.text,
       dedupeKey: `web:${req.customerId}:${operationId}`,
       channel: "web",
     });
-    res.status(result.created ? 201 : 200).json({ ok: true, data: { ticket: result.ticket, replayed: result.duplicate, forwarded: result.forwarded } });
+    res.status(result.created ? 201 : 200).json({ ok: true, data: { ticket: result.ticket, replayed: result.duplicate } });
   } catch (error) { next(error); }
 });
 
@@ -176,22 +161,22 @@ router.post("/tickets/:ticketId/messages", limited({ limit: 30, scope: "reply" }
   try {
     const operationId = parseOperationId(req.body);
     const result = await customerReply({
-      bot: botInstance.bot,
-      from: await telegramProfile(req.customerId),
       userId: req.customerId,
       ticketId: req.params.ticketId,
       text: req.body.text,
       dedupeKey: `web:${req.customerId}:${operationId}`,
     });
-    res.json({ ok: true, data: { ticket: result.ticket, replayed: result.duplicate, forwarded: result.forwarded } });
+    res.json({ ok: true, data: { ticket: result.ticket, replayed: result.duplicate } });
   } catch (error) { next(error); }
 });
 
+// Customers may only close a ticket. "open" is still parsed so that a stale
+// client asking to reopen gets the explicit 409 reopen_not_allowed.
 router.post("/tickets/:ticketId/status", limited({ limit: 20, scope: "status" }), requireBody(), async (req, res, next) => {
   try {
     const status = req.body?.status;
     if (status !== "closed" && status !== "open") throw new SupportError("وضعیت معتبر نیست.", { status: 400, code: "invalid_status" });
-    const result = await customerSetStatus({ bot: botInstance.bot, userId: req.customerId, ticketId: req.params.ticketId, status });
+    const result = await customerSetStatus({ userId: req.customerId, ticketId: req.params.ticketId, status });
     res.json({ ok: true, data: { ticket: result.ticket } });
   } catch (error) { next(error); }
 });

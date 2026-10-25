@@ -4,10 +4,11 @@ import type { Metadata } from "next";
 
 import { customerApiGet } from "@/lib/customerApi.server";
 import { AdminApiError } from "@/lib/types";
-import { formatTicketDate, type TicketDetail } from "@/lib/tickets";
+import type { TicketDetail } from "@/lib/tickets";
+import { formatCustomerDate } from "@/lib/customerTickets";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { TicketStatusBadge } from "@/components/tickets/ticket-thread";
-import { LiveTicketThread } from "@/components/tickets/live-ticket-thread";
+import { CustomerStatusBadge } from "@/components/support/customer-thread";
+import { CustomerLiveThread } from "@/components/support/customer-live-thread";
 import { CustomerTicketActions } from "@/components/support/customer-ticket-actions";
 
 export const metadata: Metadata = { title: "گفتگوی تیکت" };
@@ -32,20 +33,19 @@ export default async function CustomerTicketPage({ params }: { params: Promise<{
         <CardHeader className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle className="text-base" dir="auto">{ticket.subject}</CardTitle>
-            <TicketStatusBadge status={ticket.status} />
+            <CustomerStatusBadge status={ticket.status} />
           </div>
           <p className="flex flex-wrap gap-x-4 text-xs text-muted-foreground">
             <span dir="ltr" className="font-mono">{ticket.ticketId}</span>
-            <span>ایجاد: {formatTicketDate(ticket.createdAt)}</span>
-            <span>آخرین بروزرسانی: {formatTicketDate(ticket.lastMessageAt)}</span>
+            <span>ایجاد: {formatCustomerDate(ticket.createdAt)}</span>
+            <span>آخرین بروزرسانی: {formatCustomerDate(ticket.lastMessageAt)}</span>
           </p>
         </CardHeader>
         <CardContent className="space-y-6">
-          <LiveTicketThread
+          <CustomerLiveThread
             ticketId={ticket.ticketId}
             endpoint={`/api/support/tickets/${encodeURIComponent(ticket.ticketId)}/updates`}
             attachmentBase="/api/support/attachments"
-            viewer="customer"
             initialMessages={messages}
             initialCursor={detail.cursor ?? null}
             initialStatus={ticket.status}

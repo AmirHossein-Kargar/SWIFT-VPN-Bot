@@ -4,7 +4,8 @@ import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { Button } from "@/components/ui/button";
+import Link from "next/link";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
   AlertDialog,
@@ -18,7 +19,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useCustomerSession } from "@/components/support/customer-session";
 import { customerMutate, newOperationId } from "@/lib/customerApi.client";
-import { ticketErrorMessage, type TicketStatus } from "@/lib/tickets";
+import type { TicketStatus } from "@/lib/tickets";
+import { CUSTOMER_COPY, customerErrorMessage } from "@/lib/customerTickets";
 
 const MAX_LENGTH = 3500;
 
@@ -46,20 +48,20 @@ export function CustomerTicketActions({ ticketId, status }: { ticketId: string; 
       window.dispatchEvent(new Event("swift:ticket-sync"));
       router.refresh();
     } catch (sendError) {
-      setError(ticketErrorMessage(sendError));
+      setError(customerErrorMessage(sendError));
     } finally {
       setSending(false);
     }
   }
 
-  async function setStatus(next: "closed" | "open") {
+  async function closeTicket() {
     setChanging(true);
     try {
-      await customerMutate(`/tickets/${ticketId}/status`, csrfToken, { status: next });
-      toast.success(next === "closed" ? "تیکت بسته شد." : "تیکت دوباره باز شد.");
+      await customerMutate(`/tickets/${ticketId}/status`, csrfToken, { status: "closed" });
+      toast.success("تیکت بسته شد.");
       router.refresh();
     } catch (changeError) {
-      toast.error(ticketErrorMessage(changeError));
+      toast.error(customerErrorMessage(changeError));
     } finally {
       setChanging(false);
       setConfirmClose(false);
@@ -70,8 +72,8 @@ export function CustomerTicketActions({ ticketId, status }: { ticketId: string; 
     <div className="space-y-4">
       {closed ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/40 p-3">
-          <p className="text-sm text-muted-foreground">این تیکت بسته شده است.</p>
-          <Button size="sm" variant="outline" disabled={changing} onClick={() => void setStatus("open")}>{changing ? "…" : "بازگشایی تیکت"}</Button>
+          <p className="text-sm text-muted-foreground">{CUSTOMER_COPY.closed}</p>
+          <Link href="/support/new" className={buttonVariants({ size: "sm", variant: "outline" })}>ثبت تیکت جدید</Link>
         </div>
       ) : (
         <form
@@ -95,11 +97,11 @@ export function CustomerTicketActions({ ticketId, status }: { ticketId: string; 
         <AlertDialogContent dir="rtl">
           <AlertDialogHeader>
             <AlertDialogTitle>بستن تیکت {ticketId}؟</AlertDialogTitle>
-            <AlertDialogDescription>بعد از بستن نمی‌توانید پیام جدیدی بفرستید، اما تا ۷ روز می‌توانید آن را دوباره باز کنید.</AlertDialogDescription>
+            <AlertDialogDescription>با بستن تیکت دیگر امکان ارسال پیام در آن وجود نخواهد داشت و تیکت قابل بازگشایی نیست. ادامه می‌دهید؟</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={changing}>انصراف</AlertDialogCancel>
-            <AlertDialogAction disabled={changing} onClick={(event) => { event.preventDefault(); void setStatus("closed"); }}>
+            <AlertDialogAction disabled={changing} onClick={(event) => { event.preventDefault(); void closeTicket(); }}>
               {changing ? "در حال بستن…" : "بستن تیکت"}
             </AlertDialogAction>
           </AlertDialogFooter>

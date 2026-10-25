@@ -1,17 +1,20 @@
 /**
  * In-memory stand-ins for the support models and the Telegram bot. The model
  * fake evaluates the operators the support service really uses ($ne, $gt,
- * $in, $regex, $set, $inc, $addToSet) and emulates unique-index violations
+ * $in, $regex, $set, $inc, $max, $addToSet) and emulates unique-index violations
  * (code 11000), so ownership filters and idempotency are exercised for real.
  */
 let counter = 0;
 
 function matchValue(value, condition) {
+  if (condition instanceof Date) return value instanceof Date && value.getTime() === condition.getTime();
   if (condition && typeof condition === "object" && !(condition instanceof Date) && !Array.isArray(condition)) {
     return Object.entries(condition).every(([op, expected]) => {
       switch (op) {
         case "$ne": return value !== expected;
         case "$gt": return value > expected;
+        case "$lt": return value < expected;
+        case "$nin": return !expected.includes(value);
         case "$in": return expected.includes(value);
         case "$regex": return new RegExp(expected, condition.$options || "").test(String(value ?? ""));
         case "$options": return true;
@@ -30,6 +33,7 @@ function matches(doc, filter) {
 function applyUpdate(doc, update) {
   for (const [key, value] of Object.entries(update.$set || {})) doc[key] = value;
   for (const [key, value] of Object.entries(update.$inc || {})) doc[key] = (doc[key] || 0) + value;
+  for (const [key, value] of Object.entries(update.$max || {})) doc[key] = Math.max(doc[key] || 0, value);
   for (const [key, value] of Object.entries(update.$addToSet || {})) {
     doc[key] = doc[key] || [];
     if (!doc[key].includes(value)) doc[key].push(value);
@@ -62,7 +66,7 @@ export function makeFakeModel({ unique = [], defaults = () => ({}) } = {}) {
     docs,
     async create(fields) {
       for (const key of unique) {
-        if (docs.some((doc) => doc[key] === fields[key])) throw Object.assign(new Error("duplicate key"), { code: 11000 });
+        if (fields[key] !== undefined && docs.some((doc) => doc[key] === fields[key])) throw Object.assign(new Error("duplicate key"), { code: 11000 });
       }
       counter += 1;
       const doc = { _id: counter.toString(16).padStart(24, "0"), createdAt: new Date(counter), ...defaults(), ...fields };
@@ -82,6 +86,22 @@ export function makeFakeModel({ unique = [], defaults = () => ({}) } = {}) {
       if (doc) applyUpdate(doc, update);
       return { matchedCount: doc ? 1 : 0 };
     },
+    async updateMany(filter, update) {
+      const hit = docs.filter((item) => matches(item, filter));
+      for (const doc of hit) {
+        if (Array.isArray(update)) {
+          // Aggregation-pipeline update: only the $set/$ifNull shape the migration uses.
+          for (const stage of update) {
+            for (const [key, value] of Object.entries(stage.$set || {})) {
+              doc[key] = value && typeof value === "object" && value.$ifNull
+                ? value.$ifNull.map((arg) => (typeof arg === "string" && arg.startsWith("$") ? doc[arg.slice(1)] : arg)).find((v) => v != null)
+                : value;
+            }
+          }
+        } else applyUpdate(doc, update);
+      }
+      return { matchedCount: hit.length, modifiedCount: hit.length };
+    },
     async deleteOne(filter) {
       const index = docs.findIndex((doc) => matches(doc, filter));
       if (index >= 0) docs.splice(index, 1);
@@ -92,7 +112,7 @@ export function makeFakeModel({ unique = [], defaults = () => ({}) } = {}) {
 
 export function makeSupportDeps() {
   return {
-    Ticket: makeFakeModel({ unique: ["ticketId"], defaults: () => ({ unreadForAdmin: 0, unreadForCustomer: 0, messageCount: 0, closedAt: null, closedBy: null }) }),
+    Ticket: makeFakeModel({ unique: ["ticketId", "createKey"], defaults: () => ({ unreadForAdmin: 0, unreadForCustomer: 0, messageCount: 0, closedAt: null, closedBy: null }) }),
     Message: makeFakeModel({ unique: ["dedupeKey"], defaults: () => ({ groupMessageIds: [], delivery: "pending", attachment: null, text: "" }) }),
   };
 }

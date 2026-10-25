@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useCustomerSession } from "@/components/support/customer-session";
 import { customerMutate, newOperationId } from "@/lib/customerApi.client";
-import { ticketErrorMessage } from "@/lib/tickets";
+import { customerErrorMessage } from "@/lib/customerTickets";
 
 const MAX_TEXT = 3500;
 const MAX_SUBJECT = 100;
@@ -36,7 +36,7 @@ export function NewTicketForm() {
       router.replace(`/support/${result.data.ticket.ticketId}`);
       router.refresh();
     } catch (submitError) {
-      setError(ticketErrorMessage(submitError));
+      setError(customerErrorMessage(submitError));
       setBusy(false);
     }
   }

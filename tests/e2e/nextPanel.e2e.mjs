@@ -254,9 +254,10 @@ api.get("/vpns-remote/clients", guard((req, res) => {
   ok(res, { source: "wizardxray", fetchedAt: NOW.toISOString(), count: 2, items: [{ username: "client_alpha_0123456789abcdef0123456789abcdef", status: "active", traffic: 5, knownLocally: true }, { username: "orphan_client", status: "expired", knownLocally: false }] });
 }));
 
-api.get("/tickets", guard(async (req, res) => ok(res, await adminTickets.listSupportTickets({ actorId: actor(req), page: 1, pageSize: 20 }))));
+api.get("/tickets", guard(async (req, res) => ok(res, await adminTickets.listSupportTickets({ actorId: actor(req), status: req.query.status, query: req.query.q, unreadOnly: req.query.unread, page: req.query.page, pageSize: req.query.pageSize }))));
 api.get("/tickets/:id/updates", guard(async (req, res) => ok(res, await adminTickets.getSupportTicketUpdates({ actorId: actor(req), ticketId: req.params.id, afterId: req.query.after, markRead: req.query.markRead }))));
-api.get("/tickets/:id", guard(async (req, res) => ok(res, await adminTickets.getSupportTicket({ actorId: actor(req), ticketId: req.params.id }))));
+api.get("/tickets/:id/messages", guard(async (req, res) => ok(res, await adminTickets.getSupportTicketHistory({ actorId: actor(req), ticketId: req.params.id, beforeId: req.query.before, limit: req.query.limit }))));
+api.get("/tickets/:id", guard(async (req, res) => ok(res, await adminTickets.getSupportTicket({ actorId: actor(req), ticketId: req.params.id, limit: req.query.limit }))));
 api.post("/tickets/:id/reply", json, guard(async (req, res) => { calls.reply.push(req.body); ok(res, await adminTickets.replyToSupportTicket({ actorId: actor(req), operationId: req.body.operationId, ticketId: req.params.id, text: req.body.text, bot: fakeBot, auditModel: audits })); }));
 api.post("/tickets/:id/status", json, guard(async (req, res) => ok(res, await adminTickets.setSupportTicketStatus({ actorId: actor(req), operationId: req.body.operationId, ticketId: req.params.id, status: req.body.status, bot: fakeBot, auditModel: audits }))));
 api.use((req, res) => res.status(404).json({ ok: false, error: "not_stubbed", path: req.path }));
@@ -657,34 +658,280 @@ await step("profile photo: shown when Telegram has one, initials fallback when n
   await page.context().close();
 });
 
-// ── Functional: live tickets ────────────────────────────────────────────────
-await step("tickets: a Telegram message appears without reload, admin replies show once, offline shows reconnecting and recovers", async () => {
+// ── Functional: admin ticket inbox + chat ───────────────────────────────────
+const arabicScript = new RegExp(`[${String.fromCharCode(0x600)}-${String.fromCharCode(0x6ff)}]`);
+const conversation = (page) => page.getByRole("region", { name: "Conversation" });
+const logItems = (page) => conversation(page).locator('[role="log"] li');
+const adminMessages = (id, text) => supportDeps.Message.docs.filter((m) => m.ticketId === id && m.author === "admin" && (!text || m.text === text));
+let seedKey = 0;
+const customerSays = (id, userId, text) => workflow.customerReply({ userId, ticketId: id, text, dedupeKey: `e2e:${++seedKey}:${Date.now()}` });
+
+await step("tickets: English inbox + chat; a Telegram message appears live, offline shows reconnecting and recovers; Enter sends once, Shift+Enter adds a line", async () => {
+  const live = await openTicket(910001, "Cannot connect", "Hello, my service does not connect");
   const page = await newPage();
-  await go(page, `/tickets/${ticketId}`);
-  await page.getByText("به‌روزرسانی خودکار فعال است").waitFor();
-  const count = () => page.locator("ol[aria-label] li").count();
-  const before = await count();
-  assert.ok(before >= 2);
-  await workflow.customerReply({ bot: fakeBot, from: { id: 900001 }, userId: 900001, ticketId, text: "پیام جدید از تلگرام", dedupeKey: `tg:1:${Date.now()}` });
-  await page.getByText("پیام جدید از تلگرام").waitFor({ timeout: 10_000 });
-  assert.equal(await count(), before + 1);
+  await go(page, `/tickets?t=${live}`);
+  await conversation(page).getByText("Live").waitFor();
+  await logItems(page).first().waitFor();
+  const before = await logItems(page).count();
+  assert.equal(before, 1);
+
+  await customerSays(live, 910001, "New message from Telegram");
+  await conversation(page).getByText("New message from Telegram").waitFor({ timeout: 10_000 });
+  assert.equal(await logItems(page).count(), before + 1);
 
   await page.context().setOffline(true);
-  await page.getByText(/ارتباط قطع شد/).waitFor({ timeout: 12_000 });
-  await workflow.customerReply({ bot: fakeBot, from: { id: 900001 }, userId: 900001, ticketId, text: "پیام حین قطعی", dedupeKey: `tg:2:${Date.now()}` });
+  await conversation(page).getByText("Reconnecting…").waitFor({ timeout: 15_000 });
+  await customerSays(live, 910001, "Message during the outage");
   await page.context().setOffline(false);
-  await page.getByText("پیام حین قطعی").waitFor({ timeout: 40_000 });
-  await page.getByText("به‌روزرسانی خودکار فعال است").waitFor();
-  assert.equal(await count(), before + 2);
+  await conversation(page).getByText("Message during the outage").waitFor({ timeout: 40_000 });
+  await conversation(page).getByText("Live").waitFor();
+  assert.equal(await logItems(page).count(), before + 2);
 
-  await page.getByRole("textbox").fill("پاسخ از پنل");
-  await page.getByRole("button", { name: /ارسال/ }).first().click();
-  await page.getByText("پاسخ از پنل").first().waitFor();
-  await page.waitForTimeout(6000); // several polls later it must still be exactly one copy
-  assert.equal(await page.getByText("پاسخ از پنل", { exact: true }).count(), 1);
-  assert.equal(await count(), before + 3);
-  assert.equal(supportDeps.Message.docs.filter((m) => m.text === "پاسخ از پنل").length, 1);
+  const box = conversation(page).getByRole("textbox", { name: "Reply to customer" });
+  await box.fill("Line one");
+  await box.press("Shift+Enter");
+  await box.pressSequentially("line two");
+  assert.equal(adminMessages(live).length, 0, "Shift+Enter must not send");
+  assert.equal(await box.inputValue(), "Line one\nline two");
+  await box.press("Enter");
+  await conversation(page).getByText("line two").first().waitFor();
+  await conversation(page).getByText("Customer notified").waitFor();
+  await page.waitForTimeout(7000); // several polls later it must still be exactly one copy
+  assert.equal(await logItems(page).count(), before + 3);
+  assert.equal(adminMessages(live, "Line one\nline two").length, 1);
+  assert.equal(await box.inputValue(), "", "the composer is cleared only after the server accepted the reply");
+  assert.equal(fakeBot.calls.filter((c) => c.method === "sendMessage" && String(c.args[0]) === "910001").length >= 1, true, "customer notified in Telegram");
+  assert.ok(!sentToAdmin.some((m) => /Line one/.test(String(m.text))), "reply body never goes to an admin chat");
   await page.context().close();
+});
+
+await step("tickets: a new ticket arrives in the inbox without reload, shows unread, and opening it clears the count", async () => {
+  const page = await newPage();
+  await go(page, "/tickets");
+  const rows = page.getByRole("list", { name: "Tickets" });
+  const fresh = await openTicket(910002, "Fresh ticket", "First message");
+  const row = rows.getByRole("button", { name: new RegExp(fresh) });
+  await row.waitFor({ timeout: 12_000 });
+  await row.getByLabel("1 unread").waitFor();
+  assert.ok((await page.getByText(/\d+ unread/).count()) >= 1, "header shows the unread total");
+  await row.click();
+  await conversation(page).getByText("First message").waitFor();
+  await page.waitForTimeout(6500);
+  assert.equal(await row.getByLabel(/unread/).count(), 0);
+  assert.equal(supportDeps.Ticket.docs.find((t) => t.ticketId === fresh).unreadForAdmin, 0);
+  assert.ok(page.url().includes(`t=${fresh}`), "selection is in the URL");
+  await page.reload({ waitUntil: "networkidle" });
+  await conversation(page).getByText("First message").waitFor();
+  await page.context().close();
+});
+
+for (const theme of ["light", "dark"]) {
+  await step(`tickets: status dropdown is readable (${theme}): canonical options, contrast, keyboard navigation`, async () => {
+    const id = await openTicket(910003, `Dropdown ${theme}`, "Status dropdown check");
+    const page = await newPage({ theme });
+    await go(page, `/tickets?t=${id}`);
+    await conversation(page).getByText("Status dropdown check").waitFor();
+    const trigger = conversation(page).getByRole("combobox", { name: "Ticket status" });
+    await trigger.focus();
+    await trigger.press("Enter");
+    const listbox = page.getByRole("listbox");
+    await listbox.waitFor();
+    assert.deepEqual(await page.getByRole("option").allInnerTexts(), ["Open", "Awaiting customer", "Closed"]);
+    await page.keyboard.press("ArrowDown");
+    const contrast = await page.evaluate(() => {
+      const parse = (value) => (value.match(/[\d.]+/g) || []).map(Number);
+      const lum = ([r, g, b]) => [r, g, b].map((v) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }).reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
+      const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+      const background = parse(getComputedStyle(document.querySelector('[role="listbox"]').parentElement.parentElement).backgroundColor);
+      const options = [...document.querySelectorAll('[role="option"]')].map((el) => {
+        const style = getComputedStyle(el);
+        const bg = parse(style.backgroundColor);
+        const surface = bg.length === 4 && bg[3] === 0 ? background : bg;
+        return { text: el.textContent, disabled: el.getAttribute("data-disabled") !== null, highlighted: el.getAttribute("data-highlighted") !== null, checked: el.getAttribute("data-state") === "checked", ratio: ratio(parse(style.color), surface) };
+      });
+      return { options, panel: ratio(parse(getComputedStyle(document.querySelector('[role="listbox"]')).color), background) };
+    });
+    for (const option of contrast.options) {
+      // Disabled options are intentionally dimmed (WCAG exempts inactive controls) but must stay legible at 3:1.
+      assert.ok(option.ratio >= (option.disabled ? 3 : 4.5), `${theme}: "${option.text}" contrast ${option.ratio.toFixed(2)}`);
+    }
+    assert.ok(contrast.options.some((o) => o.highlighted), "keyboard highlight is visible state");
+    assert.ok(contrast.options.some((o) => o.checked), "the current value is marked");
+    await page.screenshot({ path: join(shots, `ticket-status-dropdown-${theme}.png` ) });
+    await page.keyboard.press("Escape");
+    await page.context().close();
+  });
+}
+
+await step("tickets: status change shows success only after the server accepts it; a failure shows an error and keeps the value; close is confirmed, final and idempotent", async () => {
+  const id = await openTicket(910004, "Close me", "Please help");
+  const page = await newPage();
+  await go(page, `/tickets?t=${id}`);
+  await conversation(page).getByText("Please help").waitFor();
+  const trigger = conversation(page).getByRole("combobox", { name: "Ticket status" });
+  const pick = async (name) => { await trigger.click(); await page.getByRole("option", { name }).click(); };
+  const rowFor = () => page.getByRole("list", { name: "Tickets" }).getByRole("button", { name: new RegExp(id) });
+  const ticketRow = () => supportDeps.Ticket.docs.find((t) => t.ticketId === id);
+
+  await pick("Awaiting customer");
+  await page.getByText("Ticket status set to “Awaiting customer”.").waitFor();
+  assert.equal(ticketRow().status, "pending_customer");
+  assert.equal((await trigger.innerText()).trim(), "Awaiting customer");
+  await rowFor().getByText("Awaiting customer").waitFor();
+  await pick("Open");
+  await page.getByText("Ticket status set to “Open”.").waitFor();
+  assert.equal(ticketRow().status, "open");
+
+  // A rejected change: error toast, no success toast, the control keeps the saved value.
+  await page.route("**/api/admin/tickets/*/status", (route) => route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ ok: false, error: "invalid_transition", message: "This status change is not allowed." }) }));
+  await pick("Closed");
+  await page.getByRole("alertdialog").getByRole("button", { name: "Close ticket" }).click();
+  await page.getByText("This status change is not allowed.").waitFor();
+  assert.equal(await page.getByText("Ticket closed.").count(), 0, "no false success");
+  assert.equal(ticketRow().status, "open");
+  assert.equal((await trigger.innerText()).trim(), "Open");
+  await page.unroute("**/api/admin/tickets/*/status");
+  await page.keyboard.press("Escape");
+
+  // The real close.
+  await pick("Closed");
+  const dialog = page.getByRole("alertdialog");
+  await dialog.getByText(`Close ticket ${id}?`).waitFor();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  assert.equal(ticketRow().status, "open", "cancel changes nothing");
+  await pick("Closed");
+  await dialog.getByRole("button", { name: "Close ticket" }).click();
+  await page.getByText("Ticket closed.").waitFor();
+  const row = ticketRow();
+  assert.equal(row.status, "closed");
+  assert.equal(row.closedBy, "admin");
+  assert.equal(row.closedByAdminId, "424242");
+  await conversation(page).getByText(/This ticket was closed on .* by support\. It is read-only and cannot be reopened/).waitFor();
+  assert.equal(await conversation(page).getByRole("textbox", { name: "Reply to customer" }).isDisabled(), true);
+  assert.equal(await conversation(page).getByRole("button", { name: "Send" }).isDisabled(), true);
+  assert.equal(await trigger.isDisabled(), true);
+  await rowFor().getByText("Closed").waitFor();
+
+  // Idempotent and final from every other path.
+  const repeat = await adminTickets.setSupportTicketStatus({ actorId: "424242", operationId: `op-e2e-repeat-${Date.now()}00`, ticketId: id, status: "closed", bot: fakeBot, auditModel: audits });
+  assert.equal(repeat.changed, false);
+  await assert.rejects(customerSays(id, 910004, "sneaking in"), { code: "ticket_closed" });
+  await assert.rejects(workflow.customerSetStatus({ userId: 910004, ticketId: id, status: "open" }), { code: "reopen_not_allowed" });
+  assert.equal(supportDeps.Message.docs.filter((m) => m.ticketId === id).length, 1);
+  assert.equal(ticketRow().status, "closed");
+  await page.context().close();
+});
+
+await step("tickets: long history loads the newest page first, older pages on demand, without duplicates and without losing the reading position", async () => {
+  const id = await openTicket(910005, "Long conversation", "message 1");
+  for (let i = 2; i <= 90; i += 1) await customerSays(id, 910005, `message ${i}`);
+  const page = await newPage();
+  await go(page, `/tickets?t=${id}`);
+  await conversation(page).getByText("message 90", { exact: true }).waitFor();
+  assert.equal(await logItems(page).count(), 40);
+  const scroller = conversation(page).locator('[role="log"]');
+  const atBottom = await scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight < 5);
+  assert.equal(atBottom, true, "opens at the newest message");
+
+  const probe = () => scroller.evaluate((el) => {
+    const top = el.getBoundingClientRect().top;
+    const li = [...el.querySelectorAll("li")].find((node) => node.getBoundingClientRect().bottom > top + 40);
+    return { text: li.querySelector("p")?.textContent, offset: li.getBoundingClientRect().top - top };
+  });
+  await scroller.evaluate((el) => { el.scrollTop = 0; });
+  const anchor = await probe();
+  await conversation(page).getByRole("button", { name: "Load earlier messages" }).click();
+  await page.waitForFunction(() => document.querySelectorAll('[role="log"] li').length === 80);
+  const afterOffset = await scroller.evaluate((el, text) => {
+    const li = [...el.querySelectorAll("li")].find((node) => node.querySelector("p")?.textContent === text);
+    return li ? li.getBoundingClientRect().top - el.getBoundingClientRect().top : null;
+  }, anchor.text);
+  assert.notEqual(afterOffset, null, "the message being read is still rendered");
+  assert.ok(Math.abs(afterOffset - anchor.offset) < 4, `reading position kept for ${anchor.text} (${anchor.offset} -> ${afterOffset})`);
+  await scroller.evaluate((el) => { el.scrollTop = 0; });
+  await conversation(page).getByRole("button", { name: "Load earlier messages" }).click();
+  await page.waitForFunction(() => document.querySelectorAll('[role="log"] li').length === 90);
+  assert.equal(await conversation(page).getByRole("button", { name: "Load earlier messages" }).count(), 0, "no more history");
+  const texts = await scroller.locator("li p[dir=auto]").evaluateAll((nodes) => nodes.map((n) => n.textContent));
+  assert.equal(new Set(texts).size, 90, "no duplicates");
+  assert.deepEqual(texts, Array.from({ length: 90 }, (_, i) => `message ${i + 1}`), "chronological order");
+
+  // Not at the bottom: a new message does not yank the view; a jump button appears.
+  await scroller.evaluate((el) => { el.scrollTop = 0; });
+  await customerSays(id, 910005, "message 91");
+  await conversation(page).getByRole("button", { name: /1 new message/ }).waitFor({ timeout: 10_000 });
+  assert.equal(await scroller.evaluate((el) => el.scrollTop < 50), true, "reader was not moved");
+  await conversation(page).getByRole("button", { name: /1 new message/ }).click();
+  assert.equal(await scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight < 5), true);
+  await page.context().close();
+});
+
+await step("tickets: the admin ticket UI is English only (customer content is left as sent) in both themes", async () => {
+  const id = await openTicket(910006, "اتصال قطع است", "سلام، لطفاً کمک کنید");
+  await workflow.adminReply({ bot: fakeBot, adminId: "424242", ticketId: id, text: "Hello from support", dedupeKey: `seed:${++dedupe}` });
+  for (const theme of ["light", "dark"]) {
+    const page = await newPage({ theme });
+    await go(page, `/tickets?t=${id}`);
+    await conversation(page).getByText("Hello from support").waitFor();
+    const found = await page.evaluate((source) => {
+      const pattern = new RegExp(source);
+      const offenders = [];
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (pattern.test(node.textContent) && !/^(SCRIPT|STYLE)$/.test(node.parentElement.tagName) && !node.parentElement.closest('[dir="auto"]')) offenders.push(node.textContent.trim().slice(0, 60));
+      }
+      const attributes = [...document.querySelectorAll("[aria-label], [placeholder], [title], img[alt]")].flatMap((el) => ["aria-label", "placeholder", "title", "alt"].map((a) => el.getAttribute(a) || "")).filter((v) => pattern.test(v));
+      return { offenders, attributes, dir: document.documentElement.dir, lang: document.documentElement.lang, rtl: document.querySelectorAll('[dir="rtl"]').length };
+    }, arabicScript.source);
+    assert.deepEqual(found.offenders, [], `Persian UI text (${theme}): ${JSON.stringify(found.offenders)}`);
+    assert.deepEqual(found.attributes, [], `Persian accessible text (${theme})`);
+    assert.equal(found.rtl, 0, "no RTL layout in the admin panel");
+    assert.notEqual(found.dir, "rtl");
+    assert.ok(!/^fa/.test(found.lang));
+    await conversation(page).getByText("سلام، لطفاً کمک کنید").waitFor(); // the customer's own words are shown faithfully
+    await page.screenshot({ path: join(shots, `ticket-chat-${theme}.png` ) });
+    await page.context().close();
+  }
+});
+
+await step("tickets: phone layout shows the inbox or the conversation, with a way back; browser back restores the inbox", async () => {
+  const id = await openTicket(910007, "Phone check", "Hello from a phone");
+  const page = await newPage({ width: 375, height: 800 });
+  await go(page, "/tickets");
+  const rows = page.getByRole("list", { name: "Tickets" });
+  await rows.waitFor();
+  assert.equal(await page.getByRole("region", { name: "Conversation" }).isVisible(), false, "inbox first on a phone");
+  await rows.getByRole("button", { name: new RegExp(id) }).click();
+  await conversation(page).getByText("Hello from a phone").waitFor();
+  assert.equal(await page.getByRole("region", { name: "Ticket inbox" }).isVisible(), false);
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  assert.ok(overflow <= 1, "no horizontal overflow");
+  await page.screenshot({ path: join(shots, "ticket-chat-375.png") });
+  await page.goBack();
+  await rows.waitFor();
+  assert.ok(!page.url().includes("t="));
+  await rows.getByRole("button", { name: new RegExp(id) }).click();
+  await conversation(page).getByRole("button", { name: "Back to inbox" }).click();
+  await rows.waitFor();
+  await page.context().close();
+});
+
+await step("tickets: live updates stop when the admin session is revoked (polling gets 401 and the panel returns to sign-in)", async () => {
+  const id = await openTicket(910008, "Session check", "Hello");
+  const second = await auth.createAdminSession("424242");
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, baseURL: base });
+  const cookie = (path) => ({ ...cookieHeader(path), value: second.token });
+  await context.addCookies([cookie("/api/admin"), cookie("/panel")]);
+  const page = await context.newPage();
+  await go(page, `/tickets?t=${id}`);
+  await conversation(page).getByText("Hello").waitFor();
+  await auth.deleteAdminSession(second.token);
+  await page.waitForURL(/\/panel\/sign-in/, { timeout: 15_000 });
+  const polls = [];
+  page.on("request", (request) => { if (/\/api\/admin\/tickets/.test(request.url())) polls.push(request.url()); });
+  await page.waitForTimeout(8000);
+  assert.deepEqual(polls, [], "no further ticket requests after sign-out");
+  await context.close();
 });
 
 // ── Branding: logo + favicon on the sign-in page, both themes ───────────────
