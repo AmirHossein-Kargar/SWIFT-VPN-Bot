@@ -79,7 +79,8 @@ describe("order review", () => {
 
   test("links are rendered only for http(s) targets", () => {
     assert.equal(store.safeExternalUrl("https://t.me/Swift_servicebot"), "https://t.me/Swift_servicebot");
-    assert.equal(store.safeExternalUrl("http://example.com/x"), "http://example.com/x");
+    assert.equal(store.safeExternalUrl("http://example.com/x"), null, "plain http is not a hand-off target");
+    assert.equal(store.safeExternalUrl("https://user:pw@t.me/x"), null, "credentials in a URL are refused");
     for (const bad of ["javascript:alert(1)", "data:text/html,x", "vbscript:x", "//evil.example", "not a url", "", null, undefined]) {
       assert.equal(store.safeExternalUrl(bad), null, String(bad));
     }

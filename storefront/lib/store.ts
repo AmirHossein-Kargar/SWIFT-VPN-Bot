@@ -65,12 +65,12 @@ export function handoffUrl(check: PlanCheck): string | null {
   return check.checkout?.available && check.checkout.url ? check.checkout.url : null;
 }
 
-/** Only http(s) links may be rendered as hand-off targets (defence in depth). */
+/** Only https links may be rendered as hand-off targets (defence in depth); every legitimate target is t.me. */
 export function safeExternalUrl(value: string | null | undefined): string | null {
   if (!value) return null;
   try {
     const url = new URL(value);
-    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null;
+    return url.protocol === "https:" && !url.username && !url.password ? url.toString() : null;
   } catch {
     return null;
   }

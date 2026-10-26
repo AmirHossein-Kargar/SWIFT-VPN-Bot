@@ -62,11 +62,27 @@ export const STORE_CSP = [
   "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data:",
   "connect-src 'self'",
+  "manifest-src 'self'",
+  "frame-src 'none'",
+  "worker-src 'none'",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
   "frame-ancestors 'none'",
 ].join("; ");
+
+/**
+ * Extra hardening for public storefront responses. HSTS is sent only when the
+ * request really arrived over HTTPS (Railway terminates TLS and sets
+ * X-Forwarded-Proto; `trust proxy` makes req.secure honour it), so plain-HTTP
+ * local development is never pinned to HTTPS. No includeSubDomains/preload:
+ * this host is the only thing the header should commit to.
+ */
+export function storefrontHardening(req, res) {
+  if (req.secure) res.setHeader("Strict-Transport-Security", "max-age=15552000");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+}
 
 /** Admin application entry points. Everything else is the storefront or 404. */
 const ADMIN_PAGE = /^\/(?:panel|admin)(?:\/.*)?$/;
@@ -186,6 +202,7 @@ export function servePrecompressed(req, res, next) {
       res.setHeader("Content-Type", path.extname(file) === ".css" ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8");
       res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
       res.setHeader("X-Content-Type-Options", "nosniff");
+      if (req.secure) res.setHeader("Strict-Transport-Security", "max-age=15552000");
       res.sendFile(file + extension, { cacheControl: false, dotfiles: "allow" }, (sendError) => {
         if (sendError && !res.headersSent) {
           res.removeHeader("Content-Encoding");
@@ -242,6 +259,7 @@ export function serveStorefront(req, res, next) {
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("Vary", "Accept-Encoding");
   securityHeaders(res, STORE_CSP);
+  storefrontHardening(req, res);
   const encoded = encodedStorefront(html, req.headers["accept-encoding"]);
   if (encoded) {
     res.setHeader("Content-Encoding", encoded.encoding);
@@ -253,6 +271,8 @@ export function serveStorefront(req, res, next) {
 export function notFoundHandler(req, res) {
   if (req.path.startsWith("/api/")) return res.status(404).json({ ok: false, error: "not_found" });
   securityHeaders(res, STORE_CSP);
+  storefrontHardening(req, res);
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("Cache-Control", "no-store");
   res.status(404).sendFile(path.join(webRoot, "404.html"), (sendError) => {
     if (sendError && !res.headersSent) res.type("text/plain").send("Not found");

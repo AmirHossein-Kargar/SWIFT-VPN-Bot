@@ -63,7 +63,12 @@ const FAQ: { id?: string; q: string; a: string }[] = [
 
 /** Browsers do not open a <details> that is itself the target of a #fragment; do it for links to FAQ entries. */
 function openFaqForHash(hash: string) {
-  const id = decodeURIComponent(hash.replace(/^#/, ""));
+  let id: string;
+  try {
+    id = decodeURIComponent(hash.replace(/^#/, ""));
+  } catch {
+    return; // malformed %-escape in a crafted link: ignore it rather than crash the page
+  }
   const target = id ? document.getElementById(id) : null;
   if (target instanceof HTMLDetailsElement) {
     target.open = true;
