@@ -101,6 +101,23 @@ export function reservedCancelConfirmKeyboard(purchase) {
   };
 }
 
+const REPLACEABLE_EDIT_DESCRIPTION = /message to edit not found|message can't be edited|MESSAGE_ID_INVALID/i;
+
+/**
+ * True only for Telegram's explicit "the message I was asked to edit is gone / cannot be edited" answers (HTTP 400 from the
+ * Bot API), which a retry of the same edit can never fix. Network errors, 429s, 403/permission errors, "chat not found",
+ * formatting errors, 5xx and anything that merely contains similar words are NOT replaceable and keep the normal retry.
+ * node-telegram-bot-api exposes the answer as `error.response.body` and as an `ETELEGRAM: <status> <description>` message.
+ */
+export function isReplaceableEditError(error) {
+  if (!error || typeof error !== "object") return false;
+  const body = error.response?.body;
+  const fromMessage = /^ETELEGRAM:\s*(\d{3})\s+([\s\S]*)$/.exec(String(error.message ?? ""));
+  const status = Number(error.response?.statusCode ?? body?.error_code ?? fromMessage?.[1]);
+  const description = String(body?.description ?? fromMessage?.[2] ?? "");
+  return status === 400 && REPLACEABLE_EDIT_DESCRIPTION.test(description);
+}
+
 function backoffMs(attempts) {
   return Math.min(BASE_BACKOFF_MS * 2 ** Math.max(0, attempts - 1), MAX_BACKOFF_MS);
 }
@@ -139,7 +156,17 @@ export async function notifyReservedOrder(bot, purchaseId, { purchaseModel = Wal
   let messageId = claimed.adminAlertMessageId ?? null;
   try {
     if (messageId != null) {
-      await bot.editMessageText(reservedOrderText(claimed), { ...options, chat_id: groupId, message_id: messageId });
+      try {
+        await bot.editMessageText(reservedOrderText(claimed), { ...options, chat_id: groupId, message_id: messageId });
+      } catch (editError) {
+        // Anything else (including "message is not modified") is handled by the outer catch exactly as before.
+        if (!isReplaceableEditError(editError)) throw editError;
+        // The original alert was deleted or can no longer be edited. We still hold the outbox claim, so only this worker sends
+        // the replacement; if the send fails, `messageId` is untouched and the normal backoff-and-retry applies.
+        log("warn", "Reserved-order alert message is gone; sending a replacement", { purchaseId });
+        const replacement = await bot.sendMessage(groupId, reservedOrderText(claimed), options);
+        messageId = Number.isSafeInteger(replacement?.message_id) ? replacement.message_id : null;
+      }
     } else {
       const sent = await bot.sendMessage(groupId, reservedOrderText(claimed), options);
       messageId = Number.isSafeInteger(sent?.message_id) ? sent.message_id : null;

@@ -100,6 +100,13 @@ export async function approveReservedOrder({
         fulfillmentClaimedBy: String(adminId),
         errorCode: null,
         adminAlertPending: false,
+        // `adminAlertedAt` doubles as recovery's "an alert was already sent for this order" guard (alertAdmin, and the
+        // manual_review recovery selection). The reserved-order alert stamped it, which would silence the escalation if
+        // THIS approval ends in manual_review (ambiguous provider outcome, or a crash mid-create). The approval starts a
+        // new lifecycle, so clear it: the outbox re-stamps it on the next reserved alert, recovery stamps it when it
+        // escalates, and repeated processing stays idempotent because alertAdmin only fires while it is null. The
+        // earlier alert stays auditable through adminAlertMessageId and the `admin_approved` event below.
+        adminAlertedAt: null,
         recoveryStatus: "none",
         recoveryReason: null,
       },
