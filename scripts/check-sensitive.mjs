@@ -56,6 +56,9 @@ export function scanLine(line, { blocklist = [] } = {}) {
 
   for (const m of line.matchAll(/(?<![\d.-])(?:\d[ -]?){12,18}\d(?![\d-])/g)) {
     const digits = m[0].replace(/\D/g, "");
+    // A 13-digit number starting with 1 is a Unix-millisecond timestamp (2001-2033), never a card: no card network uses
+    // major-industry digit 1, but about one timestamp in ten would otherwise pass the Luhn check.
+    if (/^1\d{12}$/.test(digits)) continue;
     if (digits.length >= 13 && digits.length <= 19 && luhn(digits) && !CARD_ALLOWLIST.has(digits)) add("CARD_NUMBER", m);
   }
   for (const m of line.matchAll(/\bIR\s?\d{2}(?:\s?\d{4}){5}\s?\d{2}\b|\bIR\d{24}\b/g)) add("IBAN_IR", m);

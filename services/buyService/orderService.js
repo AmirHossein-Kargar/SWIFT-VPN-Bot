@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { purchasePlan, PurchaseServiceError } from "./purchaseService.js";
 import { deliverPurchaseNotificationById } from "./purchaseLedger.js";
+import { notifyReservedOrder } from "./reservedAlerts.js";
 
 /** Stable Telegram request ID: duplicate callbacks on one confirmation message share one order. */
 export function telegramPurchaseId({ chatId, userId, messageId, planId } = {}) {
@@ -66,6 +67,19 @@ export default async function handlePlanOrder(bot, chatId, userId, planId, conte
   }
   if (outcome.status === "refund_pending") {
     await send(bot, chatId, "❌ درخواست پنل انجام نشد، اما بازپرداخت هنوز در حال پردازش است. لطفاً سفارش دیگری ثبت نکنید تا موجودی نهایی شود.");
+    return outcome;
+  }
+  if (outcome.status === "awaiting_provider") {
+    // The order and its admin-alert outbox flag are already persisted; the notification below is best effort and is
+    // retried by the recovery cycle, so a failure here cannot lose the order.
+    if (!outcome.replayed) {
+      try { await notifyReservedOrder(bot, outcome.purchaseId); } catch { /* outbox retries */ }
+    }
+    await send(
+      bot,
+      chatId,
+      "✅ سفارش شما ثبت و مبلغ آن از کیف پولتان رزرو شد.\nسرویس در انتظار تأمین موجودی ارائه‌دهنده است و پس از آماده‌شدن، لینک اتصال برای شما ارسال می‌شود.\nنیازی به ثبت سفارش مجدد نیست."
+    );
     return outcome;
   }
   if (["manual_review", "uncertain"].includes(outcome.status)) {

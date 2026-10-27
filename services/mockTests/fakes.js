@@ -56,7 +56,8 @@ export function createFakeBot() {
  * WizardXray adapter. `plan` is a queue of outcomes consumed per create call;
  * when it runs out, calls succeed.
  *   success   → valid provisioning response
- *   reject    → definitive provider rejection (non-ambiguous WizardApiError)
+ *   reject    → provider wallet short of funds (non-ambiguous; the order is reserved, not refunded)
+ *   refuse    → any other definitive provider refusal (non-ambiguous; the order is refunded)
  *   timeout   → ambiguous transport failure (request may have been applied)
  *   malformed → ok:true but an unusable body (also ambiguous)
  */
@@ -69,6 +70,9 @@ export function createFakeWizard(plan = []) {
     const outcome = queue.length ? queue.shift() : "success";
     if (outcome === "reject") {
       throw new WizardApiError(operation, { status: 402, code: "provider_insufficient_balance", ambiguous: false });
+    }
+    if (outcome === "refuse") {
+      throw new WizardApiError(operation, { status: 400, code: "panel_rejected_request", ambiguous: false });
     }
     if (outcome === "timeout") {
       throw new WizardApiError(operation, { code: "timeout", ambiguous: true });

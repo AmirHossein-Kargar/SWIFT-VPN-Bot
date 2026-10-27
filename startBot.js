@@ -3,8 +3,9 @@ import { migrateLegacyTicketStatuses } from "./services/support/tickets.js";
 import TelegramBot from "node-telegram-bot-api";
 import trxScanner from "./services/trxWalletScanner.js";
 import { setBotInstance } from "./config/botInstance.js";
+import { recordPollingError, getPollingEvidence } from "./services/admin/monitoring.js";
 import { setBotIdentity } from "./config/botIdentity.js";
-import app, { PORT, setRuntimeReadiness } from "./server.js";
+import app, { PORT, setRuntimeReadiness, setTelegramReadinessProbe } from "./server.js";
 import { startHooshpayRecoveryCron, stopHooshpayRecoveryCron } from "./services/hooshpay/hooshpayRecoveryCron.js";
 import { startNowPaymentsRecoveryCron, stopNowPaymentsRecoveryCron } from "./services/nowpayments/recovery.js";
 import { startInvoiceCleanupCron, stopInvoiceCleanupCron } from "./services/payments/invoiceCleanup.js";
@@ -169,7 +170,10 @@ export default async function startBot() {
   });
   bot.on("polling_error", (err) => {
     // 409 = another instance is polling with the same token (see README: 1 replica).
-    setRuntimeReadiness({ telegram: false });
+    // Readiness is derived from evidence (getPollingEvidence): failing until a poll succeeds after this error, so /ready
+    // recovers by itself instead of latching at 503 forever.
+    // Feeds the System Health "telegram" check (status/code only; never the error body, which may carry the token URL).
+    recordPollingError({ status: err?.response?.statusCode, code: typeof err?.code === "string" ? err.code : undefined });
     console.error(JSON.stringify({
       service: "telegram",
       level: "error",
@@ -191,6 +195,10 @@ export default async function startBot() {
       }),
     ]);
     setBotIdentity(me);
+    setTelegramReadinessProbe(() => {
+      const evidence = getPollingEvidence(bot);
+      return !evidence.failing && !evidence.stalled;
+    });
     setRuntimeReadiness({ telegram: true });
   } catch (error) {
     await bot.stopPolling().catch(() => {});

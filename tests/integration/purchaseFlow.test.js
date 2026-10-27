@@ -187,25 +187,28 @@ describe("customer wallet purchase flow", () => {
     assert.equal(await WalletPurchase.countDocuments({ telegramId: "4005" }), 1);
   });
 
-  skipIfNoDb("provider insufficient balance/API rejection refunds the wallet exactly once", async () => {
+  skipIfNoDb("provider insufficient balance reserves the order instead of refunding it", async () => {
     wizardMode = "insufficient";
     wizardCalls.length = 0;
     await seedUser("4006", 80_000);
     const bot = makeBotStub();
     const result = await orderService(bot, 4006, 4006, MINI, { purchaseId: purchaseId(4006) });
     const purchase = await WalletPurchase.findOne({ purchaseId: result.purchaseId });
-    assert.equal((await User.findOne({ telegramId: "4006" })).balance, 80_000);
-    assert.equal(purchase.status, "refunded");
-    assert.equal(purchase.refundStatus, "completed");
-    assert.equal(purchase.refundAmount, MINI_PRICE);
-    assert.equal(purchase.refundReason, "PROVIDER_INSUFFICIENT_BALANCE");
-    assert.equal(purchase.walletDebitStatus, "refunded");
-    assert.ok((await User.findOne({ telegramId: "4006" })).refundedPurchaseIds.includes(purchase.purchaseId));
-    assert.match(bot.texts().join("\n"), /به کیف پول شما بازگشت/);
+    assert.equal((await User.findOne({ telegramId: "4006" })).balance, 80_000 - MINI_PRICE, "the debit stays as the reservation");
+    assert.equal(purchase.status, "awaiting_provider");
+    assert.equal(purchase.refundStatus, "none");
+    assert.equal(purchase.walletDebitStatus, "reserved");
+    assert.equal(purchase.errorCode, "PROVIDER_INSUFFICIENT_BALANCE");
+    assert.ok(!(await User.findOne({ telegramId: "4006" })).refundedPurchaseIds.includes(purchase.purchaseId));
+    assert.match(bot.texts().join("\n"), /مبلغ آن از کیف پولتان رزرو شد/);
+    assert.match(bot.texts().join("\n"), /نیازی به ثبت سفارش مجدد نیست/);
 
-    const replayedRefund = await refundPurchaseReservation(purchase, { reason: "DUPLICATE_REFUND_TEST" });
-    assert.equal(replayedRefund.alreadyRefunded, true);
-    assert.equal((await User.findOne({ telegramId: "4006" })).balance, 80_000, "a duplicate refund cannot credit twice");
+    // Only an explicit admin cancellation may release this reservation.
+    await assert.rejects(
+      () => refundPurchaseReservation(purchase, { reason: "NOT_ALLOWED" }),
+      (error) => error.code === "PURCHASE_NOT_REFUNDABLE",
+    );
+    assert.equal((await User.findOne({ telegramId: "4006" })).balance, 80_000 - MINI_PRICE);
     assert.equal(wizardCalls.length, 1);
   });
 

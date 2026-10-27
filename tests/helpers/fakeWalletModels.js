@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 function valuesAtPath(document, path) {
   let values = [document];
   for (const segment of path.split(".")) {
@@ -23,7 +25,7 @@ function matches(document, filter = {}) {
     const values = valuesAtPath(document, key);
     if (condition && typeof condition === "object" && !Array.isArray(condition) && !(condition instanceof Date)) {
       if (Object.hasOwn(condition, "$gte") && !values.some((value) => Number(value) >= Number(condition.$gte))) return false;
-      if (Object.hasOwn(condition, "$lt") && !values.some((value) => new Date(value) < new Date(condition.$lt))) return false;
+      if (Object.hasOwn(condition, "$lt") && !values.some((value) => (typeof condition.$lt === "number" ? Number(value) < condition.$lt : new Date(value) < new Date(condition.$lt)))) return false;
       if (Object.hasOwn(condition, "$ne") && values.some((value) => {
         const list = Array.isArray(value) ? value : [value];
         return list.some((entry) => String(entry) === String(condition.$ne));
@@ -63,7 +65,12 @@ function applyUpdate(document, update) {
   for (const [path, value] of Object.entries(update.$push || {})) {
     const current = valuesAtPath(document, path)[0];
     const list = Array.isArray(current) ? current : [];
-    list.push(value);
+    if (value && typeof value === "object" && Array.isArray(value.$each)) {
+      list.push(...value.$each);
+      if (Number.isInteger(value.$slice) && value.$slice < 0) list.splice(0, Math.max(0, list.length + value.$slice));
+    } else {
+      list.push(value);
+    }
     setPath(document, path, list);
   }
   for (const path of Object.keys(update.$unset || {})) {
@@ -121,6 +128,7 @@ export function makeFakeWalletModels(initialUsers = []) {
         throw error;
       }
       const purchase = {
+        _id: randomBytes(12).toString("hex"),
         status: "reserving",
         walletDebitStatus: "not_debited",
         refundStatus: "none",
@@ -145,6 +153,11 @@ export function makeFakeWalletModels(initialUsers = []) {
       if (!purchase) return { matchedCount: 0, modifiedCount: 0 };
       applyUpdate(purchase, update);
       return { matchedCount: 1, modifiedCount: 1 };
+    },
+    find(filter) {
+      const query = new FakeQuery(() => [...purchases.values()].filter((purchase) => matches(purchase, filter)));
+      query.limit = () => query;
+      return query;
     },
   };
 

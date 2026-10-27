@@ -3,9 +3,13 @@ import WalletPurchase from "../../models/WalletPurchase.js";
 import { getSuccessServiceMessage, guideButtons } from "../../messages/staticMessages.js";
 import escapeHtml from "../../utils/escapeHtml.js";
 import { scheduleUserSpendRecompute } from "../users/userSpend.js";
+import { retryPendingReservedAlerts } from "./reservedAlerts.js";
 
 const NOTIFICATION_CLAIM_MS = 5 * 60_000;
 const RECOVERY_STALE_MS = 5 * 60_000;
+export const NOTIFICATION_MAX_ATTEMPTS = 30;
+const NOTIFICATION_BACKOFF_BASE_MS = 5 * 60_000;
+const NOTIFICATION_BACKOFF_MAX_MS = 24 * 60 * 60_000;
 
 function log(level, message, meta = {}) {
   console[level === "error" ? "error" : level === "warn" ? "warn" : "log"](
@@ -69,7 +73,7 @@ export async function reserveBalance(telegramId, amount, purchaseId, { userModel
  */
 export async function refundPurchaseReservation(
   purchase,
-  { allowProvisioning = false, reason, errorCode, userModel = User, purchaseModel = WalletPurchase } = {}
+  { allowProvisioning = false, allowAwaitingProvider = false, reason, errorCode, userModel = User, purchaseModel = WalletPurchase } = {}
 ) {
   const purchaseId = String(purchase?.purchaseId ?? "");
   const telegramId = String(purchase?.telegramId ?? "");
@@ -81,6 +85,8 @@ export async function refundPurchaseReservation(
     .slice(0, 80) || "PURCHASE_FAILED";
   const allowedStates = ["reserving", "reserved", "refund_pending"];
   if (allowProvisioning) allowedStates.push("provisioning");
+  // Only an explicit admin cancellation may refund an order that is waiting for provider funds.
+  if (allowAwaitingProvider) allowedStates.push("awaiting_provider");
 
   let refundIntent;
   try {
@@ -117,6 +123,15 @@ export async function refundPurchaseReservation(
       throw error;
     }
   }
+
+  // First write wins: a refund's age is measured from its FIRST request, so retries (recovery re-enters this function every
+  // cycle) never reset it. A purchase has exactly one refund lifecycle (refund_pending -> refunded is terminal, see
+  // models/WalletPurchase.js), so there is no second lifecycle that would need a fresh timestamp. Best effort: if this write
+  // is lost, System Health falls back to createdAt and the next retry sets it.
+  await purchaseModel.updateOne(
+    { purchaseId, status: "refund_pending", refundRequestedAt: null },
+    { $set: { refundRequestedAt: new Date() } }
+  ).catch(() => {});
 
   const refundAmount = Number(refundIntent.refundAmount ?? amount);
   if (!Number.isSafeInteger(refundAmount) || refundAmount <= 0 || refundAmount !== amount) {
@@ -303,8 +318,18 @@ async function notifyPurchaseOnce(purchase, bot, user) {
     );
     return true;
   } catch (error) {
+    // Bounded retries with exponential backoff: delivery stays eventual (the service already exists and is never
+    // recreated), but a blocked chat cannot be hammered every recovery cycle. After the cap it stays visible in the
+    // admin recovery queue as "delivery-notification-pending".
+    const attempts = Number(claim.notificationAttempts || 0) + 1;
+    const delay = Math.min(NOTIFICATION_BACKOFF_BASE_MS * 2 ** (attempts - 1), NOTIFICATION_BACKOFF_MAX_MS);
+    await WalletPurchase.updateOne(
+      { _id: claim._id, notificationClaimedAt: now },
+      { $set: { notificationAttempts: attempts, notificationNextAt: new Date(Date.now() + delay) } }
+    ).catch(() => {});
     log("warn", "Purchase delivery notification failed", {
       purchaseId: claim.purchaseId,
+      attempts,
       errorType: error?.name || "TelegramError",
     });
     return false;
@@ -353,15 +378,31 @@ export async function notifyPurchaseRecovery(purchase, bot) {
  * reconciliation; a reservation that never reached the provider is refunded.
  */
 export async function recoverWalletPurchases(bot) {
+  // Orders parked for provider funds are never auto-refunded or auto-created: only their admin alert is retried.
+  await retryPendingReservedAlerts(bot).catch((error) => {
+    log("error", "Reserved-order alert retry failed", { errorType: error?.name || "Error" });
+  });
   const now = new Date();
   const staleAt = new Date(now.getTime() - RECOVERY_STALE_MS);
   const candidates = await WalletPurchase.find({
     $or: [
       { status: { $in: ["reserving", "reserved", "refund_pending", "provisioned"] }, createdAt: { $lt: staleAt } },
-      { status: { $in: ["provisioning", "uncertain", "manual_review"] }, provisioningStartedAt: { $lt: staleAt } },
-      { status: "completed", notificationPending: true },
+      { status: { $in: ["provisioning", "uncertain"] }, provisioningStartedAt: { $lt: staleAt } },
+      // manual_review waits for a human and is not terminal. Recovery's only action on it is a one-time admin alert, so once
+      // an alert exists the order is a no-op here; re-selecting it every cycle would let 50+ unresolved orders fill the
+      // whole oldest-first batch and starve newer recoverable work. They stay in the admin recovery queue untouched.
+      { status: "manual_review", adminAlertedAt: null, provisioningStartedAt: { $lt: staleAt } },
+      {
+        status: "completed",
+        notificationPending: true,
+        // A missing counter/time (orders completed before these fields existed) counts as 0 / due, never as "skip".
+        $and: [
+          { $or: [{ notificationAttempts: null }, { notificationAttempts: { $lt: NOTIFICATION_MAX_ATTEMPTS } }] },
+          { $or: [{ notificationNextAt: null }, { notificationNextAt: { $lte: now } }] },
+        ],
+      },
     ],
-  }).sort({ createdAt: 1 }).limit(50).lean();
+  }).sort({ createdAt: 1, _id: 1 }).limit(50).lean(); // oldest first; _id breaks ties so the batch is deterministic
 
   for (const candidate of candidates) {
     const claimNow = new Date();

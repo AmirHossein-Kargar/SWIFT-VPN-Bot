@@ -20,23 +20,17 @@ export const buildDurationSelectionMarkup = () => {
   };
 };
 
-export const buildDurationPlansMessage = (durationDays, plans = []) => {
+// The plan catalog is shown only as keyboard buttons (keyboards/generatePlanButtons.js); this message never repeats it.
+export const buildDurationPlansMessage = (durationDays) => {
   const option = getDurationOptionByDays(durationDays);
   const durationTitle = option ? `${option.title} (${durationDays} روز)` : `${durationDays} روزه`;
-  const planLines = plans
-    .map((plan) => `• 🔹 ${plan.gig} گیگابایت — ${plan.price.toLocaleString("en-US")} تومان`)
-    .join("\n");
 
   return [
     "🛡️ <b>پلن‌های اختصاصی SWIFT VPN</b>",
     "",
     `مدت اشتراک: <b>${durationTitle}</b>`,
     "",
-    "حجم موردنظرت رو انتخاب کن و با خیال راحت از سرویس استفاده کن.",
-    "",
-    planLines,
-    "",
-    "🔻 برای ادامه، یکی از پلن‌های زیر را انتخاب کنید:",
+    "حجم موردنظرت رو از دکمه‌های زیر انتخاب کن و با خیال راحت از سرویس استفاده کن.",
   ].join("\n");
 };
 

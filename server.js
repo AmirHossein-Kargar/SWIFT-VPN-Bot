@@ -34,6 +34,8 @@ const RATE_LIMIT_PER_MIN = /^\d+$/.test(rateLimitRaw) ? Number(rateLimitRaw) : 6
 const rateBuckets = new Map();
 let httpReady = false;
 let telegramReady = false;
+// Optional live check (installed by startBot.js) so a transient polling error does not latch /ready at 503 for good.
+let telegramProbe = null;
 
 app.use(express.json({
   limit: MAX_PAYLOAD_BYTES,
@@ -343,12 +345,21 @@ app.get("/health", (_req, res) => {
 });
 app.get("/livez", (_req, res) => res.status(200).json({ ok: true }));
 
+function telegramProbeHealthy() {
+  if (!telegramProbe) return true;
+  try { return telegramProbe() !== false; } catch { return false; }
+}
+
+export function setTelegramReadinessProbe(probe) {
+  telegramProbe = typeof probe === "function" ? probe : null;
+}
+
 function dependencyStatus() {
   return {
     http: httpReady,
     mongo: mongoose.connection.readyState === 1,
     redis: isRedisReady(),
-    telegram: telegramReady,
+    telegram: telegramReady && telegramProbeHealthy(),
   };
 }
 

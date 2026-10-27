@@ -29,7 +29,8 @@ const SKIP_DIRS = [/^tests\//, /^node_modules\//, /^web\/public\//, /^\.git\//, 
 
 function walk(dir, acc = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name === ".git" || entry.name === ".arena") continue;
+    // .next is gitignored Next.js build output (browser bundles that reference `self`), not a production module.
+    if (entry.name === "node_modules" || entry.name === ".git" || entry.name === ".arena" || entry.name === ".next") continue;
     const full = join(dir, entry.name);
     if (entry.isDirectory()) walk(full, acc);
     else if (entry.name.endsWith(".js")) acc.push(full);

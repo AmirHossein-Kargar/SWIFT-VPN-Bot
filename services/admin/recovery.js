@@ -64,11 +64,12 @@ async function collectRecoveryCandidates(now) {
       $or: [
         { status: { $in: ["uncertain", "manual_review", "refund_pending"] } },
         { status: "provisioned" },
+        { status: "awaiting_provider" },
         { status: "completed", notificationPending: true },
         { status: "provisioning", provisioningStartedAt: { $lt: new Date(now.getTime() - STALE_PROVISIONING_MS) } },
         { recoveryStatus: "required" },
       ],
-    }).select("purchaseId telegramId amount status provisioningStartedAt provisionedAt completedAt createdAt errorCode retryCount lastRetryAt nextRetryAt recoveryStatus recoveryReason expiresAt").lean().limit(500),
+    }).select("purchaseId telegramId amount status provisioningStartedAt provisionedAt completedAt createdAt errorCode retryCount lastRetryAt nextRetryAt recoveryStatus recoveryReason expiresAt adminAlertPending adminAlertAttempts awaitingProviderSince").lean().limit(500),
   ]);
 
   const items = [];
@@ -91,7 +92,8 @@ async function collectRecoveryCandidates(now) {
   for (const record of trx) items.push(recoveryItem("trx", record, record.balanceCredited === false ? "paid-not-fulfilled" : "manual-review"));
   for (const record of wallet) {
     let kind = "manual-review";
-    if (record.status === "refund_pending") kind = "wallet-refund-pending";
+    if (record.status === "awaiting_provider") kind = record.adminAlertPending ? "awaiting-provider-alert-failed" : "awaiting-provider-funds";
+    else if (record.status === "refund_pending") kind = "wallet-refund-pending";
     else if (record.status === "provisioned") kind = "provisioning-commit-pending";
     else if (record.status === "completed" && record.notificationPending) kind = "delivery-notification-pending";
     else if (record.status === "provisioning") kind = "provisioning-stalled";
