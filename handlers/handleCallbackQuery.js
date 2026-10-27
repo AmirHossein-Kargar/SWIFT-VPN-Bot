@@ -32,6 +32,8 @@ import promptForReceipt from "../paymentHandlers/promptForReceipt.js";
 import { getActiveProducts, getCustomerPlans, getCustomerPlanById } from "../services/plans.js";
 import handleBuyService, { buildDurationPlansMessage } from "../services/buyService/buyService.js";
 import generatePlanButtons from "../keyboards/generatePlanButtons.js";
+import { handleReservedOrderCallback } from "./reservedOrderCallbacks.js";
+import { RESERVED_CALLBACK_PREFIX } from "../services/buyService/reservedAlerts.js";
 import confirmOrder from "../services/buyService/confirmOrder.js";
 import orderService from "../services/buyService/orderService.js";
 import User from "../models/User.js";
@@ -189,6 +191,12 @@ const handleCallbackQueryInner = async (bot, query) => {
 
   // ── Support tickets (sup_*) — answers its own callback query ──────────────
   if (data.startsWith("sup_") && (await handleSupportCallback(bot, query))) return;
+
+  // ── Reserved wallet orders awaiting provider funds (rsv:*) — admin-group only ─
+  if (data.startsWith(RESERVED_CALLBACK_PREFIX)) {
+    await handleReservedOrderCallback(bot, query);
+    return;
+  }
 
   // ── Reconciling an unsettled API purchase (apires:*) — admin-only, audited ─
   if (data.startsWith("apires:")) {
@@ -793,7 +801,7 @@ const handleCallbackQueryInner = async (bot, query) => {
       });
       return;
     }
-    await bot.editMessageText(buildDurationPlansMessage(days, products), {
+    await bot.editMessageText(buildDurationPlansMessage(days), {
       chat_id: chatId,
       message_id: messageId,
       parse_mode: "HTML",

@@ -224,6 +224,12 @@ function timelineFor(provider, record) {
     add("VPN created on WizardXray", record.provisionedAt);
     add("Service delivered to account", record.completedAt);
     add("Wallet reservation refunded", record.refundedAt, record.refundStatus === "completed" ? "success" : "warning", record.refundAmount != null ? `${Number(record.refundAmount).toLocaleString("en-US")} Toman · ${String(record.refundReason || "refund")}` : null);
+    if (record.status === "awaiting_provider") {
+      add("Reserved: awaiting WizardXray wallet funds", record.awaitingProviderSince, "warning", record.adminAlertPending ? "Admin-group alert not delivered yet (retrying)" : "Admin alerted");
+    }
+    for (const item of (Array.isArray(record.events) ? record.events : []).slice(-20)) {
+      add(`State change: ${String(item.type || "event").slice(0, 40)}`, item.at, "done", [item.from, item.to].filter(Boolean).join(" → ") || null);
+    }
     if (record.status === "provisioning" && !record.provisionedAt) events.push({ name: "VPN creation result", at: null, status: "pending", detail: "The panel result may require reconciliation; do not submit another create request." });
     if (record.refundStatus === "pending" && !record.refundedAt) events.push({ name: "Wallet refund pending", at: null, status: "pending", detail: `${Number(record.refundAmount || record.amount || 0).toLocaleString("en-US")} Toman · ${String(record.refundReason || "refund recovery")}` });
   } else {

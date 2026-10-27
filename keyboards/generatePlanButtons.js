@@ -1,8 +1,14 @@
-const formatPlanButtonText = (plan) => {
+// Left-to-right isolate: Telegram picks a base direction per label, so a Persian "تومان" next to digits could flip the
+// visual order. Isolating the whole label pins it to "<volume> | <price>" left to right without affecting other rows.
+const LRI = "⁦";
+const PDI = "⁩";
+
+export const formatPlanButtonText = (plan) => {
+  const price = plan.price.toLocaleString("en-US");
   if (Number.isSafeInteger(plan.gig)) {
-    return `🔹 ${plan.gig} GB | ${plan.price.toLocaleString("en-US")} تومان`;
+    return `${LRI}🔹 ${plan.gig} GB | ${price} تومان${PDI}`;
   }
-  return `${plan.name} | ${plan.price.toLocaleString("en-US")} تومان`;
+  return `${LRI}${plan.name} | ${price} تومان${PDI}`;
 };
 
 const generatePlanButtons = (plans) => {

@@ -107,32 +107,49 @@ describe("purchaseService.purchasePlan", () => {
     }
   });
 
-  test("explicit provider insufficient-balance rejection refunds exactly once", async () => {
+  test("provider insufficient-balance refusal keeps the debit as a reservation (awaiting_provider), not a refund", async () => {
     const models = makeFakeWalletModels([{ telegramId: "7006", balance: 50_000 }]);
     let providerCalls = 0;
-    const reject = Object.assign(new Error("supplier cost must not be exposed"), {
+    const shortage = Object.assign(new Error("supplier cost must not be exposed"), {
       code: "provider_insufficient_balance",
       ambiguous: false,
     });
     const options = serviceOptions(models, {
-      purchaseId: "unit-provider-refund",
-      createService: async () => { providerCalls += 1; throw reject; },
+      purchaseId: "unit-provider-short",
+      createService: async () => { providerCalls += 1; throw shortage; },
     });
     const first = await purchasePlan("7006", "mini", options);
     const replay = await purchasePlan("7006", "mini", options);
-    const purchase = models.purchases.get("unit-provider-refund");
+    const purchase = models.purchases.get("unit-provider-short");
 
-    assert.equal(first.status, "refunded");
-    assert.equal(first.failure, "provider_rejected_refunded");
-    assert.equal(replay.status, "refunded");
+    assert.equal(first.status, "awaiting_provider");
+    assert.equal(first.failure, "awaiting_provider_funds");
+    assert.equal(replay.status, "awaiting_provider");
     assert.equal(replay.replayed, true);
-    assert.equal(models.users.get("7006").balance, 50_000);
-    assert.deepEqual(models.users.get("7006").refundedPurchaseIds, ["unit-provider-refund"]);
-    assert.equal(purchase.refundStatus, "completed");
-    assert.equal(purchase.refundAmount, 25_000);
-    assert.equal(purchase.refundReason, "PROVIDER_INSUFFICIENT_BALANCE");
+    assert.equal(models.users.get("7006").balance, 25_000, "debited once, not refunded");
+    assert.deepEqual(models.users.get("7006").appliedPurchaseReservations, ["unit-provider-short"]);
+    assert.deepEqual(models.users.get("7006").refundedPurchaseIds, []);
+    assert.equal(purchase.refundStatus, "none");
+    assert.equal(purchase.walletDebitStatus, "reserved");
+    assert.equal(purchase.adminAlertPending, true, "admin alert is persisted in the outbox");
+    assert.equal(purchase.events.at(-1).to, "awaiting_provider");
     assert.equal(providerCalls, 1);
     assert.equal(JSON.stringify(first).includes("supplier cost"), false);
+  });
+
+  test("other explicit provider refusals still refund exactly once", async () => {
+    const models = makeFakeWalletModels([{ telegramId: "7016", balance: 50_000 }]);
+    const reject = Object.assign(new Error("refused"), { code: "panel_rejected_request", ambiguous: false });
+    const options = serviceOptions(models, {
+      purchaseId: "unit-provider-refund",
+      createService: async () => { throw reject; },
+    });
+    const first = await purchasePlan("7016", "mini", options);
+    const replay = await purchasePlan("7016", "mini", options);
+    assert.equal(first.status, "refunded");
+    assert.equal(replay.status, "refunded");
+    assert.equal(models.users.get("7016").balance, 50_000);
+    assert.deepEqual(models.users.get("7016").refundedPurchaseIds, ["unit-provider-refund"]);
   });
 
   test("ambiguous timeout and malformed response are held and never replayed", async () => {
@@ -311,15 +328,13 @@ describe("Telegram subscription duration selection UI and navigation", () => {
         const btn = rows[idx][0];
         assert.equal(btn.callback_data, `plan_${plan.id}`);
         assert.ok(Buffer.byteLength(btn.callback_data, "utf8") <= 64);
-        assert.equal(btn.text, `🔹 ${plan.gig} GB | ${plan.price.toLocaleString("en-US")} تومان`);
-        assert.match(editMsg.text, new RegExp(`${plan.gig} گیگابایت — ${plan.price.toLocaleString("en-US")} تومان`));
+        assert.equal(btn.text, `⁦🔹 ${plan.gig} GB | ${plan.price.toLocaleString("en-US")} تومان⁩`);
+        assert.doesNotMatch(editMsg.text, /گیگابایت —/, "the plan list must appear only as keyboard buttons");
+        assert.equal(editMsg.text.includes(plan.price.toLocaleString("en-US")), false);
 
         // Strict customer-facing rule: internal purchaseCost and profit must NEVER appear for this plan
         const costFormatted = internalPlan.purchaseCost.toLocaleString("en-US");
         const profitFormatted = internalPlan.profit.toLocaleString("en-US");
-        const planLine = editMsg.text.split("\n").find((line) => line.includes(`${plan.gig} گیگابایت`)) || "";
-        assert.equal(planLine.includes(costFormatted), false, `plan line must not expose purchaseCost ${costFormatted}`);
-        assert.equal(planLine.includes(profitFormatted), false, `plan line must not expose profit ${profitFormatted}`);
         assert.equal(btn.text.includes(costFormatted), false);
         assert.equal(btn.text.includes(profitFormatted), false);
         assert.doesNotMatch(editMsg.text, /سود|قیمت خرید|purchaseCost|profit|margin/i);

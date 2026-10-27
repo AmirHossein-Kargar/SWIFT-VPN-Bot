@@ -125,6 +125,7 @@ function failureFor(purchase) {
     if (purchase.errorCode === "USER_NOT_FOUND") return "user_not_found";
     return "purchase_failed";
   }
+  if (purchase.status === "awaiting_provider") return "awaiting_provider_funds";
   if (purchase.status === "refunded") return "provider_rejected_refunded";
   if (purchase.status === "refund_pending") return "refund_pending";
   if (["manual_review", "uncertain"].includes(purchase.status)) return "provider_outcome_unknown";
@@ -144,6 +145,36 @@ async function existingPurchaseResult(purchaseModel, purchaseId, telegramId, pla
     throw new PurchaseServiceError("Purchase identifier is already associated with another request", "PURCHASE_ID_CONFLICT");
   }
   return publicResult(existing, plan, { replayed: true, failure: failureFor(existing) });
+}
+
+/** Only an explicit, non-ambiguous panel refusal with the insufficient-balance category qualifies. */
+function isProviderFundsShortage(error) {
+  return error?.code === "provider_insufficient_balance" && error.ambiguous !== true;
+}
+
+const EVENT_LIMIT = 50;
+
+/** provisioning -> awaiting_provider, persisting the admin-alert outbox flag in the same atomic update. */
+async function parkForProviderFunds(purchaseModel, purchaseId) {
+  return purchaseModel.findOneAndUpdate(
+    { purchaseId, status: "provisioning" },
+    {
+      $set: {
+        status: "awaiting_provider",
+        awaitingProviderSince: new Date(),
+        errorCode: "PROVIDER_INSUFFICIENT_BALANCE",
+        recoveryStatus: "none",
+        recoveryReason: null,
+        adminAlertPending: true,
+        adminAlertNextAt: null,
+        adminAlertClaimedAt: null,
+        adminAlertAttempts: 0,
+      },
+      $unset: { recoveryClaimedAt: 1 },
+      $push: { events: { $each: [{ at: new Date(), type: "provider_funds_short", from: "provisioning", to: "awaiting_provider" }], $slice: -EVENT_LIMIT } },
+    },
+    { new: true }
+  );
 }
 
 async function persistReservationState(purchaseModel, purchaseId, telegramId, amount, now) {
@@ -361,6 +392,16 @@ export async function purchasePlan(
     provisioning = current;
   }
 
+  return runProviderCreation({ purchaseModel, userModel, createService, provisioning, plan, purchaseId, telegramId });
+}
+
+/**
+ * Provider half of a purchase. The caller must already own the order in the
+ * `provisioning` state (either the customer flow or an admin claim of an
+ * `awaiting_provider` order); this is the only place that issues the
+ * non-idempotent WizardXray create request.
+ */
+export async function runProviderCreation({ purchaseModel, userModel, createService, provisioning, plan, purchaseId, telegramId }) {
   let providerService;
   try {
     const apiResponse = await createService(plan.gig, plan.days, 0);
@@ -376,6 +417,19 @@ export async function purchasePlan(
         code: errorCode,
       });
       return publicResult(uncertain || provisioning, plan, { failure: "provider_outcome_unknown" });
+    }
+
+    if (isProviderFundsShortage(error)) {
+      // A proven, structured "provider wallet has insufficient funds" refusal means no service was created. The
+      // customer's debit is kept as the reservation and the order waits for an admin to fund the provider wallet.
+      const parked = await parkForProviderFunds(purchaseModel, purchaseId).catch(() => null);
+      if (parked) {
+        log("warn", "WizardXray wallet is short of funds; purchase reserved for admin fulfillment", { purchaseId, userId: telegramId });
+        return publicResult(parked, plan, { failure: "awaiting_provider_funds" });
+      }
+      await markRecoveryRequired(purchaseModel, purchaseId, "AWAITING_PROVIDER_PARK_PENDING");
+      const current = await findPurchase(purchaseModel, purchaseId).catch(() => null);
+      return publicResult(current || provisioning, plan, { failure: "processing" });
     }
 
     try {

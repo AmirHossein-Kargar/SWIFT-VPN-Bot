@@ -246,6 +246,11 @@ describe("downstream consequences of each classification", () => {
       if (expected === "success") {
         assert.equal(first.status, "completed");
         assert.equal(wallet.balance, 500_000 - plan.price);
+      } else if (expected === "definite" && /insufficient balance/.test(name)) {
+        assert.equal(first.status, "awaiting_provider", "a proven provider shortage reserves the order for an admin");
+        assert.equal(first.failure, "awaiting_provider_funds");
+        assert.equal(wallet.balance, 500_000 - plan.price, "the debit is retained as the reservation");
+        assert.deepEqual(wallet.refundedPurchaseIds, [], "a temporary provider shortage is never refunded automatically");
       } else if (expected === "definite") {
         assert.equal(first.status, "refunded", "a proven refusal refunds exactly once");
         assert.equal(first.failure, "provider_rejected_refunded");

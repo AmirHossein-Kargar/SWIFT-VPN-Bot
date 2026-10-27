@@ -96,7 +96,7 @@ export const purchaseScenario = Object.freeze({
     t.equal("insufficient balance leaves the wallet untouched", ds.users.peek({ telegramId: poor }).balance, plan.price - 1);
 
     // ── Definitive provider rejection → exactly-once refund
-    const rejectWizard = createFakeWizard(["reject"]);
+    const rejectWizard = createFakeWizard(["refuse"]);
     const rejected = mockUserId(14);
     await ds.users.create({ telegramId: rejected, balance: plan.price });
     const rejectId = mockId("reject");
@@ -110,6 +110,20 @@ export const purchaseScenario = Object.freeze({
     t.equal("retry does not refund twice", ds.users.peek({ telegramId: rejected }).balance, plan.price);
     t.equal("retry does not re-call the panel", rejectWizard.createCalls(), 1);
     t.equal("rejected order adds no service", ds.users.peek({ telegramId: rejected }).services.length, 0);
+
+    // ── Provider wallet short of funds → reserved for admin fulfillment, never refunded or lost
+    const shortWizard = createFakeWizard(["reject"]);
+    const shortUser = mockUserId(18);
+    await ds.users.create({ telegramId: shortUser, balance: plan.price });
+    const shortId = mockId("short");
+    const shortDeps = { ...deps, createService: shortWizard.create };
+    const shortResult = await purchasePlan(shortUser, plan.id, { purchaseId: shortId, ...shortDeps });
+    t.equal("provider shortage reserves the order", shortResult.status, "awaiting_provider");
+    t.equal("provider shortage keeps the debit reserved", ds.users.peek({ telegramId: shortUser }).balance, 0);
+    t.equal("provider shortage is not refunded", ds.users.peek({ telegramId: shortUser }).refundedPurchaseIds.length, 0);
+    t.equal("provider shortage persists an admin alert", ds.purchases.peek({ purchaseId: shortId })?.adminAlertPending, true);
+    const shortReplay = await purchasePlan(shortUser, plan.id, { purchaseId: shortId, ...shortDeps });
+    t.check("retrying a reserved order is a replay that does not re-call the panel", shortReplay.replayed === true && shortWizard.createCalls() === 1);
 
     // ── Ambiguous provider results are never replayed or auto-refunded
     for (const mode of ["timeout", "malformed"]) {

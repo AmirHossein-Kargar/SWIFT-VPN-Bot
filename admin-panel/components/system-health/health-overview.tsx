@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { stripBasePath } from "@/lib/basePath";
+import { detailRows } from "@/lib/health-details";
 import type { SystemHealth, SystemHealthService } from "@/lib/types";
 import { formatDateTime } from "@/lib/utils";
 
@@ -32,9 +33,25 @@ const SERVICE_LABEL: Record<string, string> = {
   hooshpay: "HooshPay",
   nowpayments: "NOWPayments",
   telegram: "Telegram bot",
+  orders: "Order fulfillment",
   webhook: "Webhook",
   "background-jobs": "Background jobs",
 };
+
+function ServiceDetails({ service }: { service: SystemHealthService }) {
+  const rows = detailRows(service);
+  if (!rows.length) return null;
+  return (
+    <dl className="space-y-1 border-t pt-1.5 text-xs" data-testid={`details-${service.name}`}>
+      {rows.map((row) => (
+        <div key={row.label} className="flex items-center justify-between gap-3">
+          <dt className="text-muted-foreground">{row.label}</dt>
+          <dd className={row.warn ? "font-medium text-warning" : undefined}>{row.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
 
 export function HealthOverview({ health }: { health: SystemHealth }) {
   const router = useRouter();
@@ -102,6 +119,7 @@ export function HealthOverview({ health }: { health: SystemHealth }) {
                   <span className="text-muted-foreground">Last checked</span>
                   <span>{formatDateTime(service.lastCheckedAt)}</span>
                 </div>
+                <ServiceDetails service={service} />
                 {service.error ? <p className="text-xs text-destructive">{service.error}</p> : null}
               </CardContent>
             </Card>

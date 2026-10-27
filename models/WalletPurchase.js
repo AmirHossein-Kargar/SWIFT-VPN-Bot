@@ -3,7 +3,10 @@ import mongoose from "mongoose";
 const ALLOWED_STATUS_TRANSITIONS = Object.freeze({
   reserving: new Set(["reserved", "failed", "refund_pending"]),
   reserved: new Set(["provisioning", "failed", "refund_pending"]),
-  provisioning: new Set(["uncertain", "provisioned", "refund_pending", "manual_review"]),
+  provisioning: new Set(["uncertain", "provisioned", "refund_pending", "manual_review", "awaiting_provider"]),
+  // The provider wallet was proven short of funds: the customer's debit stays reserved. Only an admin claim
+  // (-> provisioning) or an admin cancellation (-> refund_pending) leaves this state; both filter on it atomically.
+  awaiting_provider: new Set(["provisioning", "refund_pending"]),
   uncertain: new Set(["manual_review"]),
   provisioned: new Set(["completed"]),
   refund_pending: new Set(["refunded"]),
@@ -58,7 +61,7 @@ const walletPurchaseSchema = new mongoose.Schema({
   amount: { type: Number, required: true, min: 1, validate: safeInteger },
   status: {
     type: String,
-    enum: ["reserving", "reserved", "provisioning", "uncertain", "provisioned", "completed", "refund_pending", "refunded", "failed", "manual_review"],
+    enum: ["reserving", "reserved", "provisioning", "uncertain", "provisioned", "completed", "refund_pending", "refunded", "failed", "manual_review", "awaiting_provider"],
     default: "reserving",
     index: true,
   },
@@ -94,12 +97,36 @@ const walletPurchaseSchema = new mongoose.Schema({
   refundAmount: { type: Number, default: null, min: 0, validate: (value) => value == null || Number.isSafeInteger(value) },
   refundReason: { type: String, default: null, maxlength: 80 },
   refundedAt: { type: Date, default: null },
+  // When the latest refund attempt was recorded; lets System Health tell an in-flight refund from a stuck one.
+  refundRequestedAt: { type: Date, default: null },
   completedAt: { type: Date, default: null },
   notificationPending: { type: Boolean, default: false },
   notificationClaimedAt: { type: Date, default: null },
   notifiedAt: { type: Date, default: null },
+  notificationAttempts: { type: Number, default: 0, min: 0 },
+  notificationNextAt: { type: Date, default: null },
   recoveryClaimedAt: { type: Date, default: null },
   adminAlertedAt: { type: Date, default: null },
+  // Durable outbox for the admin-group notification of an awaiting_provider order.
+  adminAlertPending: { type: Boolean, default: false },
+  adminAlertClaimedAt: { type: Date, default: null },
+  adminAlertNextAt: { type: Date, default: null },
+  adminAlertAttempts: { type: Number, default: 0, min: 0 },
+  adminAlertMessageId: { type: Number, default: null },
+  awaitingProviderSince: { type: Date, default: null },
+  fulfillmentAttempts: { type: Number, default: 0, min: 0 },
+  fulfillmentClaimedBy: { type: String, default: null, maxlength: 32 },
+  // Bounded, sanitized state-transition history for admin inspection (no secrets, no links).
+  events: {
+    type: [new mongoose.Schema({
+      at: { type: Date, default: Date.now },
+      type: { type: String, maxlength: 40 },
+      actor: { type: String, default: null, maxlength: 32 },
+      from: { type: String, default: null, maxlength: 24 },
+      to: { type: String, default: null, maxlength: 24 },
+    }, { _id: false })],
+    default: [],
+  },
   createdAt: { type: Date, default: Date.now },
 }, { minimize: false });
 
