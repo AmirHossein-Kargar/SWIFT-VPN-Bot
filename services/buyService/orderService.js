@@ -32,6 +32,10 @@ export default async function handlePlanOrder(bot, chatId, userId, planId, conte
       await send(bot, chatId, "❌ این پلن در حال حاضر فعال نیست یا حذف شده است. لطفاً از منوی خرید دوباره انتخاب کنید.");
       return { status: "failed", failure: "invalid_plan" };
     }
+    if (error instanceof PurchaseServiceError && error.code === "CATALOG_UNAVAILABLE") {
+      await send(bot, chatId, "⚠️ فروشگاه موقتاً در دسترس نیست و مبلغی کسر نشد. لطفاً چند دقیقه دیگر دوباره تلاش کنید.");
+      return { status: "failed", failure: "catalog_unavailable" };
+    }
     if (error instanceof PurchaseServiceError && error.code === "PURCHASE_ID_CONFLICT") {
       await send(bot, chatId, "❌ شناسه این سفارش با درخواست دیگری مطابقت دارد. لطفاً خرید تازه‌ای را از منوی پلن‌ها آغاز کنید.");
       return { status: "failed", failure: "purchase_id_conflict" };

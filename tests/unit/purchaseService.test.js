@@ -1,4 +1,5 @@
-import { test, describe } from "node:test";
+import { test, describe, after } from "node:test";
+import { useShippedCatalog, resetCatalog } from "../helpers/shippedCatalog.js";
 import assert from "node:assert/strict";
 import { makeFakeWalletModels } from "../helpers/fakeWalletModels.js";
 import { makeBotStub } from "../helpers/db.js";
@@ -308,7 +309,9 @@ describe("Telegram subscription duration selection UI and navigation", () => {
     }
   });
 
-  test("selecting each of the four durations displays compatible plans, selling prices, confirmation, and never leaks cost or profit", async () => {
+  test("selecting each of the four durations displays compatible plans, selling prices, confirmation, and never leaks cost or profit", async (t) => {
+    useShippedCatalog(); // no MongoDB here: authorization uses an empty injected catalog = shipped plans
+    t.after(resetCatalog);
     for (const durationDays of [30, 90, 180, 365]) {
       const bot = makeBotStub();
       await handleCallbackQuery(bot, makeQuery(`duration_${durationDays}`));

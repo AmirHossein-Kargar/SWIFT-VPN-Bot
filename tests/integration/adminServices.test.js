@@ -165,14 +165,14 @@ describe("product catalog", () => {
     const added = await seedDefaultProducts();
     assert.equal(added, 0);
     const items = await products.listProducts({ actorId: ADMIN });
-    assert.ok(items.length >= 16);
+    assert.ok(items.length >= 25);
     assert.ok(items.every((item) => item.profitToman === item.priceToman - item.costToman));
   });
 
   skip("create/update/duplicate/reorder with strict validation", async () => {
     const created = await products.createProduct({
       actorId: ADMIN, operationId: opId(),
-      input: { name: "Test 5GB weekly", durationDays: 7, trafficGb: 5, priceToman: 9_000, costToman: 2_000, enabled: true, displayOrder: 99 },
+      input: { name: "Test 5GB monthly", durationDays: 30, trafficGb: 5, priceToman: 9_000, costToman: 2_000, enabled: true, displayOrder: 99 },
     });
     const id = created.product.id;
     assert.equal(created.product.profitToman, 7_000);
@@ -182,7 +182,7 @@ describe("product catalog", () => {
       /duration days/
     );
     await assert.rejects(
-      () => products.createProduct({ actorId: ADMIN, operationId: opId(), input: { name: "bad", durationDays: 5, trafficGb: 5, priceToman: -5, costToman: 0 } }),
+      () => products.createProduct({ actorId: ADMIN, operationId: opId(), input: { name: "bad", durationDays: 30, trafficGb: 5, priceToman: -5, costToman: 0 } }),
       /price/
     );
 
@@ -204,7 +204,7 @@ describe("product catalog", () => {
     );
   });
 
-  skip("admin product catalog stays separate from fixed customer checkout plans", async () => {
+  skip("admin products are the customer checkout catalog (legacy plan ids stay resolvable for history)", async () => {
     const { getActiveProducts, getActiveProductById, getCustomerPlanById } = await import("../../services/plans.js");
     const active = await getActiveProducts();
     assert.ok(active.length >= 3);
@@ -212,7 +212,6 @@ describe("product catalog", () => {
     const first = await getActiveProductById(active[0].id);
     assert.equal(first.id, active[0].id);
     assert.deepEqual(getCustomerPlanById("mini"), { id: "mini", name: "Mini", days: 7, gig: 5, price: 25_000 });
-    assert.equal(getCustomerPlanById(active[0].id), null, "editable AdminProduct IDs are not customer plan IDs");
   });
 });
 

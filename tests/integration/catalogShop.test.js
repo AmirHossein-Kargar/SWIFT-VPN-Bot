@@ -1,7 +1,8 @@
 /**
  * Customer shop presentation boundary (REAL callbacks, optionally REAL MongoDB).
- * The customer catalog is the centralized selling-plan configuration and is
- * intentionally independent from the AdminProduct management catalog.
+ * The bot sells from the admin product catalog: the four subscription durations
+ * are fixed, plans and prices come from the products collection, and callback
+ * data only ever carries a plan id that is re-resolved on the server.
  */
 import { test, describe, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -47,11 +48,13 @@ function lastKeyboard(bot) {
   return JSON.stringify(message?.opts?.reply_markup || {});
 }
 
-describe("customer plan menu is server-configured", () => {
+const product = (overrides) => ({ name: "plan", durationDays: 30, trafficGb: 10, priceToman: 20_000, costToman: 0, enabled: true, displayOrder: 0, ...overrides });
+
+describe("customer plan menu is catalog-driven", () => {
   skip("renders only the four subscription durations (30, 90, 180, 365 days)", async () => {
     await AdminProduct.create([
-      { productId: "admin45", name: "Admin 45 day product", durationDays: 45, trafficGb: 20, priceToman: 1, costToman: 0, enabled: true, displayOrder: 0 },
-      { productId: "admin60", name: "Admin 60 day product", durationDays: 60, trafficGb: 20, priceToman: 1, costToman: 0, enabled: true, displayOrder: 1 },
+      product({ productId: "admin45", durationDays: 45 }),
+      product({ productId: "admin60", durationDays: 60, displayOrder: 1 }),
     ]);
     const bot = makeBotStub();
     await handleBuyService(bot, CHAT);
@@ -60,44 +63,47 @@ describe("customer plan menu is server-configured", () => {
     assert.doesNotMatch(keyboard, /duration_45|duration_60/);
   });
 
-  skip("duration and plan selection ignore AdminProduct changes and show central customer prices", async () => {
+  skip("admin edits reach the duration list and the order confirmation", async () => {
     await AdminProduct.create([
-      { productId: "mini", name: "Tampered customer plan", durationDays: 7, trafficGb: 500, priceToman: 1, costToman: 0, enabled: true, displayOrder: 0 },
-      { productId: "extra", name: "Extra admin plan", durationDays: 7, trafficGb: 5, priceToman: 2, costToman: 0, enabled: true, displayOrder: 1 },
+      product({ productId: "svc_a", name: "A", trafficGb: 25, priceToman: 33_333 }),
+      product({ productId: "svc_off", trafficGb: 5, priceToman: 1, enabled: false, displayOrder: 1 }),
+      product({ productId: "svc_arch", trafficGb: 6, priceToman: 1, archivedAt: new Date(), displayOrder: 2 }),
     ]);
 
     const listBot = makeBotStub();
-    await handleCallbackQuery(listBot, query("duration_7"));
+    await handleCallbackQuery(listBot, query("duration_30"));
     const list = lastKeyboard(listBot);
-    assert.match(list, /plan_mini/);
-    assert.doesNotMatch(list, /plan_extra/);
-    assert.match(list, /25,000/);
-    assert.doesNotMatch(list, /Tampered customer plan|500/);
+    assert.match(list, /plan_svc_a/);
+    assert.match(list, /33,333/);
+    assert.doesNotMatch(list, /plan_svc_off|plan_svc_arch/);
 
     const confirmBot = makeBotStub();
-    await handleCallbackQuery(confirmBot, query("plan_mini"));
+    await handleCallbackQuery(confirmBot, query("plan_svc_a"));
     const confirmation = confirmBot.sent.find((entry) => entry.kind === "edit")?.text || "";
-    assert.match(confirmation, /7 روز/);
-    assert.match(confirmation, /5 گیگ/);
-    assert.match(confirmation, /25,000 تومان/);
+    assert.match(confirmation, /30 روز/);
+    assert.match(confirmation, /25 گیگ/);
+    assert.match(confirmation, /33,333 تومان/);
   });
 
-  skip("unknown admin-only products and unsupported durations are rejected", async () => {
+  skip("disabled, archived and unknown products are rejected even through stale callbacks", async () => {
     await AdminProduct.create([
-      { productId: "admin45", name: "Admin 45 day product", durationDays: 45, trafficGb: 20, priceToman: 1, costToman: 0, enabled: true, displayOrder: 0 },
+      product({ productId: "svc_off", enabled: false }),
+      product({ productId: "svc_arch", archivedAt: new Date(), trafficGb: 20, displayOrder: 1 }),
     ]);
-    const disabledPlanBot = makeBotStub();
-    await handleCallbackQuery(disabledPlanBot, query("plan_admin45"));
-    const rejected = disabledPlanBot.sent.some((entry) =>
-      /این پلن در حال حاضر فعال نیست یا حذف شده است/.test(String(entry.text || entry.opts?.text || "")));
-    assert.ok(rejected);
+    for (const data of ["plan_svc_off", "plan_svc_arch", "plan_svc_missing", "confirm_order_svc_off", "confirm_order_svc_arch"]) {
+      const bot = makeBotStub();
+      await handleCallbackQuery(bot, query(data));
+      const rejected = bot.sent.some((entry) =>
+        /این پلن در حال حاضر فعال نیست یا حذف شده است/.test(String(entry.text || entry.opts?.text || "")));
+      assert.ok(rejected, data);
+    }
 
     const durationBot = makeBotStub();
     await handleCallbackQuery(durationBot, query("duration_45"));
     assert.ok(durationBot.sent.some((entry) => /پلن فعالی برای این مدت زمان موجود نیست/.test(String(entry.text || entry.opts?.text || ""))));
   });
 
-  skip("hostile duration values are rejected without touching the plan config", async () => {
+  skip("hostile duration values are rejected without touching the catalog", async () => {
     for (const hostile of ["duration_abc", "duration_-1", "duration_0", "duration_99999", "duration_30;drop"]) {
       const bot = makeBotStub();
       await handleCallbackQuery(bot, query(hostile));

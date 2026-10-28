@@ -2,20 +2,20 @@
  * Public storefront API (read-only, unauthenticated).
  *
  * It exposes exactly the customer catalog the Telegram shop sells from
- * (services/plans.js `customerPlans`, already stripped of cost/profit) plus the
+ * (admin products that are enabled and published, via services/plans.js,
+ * stripped of cost/profit) plus the
  * Telegram checkout hand-off. Checkout itself stays in Telegram: the customer's
  * wallet, payment providers and order identity are bound to their Telegram
  * account, and there is no customer web login to attach an order to.
  */
 import express from "express";
-import { customerPlans, getCustomerPlanById, getSubscriptionDurationOptions } from "../services/plans.js";
+import { getSellablePlans, getSellablePlanById, getSubscriptionDurationOptions } from "../services/plans.js";
 import { readNowPaymentsConfig } from "../services/nowpayments/money.js";
 import { getSupportContactUrl } from "../messages/supportContact.js";
 import { getBotUsername } from "../config/botIdentity.js";
 import { clientIp } from "./adminMiddleware.js";
 
 const router = express.Router();
-const ACTIVE_PLAN_IDS = new Set(customerPlans.map((plan) => plan.id));
 
 router.use((req, res, next) => {
   res.set("X-Content-Type-Options", "nosniff");
@@ -69,9 +69,10 @@ function checkout(env = process.env) {
     : { channel: "telegram", available: false, botUrl: null, botUsername: null };
 }
 
+/** Hand-off link for a plan already confirmed sellable and published by the caller. */
 export function planCheckoutUrl(planId, env = process.env) {
   const username = getBotUsername(env);
-  return username && ACTIVE_PLAN_IDS.has(planId) ? `https://t.me/${username}?start=plan_${planId}` : null;
+  return username && /^[A-Za-z0-9][A-Za-z0-9_-]{0,58}$/.test(String(planId)) ? `https://t.me/${username}?start=plan_${planId}` : null;
 }
 
 function paymentMethods(env = process.env) {
@@ -83,7 +84,8 @@ function paymentMethods(env = process.env) {
   ];
 }
 
-export function buildStoreCatalog(env = process.env) {
+export async function buildStoreCatalog(env = process.env) {
+  const customerPlans = await getSellablePlans({ storefront: true });
   const durations = getSubscriptionDurationOptions()
     .map(({ days, months, title }) => ({ days, months, title }))
     .filter((option) => customerPlans.some((plan) => plan.days === option.days));
@@ -98,30 +100,41 @@ export function buildStoreCatalog(env = process.env) {
   };
 }
 
-router.get("/catalog", (_req, res) => {
-  res.set("Cache-Control", "public, max-age=60");
-  res.json({ ok: true, data: buildStoreCatalog() });
+router.get("/catalog", async (_req, res, next) => {
+  try {
+    res.set("Cache-Control", "public, max-age=60");
+    res.json({ ok: true, data: await buildStoreCatalog() });
+  } catch (error) { next(error); }
 });
 
 /**
  * Server-side validation of a selected plan before hand-off. The response is
  * computed from the catalog; nothing in the request other than the ID is used.
  */
-router.get("/plans/:planId", (req, res) => {
-  const planId = String(req.params.planId || "");
-  const plan = ACTIVE_PLAN_IDS.has(planId) ? getCustomerPlanById(planId) : null;
-  res.set("Cache-Control", "public, max-age=60");
-  if (!plan) return res.status(404).json({ ok: false, error: "plan_not_available" });
-  const checkoutUrl = planCheckoutUrl(plan.id);
-  res.json({
-    ok: true,
-    data: {
-      plan: publicPlan(plan),
-      checkout: { ...checkout(), url: checkoutUrl, available: Boolean(checkoutUrl) },
-    },
-  });
+router.get("/plans/:planId", async (req, res, next) => {
+  try {
+    const planId = String(req.params.planId || "");
+    const plan = await getSellablePlanById(planId, { storefront: true });
+    // Validation results must never be served stale after an admin disables or unpublishes a plan.
+    res.set("Cache-Control", plan ? "public, max-age=60" : "no-store");
+    if (!plan) return res.status(404).json({ ok: false, error: "plan_not_available" });
+    const checkoutUrl = planCheckoutUrl(plan.id);
+    res.json({
+      ok: true,
+      data: {
+        plan: publicPlan(plan),
+        checkout: { ...checkout(), url: checkoutUrl, available: Boolean(checkoutUrl) },
+      },
+    });
+  } catch (error) { next(error); }
 });
 
 router.use((_req, res) => res.status(404).json({ ok: false, error: "not_found" }));
+// Catalog lookups hit the database; fail with a generic body rather than leaking error details to the public.
+// eslint-disable-next-line no-unused-vars
+router.use((error, _req, res, _next) => {
+  res.set("Cache-Control", "no-store");
+  res.status(503).json({ ok: false, error: "catalog_unavailable" });
+});
 
 export default router;

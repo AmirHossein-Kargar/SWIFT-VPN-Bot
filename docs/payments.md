@@ -176,12 +176,22 @@ A receipt photo is posted to the admin group with a **Confirm** button.
 
 ## Buying a service (wallet → VPN)
 
-Customer plans are defined only in `customerPlans` in [`services/plans.js`](../services/plans.js):
-four durations (30, 90, 180 and 365 days), each with several traffic tiers (10–500 GB), with a
-fixed Toman selling price per plan. The request cannot set price, duration or traffic; the
-server resolves the plan ID again at charge time. The admin "Plans & pricing"
-(`AdminProduct`) collection powers management and analytics only and cannot change what a
-customer pays.
+Customer plans come from the admin **Service catalog** (`AdminProduct` collection), seeded at boot from the
+shipped `customerPlans` in [`services/plans.js`](../services/plans.js): four fixed durations (30, 90, 180 and
+365 days), each with several traffic tiers. A product is sellable only when it is enabled, not archived and uses a
+supported duration. The request cannot set price, duration or traffic; the server resolves the plan ID again
+(`getSellablePlanById`) at confirmation, charge and crypto-quote time, so disabled/archived plans cannot be bought
+from stale menus. Orders snapshot name, volume, days and amount, so later edits never rewrite history. The shipped
+catalog is only a fallback when the collection is empty, or for *display* listings when the database is unreachable.
+Authorization (Telegram confirm step, wallet purchase, crypto quote) passes `requireDatabase` and fails closed: a
+database error or missing connection rejects the purchase (`CATALOG_UNAVAILABLE`) and nothing is created or debited.
+Storefront deep links and `/api/store/plans/:id` are advisory hand-offs; the bot re-validates at confirm and charge.
+
+Permanent product deletion is coordinated with order creation: the delete first sets `deleteLockedAt` (which makes
+every purchase lookup refuse the plan), then counts references, then deletes only while the lock is held. A purchase
+re-checks the product (`isProductReferencable`) right after its order record exists and withdraws the not-yet-debited
+order if the product is locked or gone. NOWPayments invoices carry `planId` only as informational metadata (no
+fulfillment reads it), so they are counted as references but not part of the handshake.
 
 ```mermaid
 sequenceDiagram

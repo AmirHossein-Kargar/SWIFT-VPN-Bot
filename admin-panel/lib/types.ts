@@ -178,10 +178,28 @@ export interface AdminProduct {
   priceToman: number;
   costToman: number;
   profitToman: number;
+  /** Available for new purchases (bot and storefront checkout). */
   enabled: boolean;
+  /** Listed on the public storefront. */
+  published: boolean;
+  archived: boolean;
+  archivedAt: string | null;
+  /** Optimistic-concurrency counter; echo it back as `expectedRevision` when saving. */
+  revision: number;
   displayOrder: number;
+  /** False for legacy rows whose duration is not one of the bot's fixed subscription durations. */
+  supportedDuration: boolean;
+  /** Ships with the code: can be archived but never permanently deleted. */
+  system: boolean;
+  /** Orders that reference this product (current page only). */
+  references?: number;
   createdAt: string | null;
   updatedAt: string | null;
+}
+
+export interface AdminProductPage extends PagedResult<AdminProduct> {
+  /** Rows matching the active filters (`total` is the whole catalog). */
+  filteredTotal: number;
 }
 
 export interface AdminVpn {

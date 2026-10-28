@@ -181,6 +181,102 @@ try {
   console.log("  FAIL payment deletion (real backend)\n       " + String(error?.message || error).split("\n").slice(0, 2).join("\n       "));
 }
 
+// ── Real interaction: service catalog lifecycle through the UI -> real API -> real MongoDB ──
+try {
+  const { default: AuditLog } = await import("../../models/AdminAuditLog.js");
+  const shots = process.env.E2E_SHOTS;
+  await (await import("../../services/plans.js")).seedDefaultProducts(); // production seeds the shipped plans at boot
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, baseURL: base });
+  await context.addCookies(["/api/admin", "/panel"].map((path) => ({ name: auth.ADMIN_SESSION_COOKIE, value: session.token, domain: "127.0.0.1", path, httpOnly: true, secure: false, sameSite: "Lax" })));
+  const page = await context.newPage();
+  await page.goto("/panel/products", { waitUntil: "networkidle" });
+  await page.getByText(/\d+ services/).first().waitFor();
+  if (shots) await page.screenshot({ path: `${shots}/catalog-list.png`, fullPage: true });
+
+  // Add a service through the dialog (starts off sale).
+  await page.getByRole("button", { name: "Add service" }).first().click();
+  let dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Name", { exact: true }).fill("UI created plan");
+  await dialog.getByLabel("Traffic (GB)").fill("77");
+  await dialog.getByLabel("Price (Toman)").fill("123000");
+  await dialog.getByLabel("Cost (Toman)").fill("80000");
+  await dialog.getByText("Not for sale.").waitFor();
+  if (shots) await page.screenshot({ path: `${shots}/catalog-add-dialog.png` });
+  await dialog.getByRole("button", { name: "Add service" }).click();
+  await page.getByText('"UI created plan" created.').waitFor({ timeout: 10_000 });
+  const created = await AdminProduct.findOne({ name: "UI created plan" }).lean();
+  assert.ok(created && created.enabled === false && created.published === true && created.durationDays === 30 && created.revision === 0);
+
+  // Search narrows the list and the counter says so.
+  await page.getByLabel("Search services").fill("UI created");
+  await page.getByText(/1 of \d+ services match/).waitFor({ timeout: 10_000 });
+  const row = page.getByRole("row").filter({ hasText: "UI created plan" });
+  await row.getByText("Off sale").waitFor();
+
+  // Put on sale, hide from storefront, and the public API follows.
+  await row.getByRole("button", { name: "Actions for UI created plan" }).click();
+  await page.getByRole("menuitem", { name: "Put on sale" }).click();
+  await row.getByText("On sale").waitFor({ timeout: 10_000 });
+  const publicIds = async () => (await (await fetch(`${base}/api/store/catalog`)).json()).data.plans.map((plan) => plan.id);
+  assert.ok((await publicIds()).includes(created.productId), "on-sale plans reach the public storefront catalog");
+  await row.getByRole("button", { name: "Actions for UI created plan" }).click();
+  await page.getByRole("menuitem", { name: "Hide from storefront" }).click();
+  await row.getByText("Hidden from storefront").waitFor({ timeout: 10_000 });
+  assert.ok(!(await publicIds()).includes(created.productId), "unpublished plans leave the storefront catalog");
+
+  // Edit via dialog: review lists the change, save bumps the revision.
+  await row.getByRole("button", { name: "Actions for UI created plan" }).click();
+  await page.getByRole("menuitem", { name: "Edit", exact: true }).click();
+  dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Price (Toman)").fill("150000");
+  await dialog.getByText(/Price: .* → /).waitFor();
+  await dialog.getByRole("button", { name: "Save changes" }).click();
+  await page.getByText('"UI created plan" updated.').waitFor({ timeout: 10_000 });
+  assert.equal((await AdminProduct.findOne({ productId: created.productId }).lean()).priceToman, 150000);
+
+  // Archive needs confirmation, then the row leaves the default view and shows under Archived.
+  await row.getByRole("button", { name: "Actions for UI created plan" }).click();
+  await page.getByRole("menuitem", { name: "Archive…" }).click();
+  const confirm = page.getByRole("alertdialog");
+  await confirm.getByText(/Existing orders and customers' active VPN services are not affected/).waitFor();
+  if (shots) await page.screenshot({ path: `${shots}/catalog-archive-confirm.png` });
+  await confirm.getByRole("button", { name: "Archive", exact: true }).click();
+  await page.getByText("No services match these filters.").waitFor({ timeout: 10_000 });
+  assert.ok((await AdminProduct.findOne({ productId: created.productId }).lean()).archivedAt);
+
+  // Shipped plans cannot be deleted from the menu; an unreferenced custom plan can.
+  await page.goto("/panel/products?search=s30_10", { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: /Actions for / }).first().click();
+  assert.equal(await page.getByRole("menuitem", { name: /Delete permanently/ }).getAttribute("aria-disabled"), "true");
+  await page.keyboard.press("Escape");
+  await page.goto("/panel/products?status=archived&search=UI%20created", { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: "Actions for UI created plan" }).click();
+  await page.getByRole("menuitem", { name: /Delete permanently/ }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Delete permanently" }).click();
+  await page.getByText('"UI created plan" deleted.').waitFor({ timeout: 10_000 });
+  assert.equal(await AdminProduct.countDocuments({ productId: created.productId }), 0);
+
+  for (const action of ["PRODUCT_CREATED", "PRODUCT_AVAILABILITY_CHANGED", "PRODUCT_UPDATED", "PRODUCT_ARCHIVED", "PRODUCT_DELETED"]) {
+    assert.ok(await AuditLog.countDocuments({ action, status: "succeeded" }), `${action} audited`);
+  }
+  for (const [width, theme] of [[390, "dark"], [768, "light"]]) {
+    const small = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: theme, baseURL: base });
+    await small.addCookies(["/api/admin", "/panel"].map((path) => ({ name: auth.ADMIN_SESSION_COOKIE, value: session.token, domain: "127.0.0.1", path, httpOnly: true, secure: false, sameSite: "Lax" })));
+    const mobile = await small.newPage();
+    await mobile.goto("/panel/products", { waitUntil: "networkidle" });
+    const overflow = await mobile.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    assert.ok(overflow <= 1, `catalog page overflows horizontally at ${width}px by ${overflow}px`);
+    if (shots) await mobile.screenshot({ path: `${shots}/catalog-${width}.png`, fullPage: true });
+    await small.close();
+  }
+  results.passed += 1;
+  console.log("  ok   service catalog through the UI on the real backend (add, search, sale/storefront toggles, edit review, archive confirm, protected + permanent delete, audit, mobile/tablet layout)");
+  await context.close();
+} catch (error) {
+  results.failed.push({ label: "service catalog (real backend)", message: String(error?.message || error).split("\n")[0] });
+  console.log("  FAIL service catalog (real backend)\n       " + String(error?.message || error).split("\n").slice(0, 3).join("\n       "));
+}
+
 // ── Real interaction: add / remove / re-add an admin through the UI -> real API -> real MongoDB ──
 try {
   const { default: AdminAccount } = await import("../../models/AdminAccount.js");

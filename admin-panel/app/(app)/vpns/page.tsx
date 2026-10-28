@@ -28,6 +28,7 @@ export default async function VpnsPage({ searchParams }: { searchParams: Promise
       <nav aria-label="VPN sections" className="flex gap-2">
         <Link href="/vpns" aria-current="page" className={buttonVariants({ variant: "default", size: "sm" })}>Local services</Link>
         <Link href="/vpns/remote" className={buttonVariants({ variant: "outline", size: "sm" })}>Remote clients</Link>
+        <Link href="/products" className={buttonVariants({ variant: "outline", size: "sm" })}>Service catalog</Link>
       </nav>
       <VpnsFilters defaultSearch={search} status={status} />
       <Card>
