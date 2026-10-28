@@ -440,6 +440,22 @@ await failurePath("failure: a hostile hand-off URL from the API is never rendere
   await context.close();
 }
 
+await step("a crafted #fragment (malformed %-escape, markup, huge) never breaks the page or runs script", async () => {
+  for (const hash of ["#%E0%A4%A", "#%", "#%zz", "#<img src=x onerror=alert(1)>", "#" + "a".repeat(5000), "#faq-trial", "#nope"]) {
+    const { context, page } = await open();
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(String(error).slice(0, 120)));
+    await page.goto(`${base}/${hash}`, { waitUntil: "networkidle" });
+    await page.evaluate((h) => { location.hash = h; }, hash);
+    await page.waitForTimeout(150);
+    assert.deepEqual(errors, [], `page errors for ${hash.slice(0, 20)}`);
+    assert.ok(await planButtons(page).count() > 0, `plans still rendered for ${hash.slice(0, 20)}`);
+    assert.equal(await page.locator("img[src='x']").count(), 0, "hash is never rendered as markup");
+    assert.deepEqual(await cspViolations(page), []);
+    await context.close();
+  }
+});
+
 await step("no-JavaScript visitors still get the Persian content, the heading structure and a clear plans notice", async () => {
   const context = await browser.newContext({ javaScriptEnabled: false, locale: "fa-IR" });
   const page = await context.newPage();

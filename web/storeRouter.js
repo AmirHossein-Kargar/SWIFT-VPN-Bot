@@ -20,6 +20,8 @@ const router = express.Router();
 router.use((req, res, next) => {
   res.set("X-Content-Type-Options", "nosniff");
   res.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.set("Cross-Origin-Resource-Policy", "same-origin");
+  if (req.secure) res.set("Strict-Transport-Security", "max-age=15552000");
   if (req.method !== "GET" && req.method !== "HEAD") {
     return res.status(405).set("Allow", "GET, HEAD").json({ ok: false, error: "method_not_allowed" });
   }
@@ -129,7 +131,7 @@ router.get("/plans/:planId", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-router.use((_req, res) => res.status(404).json({ ok: false, error: "not_found" }));
+router.use((_req, res) => res.status(404).set("Cache-Control", "no-store").json({ ok: false, error: "not_found" }));
 // Catalog lookups hit the database; fail with a generic body rather than leaking error details to the public.
 // eslint-disable-next-line no-unused-vars
 router.use((error, _req, res, _next) => {

@@ -42,9 +42,9 @@ after(async () => {
 });
 
 /** Raw GET with an explicit Accept-Encoding and no automatic decoding. */
-function get(path, { encoding } = {}) {
+function get(path, { encoding, headers: extra } = {}) {
   return new Promise((resolve, reject) => {
-    const headers = encoding ? { "accept-encoding": encoding } : {};
+    const headers = { ...(encoding ? { "accept-encoding": encoding } : {}), ...extra };
     const req = http.request({ host: "127.0.0.1", port: server.address().port, path, method: "GET", headers }, (res) => {
       const chunks = [];
       res.on("data", (chunk) => chunks.push(chunk));
@@ -93,6 +93,28 @@ describe("storefront build output is compatible with the strict CSP", { skip: SK
     assert.equal(page.headers["x-frame-options"], "DENY");
     assert.equal(page.headers["x-content-type-options"], "nosniff");
     assert.equal(page.headers["cache-control"], "public, max-age=300");
+  });
+
+  test("public responses carry HSTS only over HTTPS, plus COOP/CORP and a tight CSP", async () => {
+    const plain = await get("/");
+    assert.equal(plain.headers["strict-transport-security"], undefined, "plain HTTP (local dev) is never pinned to HTTPS");
+    const secure = await get("/", { headers: { "x-forwarded-proto": "https" } });
+    assert.equal(secure.headers["strict-transport-security"], "max-age=15552000");
+    assert.doesNotMatch(secure.headers["strict-transport-security"], /includeSubDomains|preload/);
+    assert.equal(secure.headers["cross-origin-opener-policy"], "same-origin");
+    assert.equal(secure.headers["cross-origin-resource-policy"], "same-origin");
+    for (const directive of ["frame-src 'none'", "worker-src 'none'", "manifest-src 'self'", "object-src 'none'", "frame-ancestors 'none'"]) {
+      assert.ok(STORE_CSP.split("; ").includes(directive), directive);
+    }
+    const notFound = await get("/no-such-page", { headers: { "x-forwarded-proto": "https" } });
+    assert.equal(notFound.status, 404);
+    assert.equal(notFound.headers["strict-transport-security"], "max-age=15552000");
+    assert.equal(notFound.headers["referrer-policy"], "strict-origin-when-cross-origin");
+    const api = await get("/api/store/nope", { headers: { "x-forwarded-proto": "https" } });
+    assert.equal(api.status, 404);
+    assert.equal(api.headers["cache-control"], "no-store", "error responses are not cached");
+    assert.equal(api.headers["cross-origin-resource-policy"], "same-origin");
+    assert.equal(api.headers["access-control-allow-origin"], undefined, "no CORS grant on the public API");
   });
 
   test("the theme is applied before first paint by the external script, which sets the shadcn dark class", async () => {
