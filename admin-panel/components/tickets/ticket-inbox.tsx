@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { TicketStatusBadge } from "@/components/tickets/ticket-thread";
 import { formatTicketDateTime, type TicketSummary } from "@/lib/tickets";
@@ -21,6 +22,9 @@ export function TicketInbox({
   onSelect,
   onPage,
   onRetry,
+  selectMode = false,
+  checked,
+  onToggle,
 }: {
   tickets: TicketSummary[] | null;
   selectedId: string | null;
@@ -32,6 +36,10 @@ export function TicketInbox({
   onSelect: (ticketId: string) => void;
   onPage: (page: number) => void;
   onRetry: () => void;
+  /** Bulk-delete selection; only tickets the server marked deletable can be ticked. */
+  selectMode?: boolean;
+  checked?: ReadonlySet<string>;
+  onToggle?: (ticketId: string) => void;
 }) {
   if (tickets === null) {
     return (
@@ -58,13 +66,23 @@ export function TicketInbox({
             const selected = ticket.ticketId === selectedId;
             const unread = selected ? 0 : ticket.unread;
             return (
-              <li key={ticket.ticketId}>
+              <li key={ticket.ticketId} className="flex items-stretch">
+                {selectMode ? (
+                  <label className="flex shrink-0 items-center pl-3" title={ticket.deletable ? undefined : "Only tickets closed more than 72 hours ago can be deleted."}>
+                    <Checkbox
+                      checked={checked?.has(ticket.ticketId) ?? false}
+                      disabled={!ticket.deletable}
+                      onCheckedChange={() => onToggle?.(ticket.ticketId)}
+                      aria-label={`Select ticket ${ticket.ticketId}`}
+                    />
+                  </label>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => onSelect(ticket.ticketId)}
                   aria-current={selected ? "true" : undefined}
                   className={cn(
-                    "flex w-full flex-col gap-1 px-3 py-2.5 text-left transition-colors hover:bg-accent focus-visible:bg-accent",
+                    "flex min-w-0 flex-1 flex-col gap-1 px-3 py-2.5 text-left transition-colors hover:bg-accent focus-visible:bg-accent",
                     selected && "bg-accent"
                   )}
                 >

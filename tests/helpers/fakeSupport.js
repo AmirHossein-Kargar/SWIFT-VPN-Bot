@@ -14,6 +14,8 @@ function matchValue(value, condition) {
         case "$ne": return value !== expected;
         case "$gt": return value > expected;
         case "$lt": return value < expected;
+        case "$lte": return value != null && value <= expected;
+        case "$gte": return value != null && value >= expected;
         case "$nin": return !expected.includes(value);
         case "$in": return expected.includes(value);
         case "$regex": return new RegExp(expected, condition.$options || "").test(String(value ?? ""));
@@ -101,6 +103,11 @@ export function makeFakeModel({ unique = [], defaults = () => ({}) } = {}) {
         } else applyUpdate(doc, update);
       }
       return { matchedCount: hit.length, modifiedCount: hit.length };
+    },
+    async deleteMany(filter) {
+      let deletedCount = 0;
+      for (let i = docs.length - 1; i >= 0; i -= 1) if (matches(docs[i], filter)) { docs.splice(i, 1); deletedCount += 1; }
+      return { deletedCount };
     },
     async deleteOne(filter) {
       const index = docs.findIndex((doc) => matches(doc, filter));

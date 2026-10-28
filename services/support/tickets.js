@@ -33,6 +33,7 @@ import SupportTicket, {
 } from "../../models/SupportTicket.js";
 import SupportTicketMessage from "../../models/SupportTicketMessage.js";
 import { SUPPORT_COPY } from "../../messages/supportCopy.js";
+import { ticketDeletionEligibility } from "./retention.js";
 
 export { TICKET_STATUSES, normalizeTicketStatus };
 
@@ -122,6 +123,8 @@ const ERRORS = Object.freeze({
 let injectedModels = null;
 export function setSupportModelsForTests(deps) { injectedModels = deps; }
 export function clearSupportModelsForTests() { injectedModels = null; }
+/** Model handles (injected in tests) for sibling support services such as deletion.js. */
+export function getSupportModels(deps = {}) { return models(deps); }
 
 function models(deps = {}) {
   const base = injectedModels || {};
@@ -218,6 +221,9 @@ function publicTicket(doc, audience) {
     view.userTelegramId = doc.userTelegramId;
     view.closedBy = doc.closedBy;
     view.closedByAdminId = doc.closedByAdminId ?? null;
+    const verdict = ticketDeletionEligibility(doc);
+    view.deletable = verdict.eligible;
+    view.deletableAt = verdict.eligibleAt;
   }
   return view;
 }

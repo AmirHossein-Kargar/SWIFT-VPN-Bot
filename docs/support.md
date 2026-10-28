@@ -276,3 +276,13 @@ never acknowledged to a customer). Prefer fixing forward.
   new fields `provisional`, `createKey` and `lastMessageId` on tickets, and the index
   `idx_ticket_create_key`. `groupMessageIds` on old messages is kept so old group copies can still be
   recognised; nothing writes it any more.
+
+## Deleting tickets
+
+Closed tickets become **deletable 72 hours after `closedAt`** (the timestamp `changeStatus` stores when a ticket is closed; creation and last-message times never count). Eligibility is a permission only; nothing is ever deleted automatically.
+
+- Legacy closed tickets with no `closedAt` are never deletable (the closing time is not guessed). The startup migration backfills `closedAt` only for old `resolved` tickets, from `updatedAt`; other gaps need a manual `closedAt` fix before those tickets qualify.
+- Closing is final, so a "reopened" ticket cannot exist; any ticket that is not closed is refused.
+- **Single / bulk delete** (any allowlisted admin): `DELETE /api/admin/tickets/:ticketId` and `POST /api/admin/tickets/bulk-delete` (`ticketIds`, at most 20). The ticket row is removed with a conditional delete that re-checks eligibility atomically, then its messages. The response lists deleted, skipped (with reason) and failed tickets. Audit actions: `TICKET_DELETE`, `TICKET_BULK_DELETE` (ids only, never message text).
+- **Clear All Ticket History** (primary owner only): `POST /api/admin/tickets/clear-history` with `confirmation: "CLEAR ALL TICKET HISTORY"`. Deletes every ticket (open included) and its messages in batches of 200, only those created before the run started; `complete: false` is returned if anything remains after a failure, and running it again resumes. Audit action `TICKET_HISTORY_CLEAR`. Users, payments, wallets, subscriptions, admins and audit logs are never touched.
+- Panel: closed ticket header shows **Delete**; the inbox has **Select to delete** and, for the owner, **Clear All Ticket History**.
