@@ -75,7 +75,7 @@ describe("storefront build output is compatible with the strict CSP", { skip: SK
     assert.equal((html.match(/<title\b/g) || []).length, 1, "exactly one title");
     assert.match(html, /<title[^>]*>SWIFT VPN — خرید اشتراک VPN پرسرعت و پایدار<\/title>/);
     assert.equal((html.match(/name="description"/g) || []).length, 1, "exactly one description");
-    for (const needle of ['name="description"', 'property="og:image" content="/og-image.png"', 'name="theme-color"', 'rel="manifest" href="/site.webmanifest"', 'rel="apple-touch-icon"', 'property="og:locale" content="fa_IR"']) {
+    for (const needle of ['name="description"', 'property="og:image" content="https://shop.example.com/og-image.png"', 'name="twitter:image" content="https://shop.example.com/og-image.png"', 'type="application/ld+json"', 'name="theme-color"', 'rel="manifest" href="/site.webmanifest"', 'rel="apple-touch-icon"', 'property="og:locale" content="fa_IR"']) {
       assert.ok(html.includes(needle), `missing ${needle}`);
     }
     assert.ok(html.includes('<link rel="preload" href="/api/store/catalog" as="fetch" crossorigin="anonymous"'), "catalog request starts during the JS download");
@@ -203,6 +203,52 @@ describe("storefront build output is compatible with the strict CSP", { skip: SK
     assert.equal((await get("/health")).status, 200);
   });
 
+  test("robots.txt and sitemap.xml are served: storefront indexable, panels and APIs disallowed, absolute canonical URL", async () => {
+    const robots = await get("/robots.txt");
+    assert.equal(robots.status, 200);
+    assert.match(robots.headers["content-type"], /^text\/plain/);
+    const body = text(robots);
+    for (const line of ["User-agent: *", "Disallow: /panel", "Disallow: /admin", "Disallow: /api/", "Sitemap: https://shop.example.com/sitemap.xml"]) assert.ok(body.includes(line), line);
+    assert.doesNotMatch(body, /^Disallow: \/\s*$/m, "the storefront itself is not blocked");
+
+    const sitemap = await get("/sitemap.xml");
+    assert.equal(sitemap.status, 200);
+    assert.match(sitemap.headers["content-type"], /^application\/xml/);
+    assert.match(text(sitemap), /<loc>https:\/\/shop\.example\.com\/<\/loc>/);
+  });
+
+  test("the font is self-hosted: no render-blocking third-party stylesheet, IRANYekanX is the preloaded primary face and Vazirmatn (OFL) the fallback", async () => {
+    const html = text(await get("/"));
+    assert.doesNotMatch(html, /fonts\.(googleapis|gstatic)\.com/, "no third-party font origin in the page");
+    const preloads = [...html.matchAll(/<link rel="preload" href="(\/store\/fonts\/[^"]+\.woff2)" as="font" type="font\/woff2" crossorigin="anonymous"/gi)].map((m) => m[1]);
+    assert.deepEqual(preloads, ["/store/fonts/iranyekanx-vf.woff2"], "the single variable IRANYekanX file (both scripts, every weight) is the one preload");
+    // The proprietary file is gitignored (public repo): where it is absent the page must still work through the Vazirmatn fallback, so only check serving when it is present.
+    if (existsSync(join(root, "web", "public", "store", "fonts", "iranyekanx-vf.woff2"))) {
+      const font = await get(preloads[0]);
+      assert.equal(font.status, 200, preloads[0]);
+      assert.match(font.headers["content-type"], /^font\/woff2/, preloads[0]);
+      assert.equal(font.body.subarray(0, 4).toString("latin1"), "wOF2", `${preloads[0]} is a real woff2`);
+    }
+    const css = [...html.matchAll(/href="(\/_next\/static\/css\/[^"]+\.css)"/g)].map((m) => m[1]);
+    assert.ok(css.length > 0);
+    const styles = (await Promise.all(css.map(async (href) => text(await get(href))))).join("\n");
+    assert.match(styles, /@font-face\{[^}]*font-family:"?IRANYekanX"?[^}]*\/store\/fonts\/iranyekanx-vf\.woff2/);
+    assert.match(styles, /@font-face\{[^}]*font-family:"?Vazirmatn"?[^}]*\/store\/fonts\/vazirmatn-arabic-wght-normal\.woff2/);
+    assert.match(styles, /font-family:IRANYekanX,Vazirmatn,/, "IRANYekanX first, Vazirmatn as the fallback");
+  });
+
+  test("the Vazirmatn fallback files and their OFL licence are served", async () => {
+    for (const file of ["vazirmatn-arabic-wght-normal.woff2", "vazirmatn-latin-wght-normal.woff2"]) {
+      const font = await get(`/store/fonts/${file}`);
+      assert.equal(font.status, 200, file);
+      assert.equal(font.body.subarray(0, 4).toString("latin1"), "wOF2", `${file} is a real woff2`);
+    }
+    const license = await get("/store/fonts/OFL.txt");
+    assert.equal(license.status, 200, "the OFL license ships with the Vazirmatn font files");
+    assert.match(license.headers["content-type"], /^text\/plain/, "readable in the browser, not downloaded as octet-stream");
+    assert.match(text(license), /SIL OPEN FONT LICENSE/i);
+  });
+
   test("brand assets referenced by the page are served", async () => {
     const html = text(await get("/"));
     const images = [...new Set([...html.matchAll(/src="(\/brand\/[^"]+\.svg)"/g)].map((match) => match[1]))];
@@ -212,7 +258,10 @@ describe("storefront build output is compatible with the strict CSP", { skip: SK
 
   test("the static HTML carries the Persian content (SEO) and no admin or secret material", async () => {
     const html = text(await get("/"));
-    for (const phrase of ["اینترنت آزاد", "پلن‌ها و قیمت‌ها", "خرید در چهار مرحله", "سوالات متداول", "آیا سرویس تست رایگان دارید؟"]) assert.ok(html.includes(phrase), phrase);
+    for (const phrase of ["اینترنت آزاد", "پلن‌ها و قیمت‌ها", "خرید در پنج مرحله", "سوالات متداول", "آیا سرویس تست رایگان دارید؟", "سرویس تست رایگان", "پرداخت کارت به کارت", "پرداخت کریپتو", "روی کدام دستگاه استفاده می‌کنید؟"]) assert.ok(html.includes(phrase), phrase);
+    // Both payment guides and every device guide are in the static HTML (hidden panels still crawlable), not only the selected tab.
+    for (const phrase of ["💳 پرداخت آنلاین کارت به کارت", "🪙 پرداخت با کریپتو", "شبکه را انتخاب کنید", "ویندوز", "macOS"]) assert.ok(html.includes(phrase), phrase);
+    for (const id of ["plans", "how", "payment", "devices", "trial", "features", "faq"]) assert.match(html, new RegExp(`<section[^>]*id="${id}"`), `section #${id}`);
     assert.doesNotMatch(html, /SWIFT Admin|BOT_TOKEN|api[_-]?key|secret/i);
     assert.equal(html.includes("/api/admin"), false, "the public page never references the admin API");
     // Every shipped script chunk, too.
@@ -222,11 +271,25 @@ describe("storefront build output is compatible with the strict CSP", { skip: SK
 });
 
 describe("storefront helpers (no build needed)", () => {
+  test("robots.txt and sitemap.xml never emit relative or unescaped URLs", async () => {
+    const { robotsTxt, sitemapXml } = await import("../../web/spa.js");
+    assert.doesNotMatch(robotsTxt(null), /Sitemap:/, "no sitemap line without a valid public origin");
+    assert.match(robotsTxt("https://a.example/"), /Sitemap: https:\/\/a\.example\/sitemap\.xml\n$/);
+    assert.equal(sitemapXml(null), null);
+    assert.ok(sitemapXml("https://a.example/").includes("<loc>https://a.example/</loc>"));
+    assert.ok(sitemapXml('https://a.example/?a=1&b="2"').includes("&amp;") && !sitemapXml('https://a.example/?a=1&b="2"').includes('"2"'));
+  });
+
   test("injectCanonical works with the legacy marker, with Next.js HTML (no marker) and without a canonical", () => {
     assert.equal(injectCanonical("<head><!--canonical--></head>", null), "<head></head>");
     assert.match(injectCanonical("<head><!--canonical--></head>", "https://a.example/"), /<link rel="canonical" href="https:\/\/a\.example\/"/);
     assert.match(injectCanonical("<head><title>t</title></head>", "https://a.example/"), /<title>t<\/title><link rel="canonical"[^>]+\/>\s*<meta property="og:url"[^>]+\/><\/head>/);
     assert.equal(injectCanonical("<head></head>", null), "<head></head>");
+    const social = '<head><meta property="og:image" content="/og-image.png"/><meta property="og:image:width" content="1200"/><meta name="twitter:image" content="/og-image.png"/></head>';
+    const absolute = injectCanonical(social, "https://a.example/");
+    assert.equal((absolute.match(/content="https:\/\/a\.example\/og-image\.png"/g) || []).length, 2, "og:image and twitter:image become absolute");
+    assert.ok(absolute.includes('og:image:width" content="1200"'), "other og:image:* tags are untouched");
+    assert.equal(injectCanonical(social, null), social, "without a canonical the relative URLs stay as they are");
     assert.ok(!injectCanonical("<head></head>", 'https://a.example/"><script>1</script>').includes("<script>"), "canonical value is escaped");
   });
 

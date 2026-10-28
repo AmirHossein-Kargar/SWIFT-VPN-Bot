@@ -15,7 +15,7 @@ const config: Config = {
   ],
   theme: {
     extend: {
-      fontFamily: { sans: ["Vazirmatn", "Tahoma", "Segoe UI", "system-ui", "sans-serif"] },
+      fontFamily: { sans: ["IRANYekanX", "Vazirmatn", "Tahoma", "Segoe UI", "system-ui", "sans-serif"] },
       colors: {
         border: token("border"),
         "border-strong": token("border-strong"),

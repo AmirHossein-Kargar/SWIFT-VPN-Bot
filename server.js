@@ -374,8 +374,10 @@ app.get("/ready", (_req, res) => {
 app.use("/api/admin", adminRouter);
 app.use("/api/support", supportRouter);
 app.use("/api/store", storeRouter);
-// The in-progress Next.js admin panel (see README for scope); the legacy
-// vanilla-JS panel below still serves everything else at /panel.
+// The Next.js admin panel owns /panel (+ /panel/*) and redirects the earlier
+// names (/next-panel, /panel-next: 308; /admin: 307). Everything else falls
+// through to serveAdminSpa: the storefront, public files, and the legacy
+// vanilla-JS dashboard, which is reachable only as /index.html.
 app.use(nextAdminMiddleware);
 app.use(serveAdminSpa);
 app.use(notFoundHandler);

@@ -58,7 +58,7 @@ export function TabsList({ className, onKeyDown, ...props }: React.HTMLAttribute
   return (
     <div
       role="tablist"
-      className={cn("mx-auto flex w-fit max-w-full flex-wrap justify-center gap-1.5 rounded-2xl border bg-card p-1.5", className)}
+      className={cn("mx-auto flex flex-wrap justify-center gap-1 rounded-2xl border bg-secondary p-1", className)}
       onKeyDown={handleKeyDown}
       {...props}
     />
@@ -80,7 +80,7 @@ export function TabsTrigger({ className, value, ...props }: Omit<React.ButtonHTM
       tabIndex={active ? 0 : -1}
       onClick={() => select(value)}
       className={cn(
-        "min-h-11 min-w-24 rounded-xl px-4 font-bold text-muted-foreground transition-colors hover:text-foreground",
+        "inline-flex min-h-11 items-center justify-center rounded-xl text-center font-bold text-muted-foreground transition-colors hover:text-foreground",
         "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground",
         className
       )}
@@ -89,12 +89,15 @@ export function TabsTrigger({ className, value, ...props }: Omit<React.ButtonHTM
   );
 }
 
-export function TabsContent({ className, value, ...props }: React.HTMLAttributes<HTMLDivElement> & { value: string }) {
+/** `forceMount` keeps inactive panels in the document (hidden), so their text stays in the static HTML for search engines. */
+export function TabsContent({ className, value, forceMount, ...props }: React.HTMLAttributes<HTMLDivElement> & { value: string; forceMount?: boolean }) {
   const { value: selected, baseId } = useTabs();
-  if (selected !== value) return null;
+  const active = selected === value;
+  if (!active && !forceMount) return null;
   return (
     <div
       role="tabpanel"
+      hidden={!active}
       id={`${baseId}-panel-${safeId(value)}`}
       aria-labelledby={`${baseId}-tab-${safeId(value)}`}
       tabIndex={0}

@@ -56,6 +56,34 @@ function assertOwnerActor(actorId) {
   return admin;
 }
 
+/**
+ * Read invoices for the admin lists. `ipnLog` grows with every IPN callback and
+ * is never shown here, so it is left out and the rows are returned as plain
+ * objects instead of hydrated documents. Models that are not Mongoose queries
+ * (test doubles) are awaited as before.
+ *
+ * Plain objects carry no schema defaults, which is deliberate for a record that
+ * lacks a field (only possible for rows written before that field existed or
+ * edited by hand: the app only creates invoices through Mongoose `create`):
+ *  - no `ticker`/`network`: derived from `payCurrency`, not the schema default "TRX";
+ *  - no `createdAt`/`updatedAt`: reported as unknown (null) and sorted last, not
+ *    stamped with the read time, which would also make such a row look like the
+ *    newest one to reconcile;
+ *  - no `balanceCredited`: not credited, as before.
+ * Pinned in tests/integration/custodyLocalInvoices.test.js.
+ */
+async function findInvoiceDocs(invoiceModel, filter = {}, { limit } = {}) {
+  let query = invoiceModel.find(filter);
+  if (typeof query?.select === "function" && typeof query?.lean === "function") {
+    query = query.select("-ipnLog");
+    // Most recently touched first, so the limit keeps the rows the caller ranks first.
+    if (limit) query = query.sort({ updatedAt: -1, createdAt: -1, _id: 1 }).limit(limit);
+    query = query.lean();
+  }
+  const res = await query;
+  return Array.isArray(res) ? res : typeof res?.lean === "function" ? res.lean() : [];
+}
+
 let injectedCustodyDeps = {};
 export function setCustodyDepsForTests(deps = {}) {
   injectedCustodyDeps = deps || {};
@@ -223,6 +251,83 @@ function normalizeLocalInvoiceItem(doc) {
   };
 }
 
+// A credit counts only when `balanceCredited` is the boolean true, like every revenue
+// report (dashboard.js `paidMatch`). Mongoose always stores a boolean, so this only
+// differs for a hand-edited row, and then it fails closed (not counted as credited).
+const FINISHED_CREDITED = { $and: [{ $eq: ["$status", "finished"] }, { $eq: ["$balanceCredited", true] }] };
+const PENDING_LOCAL_STATUSES = ["creating", "pending", "waiting", "confirming", "confirmed", "sending"];
+const WARNING_FILTER = { $or: [{ recoveryStatus: "required" }, { status: "partially_paid" }, { status: "creation_unknown" }] };
+
+function toReconciliationWarning(doc) {
+  return {
+    orderId: doc.orderId,
+    invoiceId: doc.invoiceId || null,
+    paymentId: doc.paymentId || null,
+    userId: String(doc.userId),
+    status: doc.status,
+    payCurrency: doc.payCurrency,
+    amountToman: doc.amountToman,
+    reason: doc.recoveryReason || doc.status,
+    updatedAt: doc.updatedAt || doc.createdAt,
+  };
+}
+
+/**
+ * Counts, the newest deposits and the open reconciliation warnings. Mongoose
+ * models answer with one aggregation and two bounded queries; models without
+ * query support (test doubles) are summarised in memory with the same rules.
+ */
+async function summarizeLocalInvoices(invoiceModel) {
+  if (typeof invoiceModel.aggregate === "function") {
+    const newestFirst = { createdAt: -1, _id: 1 };
+    const [[row], recent, warnings] = await Promise.all([
+      invoiceModel.aggregate([{ $group: {
+        _id: null,
+        finishedCount: { $sum: { $cond: [FINISHED_CREDITED, 1, 0] } },
+        finishedToman: { $sum: { $cond: [FINISHED_CREDITED, { $ifNull: ["$amountToman", 0] }, 0] } },
+        pendingCount: { $sum: { $cond: [{ $and: [{ $not: [FINISHED_CREDITED] }, { $in: ["$status", PENDING_LOCAL_STATUSES] }] }, 1, 0] } },
+        recoveryRequiredCount: { $sum: { $cond: [{ $eq: ["$recoveryStatus", "required"] }, 1, 0] } },
+        underpaidCount: { $sum: { $cond: [{ $or: [{ $eq: ["$status", "partially_paid"] }, { $gt: ["$underpaidAmount", 0] }] }, 1, 0] } },
+      } }]),
+      invoiceModel.find({}).select("-ipnLog").sort(newestFirst).limit(8).lean(),
+      invoiceModel.find(WARNING_FILTER).select("-ipnLog").sort(newestFirst).limit(10).lean(),
+    ]);
+    return {
+      localSummary: {
+        finishedCount: Number(row?.finishedCount || 0),
+        finishedToman: Number(row?.finishedToman || 0),
+        pendingCount: Number(row?.pendingCount || 0),
+        recoveryRequiredCount: Number(row?.recoveryRequiredCount || 0),
+        underpaidCount: Number(row?.underpaidCount || 0),
+      },
+      recentDeposits: recent.map(normalizeLocalInvoiceItem),
+      reconciliationWarnings: warnings.map(toReconciliationWarning),
+    };
+  }
+
+  const docs = await findInvoiceDocs(invoiceModel);
+  const sorted = [...docs].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  const localSummary = { finishedCount: 0, finishedToman: 0, pendingCount: 0, recoveryRequiredCount: 0, underpaidCount: 0 };
+  for (const doc of sorted) {
+    if (doc.status === "finished" && doc.balanceCredited === true) {
+      localSummary.finishedCount += 1;
+      localSummary.finishedToman += Number(doc.amountToman || 0);
+    } else if (PENDING_LOCAL_STATUSES.includes(doc.status)) {
+      localSummary.pendingCount += 1;
+    }
+    if (doc.recoveryStatus === "required") localSummary.recoveryRequiredCount += 1;
+    if (doc.status === "partially_paid" || (doc.underpaidAmount != null && doc.underpaidAmount > 0)) localSummary.underpaidCount += 1;
+  }
+  return {
+    localSummary,
+    recentDeposits: sorted.slice(0, 8).map(normalizeLocalInvoiceItem),
+    reconciliationWarnings: sorted
+      .filter((doc) => doc.recoveryStatus === "required" || doc.status === "partially_paid" || doc.status === "creation_unknown")
+      .slice(0, 10)
+      .map(toReconciliationWarning),
+  };
+}
+
 export async function getCustodyOverview({
   actorId,
   env,
@@ -340,39 +445,7 @@ export async function getCustodyOverview({
 
   if (invoiceModel && typeof invoiceModel.find === "function") {
     try {
-      const docs = await Promise.resolve(invoiceModel.find({})).then((res) =>
-        Array.isArray(res) ? res : typeof res?.lean === "function" ? res.lean() : [],
-      );
-      const sorted = [...docs].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
-      for (const doc of sorted) {
-        if (doc.status === "finished" && doc.balanceCredited) {
-          localSummary.finishedCount += 1;
-          localSummary.finishedToman += Number(doc.amountToman || 0);
-        } else if (["creating", "pending", "waiting", "confirming", "confirmed", "sending"].includes(doc.status)) {
-          localSummary.pendingCount += 1;
-        }
-        if (doc.recoveryStatus === "required") {
-          localSummary.recoveryRequiredCount += 1;
-        }
-        if (doc.status === "partially_paid" || (doc.underpaidAmount != null && doc.underpaidAmount > 0)) {
-          localSummary.underpaidCount += 1;
-        }
-      }
-      recentDeposits = sorted.slice(0, 8).map(normalizeLocalInvoiceItem);
-      reconciliationWarnings = sorted
-        .filter((doc) => doc.recoveryStatus === "required" || doc.status === "partially_paid" || doc.status === "creation_unknown")
-        .slice(0, 10)
-        .map((doc) => ({
-          orderId: doc.orderId,
-          invoiceId: doc.invoiceId || null,
-          paymentId: doc.paymentId || null,
-          userId: String(doc.userId),
-          status: doc.status,
-          payCurrency: doc.payCurrency,
-          amountToman: doc.amountToman,
-          reason: doc.recoveryReason || doc.status,
-          updatedAt: doc.updatedAt || doc.createdAt,
-        }));
+      ({ localSummary, recentDeposits, reconciliationWarnings } = await summarizeLocalInvoices(invoiceModel));
     } catch {
       // Non-fatal if DB is disconnected in unit test mode
     }
@@ -1169,6 +1242,18 @@ export async function verifyCustodyPayout({
   return audited.result;
 }
 
+/** Database form of the status / currency filters applied to normalized invoices. */
+function localInvoiceFilter(statusFilter, currencyFilter) {
+  const clauses = [];
+  if (statusFilter === "recovery-required") clauses.push({ recoveryStatus: "required" });
+  else if (statusFilter === "underpaid") clauses.push({ $or: [{ status: "partially_paid" }, { underpaidAmount: { $gt: 0 } }] });
+  else if (statusFilter === "overpaid") clauses.push({ overpaidAmount: { $gt: 0 } });
+  else if (statusFilter !== "all") clauses.push({ status: statusFilter });
+  // Invoices without a stored currency are shown (and filtered) as TRX.
+  if (currencyFilter) clauses.push(currencyFilter === "trx" ? { $or: [{ payCurrency: "trx" }, { payCurrency: null }, { payCurrency: "" }] } : { payCurrency: currencyFilter });
+  return clauses.length ? { $and: clauses } : {};
+}
+
 export async function getCustodyTransactions({
   actorId,
   query = {},
@@ -1181,11 +1266,28 @@ export async function getCustodyTransactions({
   const currencyFilter = normalizePayCurrency(query.currency) || "";
   const search = parseSearchTerm(query.search).toLowerCase();
 
+  // Without a search term the filters map exactly onto database predicates, so
+  // the database counts and pages instead of the whole collection being loaded.
+  if (!search && typeof invoiceModel?.countDocuments === "function" && typeof invoiceModel.find === "function") {
+    const filter = localInvoiceFilter(statusFilter, currencyFilter);
+    const total = await invoiceModel.countDocuments(filter);
+    const pages = Math.max(1, Math.ceil(total / pageSize));
+    const safePage = Math.min(page, pages);
+    const docs = await invoiceModel.find(filter).select("-ipnLog")
+      .sort({ createdAt: -1, _id: 1 }).skip((safePage - 1) * pageSize).limit(pageSize).lean();
+    return {
+      items: docs.map(normalizeLocalInvoiceItem).filter(Boolean),
+      total,
+      page: safePage,
+      pages,
+      pageSize,
+      knownStatuses: KNOWN_PAYMENT_STATUSES,
+    };
+  }
+
   let docs = [];
   if (invoiceModel && typeof invoiceModel.find === "function") {
-    docs = await Promise.resolve(invoiceModel.find({})).then((res) =>
-      Array.isArray(res) ? res : typeof res?.lean === "function" ? res.lean() : [],
-    );
+    docs = await findInvoiceDocs(invoiceModel);
   }
 
   const items = docs
@@ -1248,17 +1350,16 @@ export async function reconcileNowPaymentsRecords({
     throw new AdminServiceError("NOWPayments is not configured.", { status: 503, code: "not_configured" });
   }
 
+  const candidateLimit = Math.min(50, Math.max(1, Number(limit) || 20));
   let docs = [];
   if (invoiceModel && typeof invoiceModel.find === "function") {
     const filter = orderId ? { orderId: String(orderId).trim() } : {};
-    docs = await Promise.resolve(invoiceModel.find(filter)).then((res) =>
-      Array.isArray(res) ? res : typeof res?.lean === "function" ? res.lean() : [],
-    );
+    docs = await findInvoiceDocs(invoiceModel, filter, { limit: candidateLimit });
   }
 
   const candidates = docs
     .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))
-    .slice(0, Math.min(50, Math.max(1, Number(limit) || 20)));
+    .slice(0, candidateLimit);
 
   const findings = [];
   for (const doc of candidates) {

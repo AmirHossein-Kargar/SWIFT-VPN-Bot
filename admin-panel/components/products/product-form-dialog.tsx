@@ -16,28 +16,8 @@ import { useAdminSession } from "@/components/session-provider";
 import { adminMutate, newOperationId } from "@/lib/adminApi.client";
 import { AdminApiError } from "@/lib/types";
 import type { AdminProduct } from "@/lib/types";
-import { z } from "zod";
-import { SUBSCRIPTION_DURATION_DAYS } from "@/lib/subscription-durations";
+import { productSchema, SUBSCRIPTION_DURATION_DAYS, type ProductFormValues } from "@/lib/form-schemas";
 import { formatNumber, formatToman } from "@/lib/utils";
-
-const productSchema = z.object({
-  name: z.string().trim().min(1, "Name is required").max(120, "Name must be at most 120 characters"),
-  durationDays: z.coerce.number().int().min(1, "Must be at least 1 day").max(3650, "Must be at most 3650 days"),
-  trafficGb: z.coerce.number().int().min(1, "Must be at least 1 GB").max(100_000, "Must be at most 100,000 GB"),
-  priceToman: z.coerce.number().int().min(1, "Price must be positive").max(2_000_000_000, "Price is too large"),
-  costToman: z.coerce.number().int().min(0, "Cost cannot be negative").max(2_000_000_000, "Cost is too large"),
-  enabled: z.boolean(),
-  published: z.boolean(),
-  /** Optional custom identifier, only used when creating a plan. */
-  productId: z
-    .string()
-    .trim()
-    .regex(/^[a-z][a-z0-9_]{2,31}$/, "Use 3–32 lowercase letters, digits or _, starting with a letter")
-    .optional()
-    .or(z.literal("")),
-});
-
-type ProductFormValues = z.infer<typeof productSchema>;
 
 function defaultsFor(product: AdminProduct | null): ProductFormValues {
   return {

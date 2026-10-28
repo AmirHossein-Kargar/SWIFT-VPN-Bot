@@ -84,7 +84,8 @@ async function open({ scheme = "light", width = 1280, stored = {}, route } = {})
 const planButtons = (page) => page.getByRole("button", { name: /^انتخاب پلن/ });
 const cspViolations = (page) => page.evaluate(() => window.__csp);
 const expectedPlans = (days) => catalog.plans.filter((plan) => plan.days === days).length;
-const selectedDays = (page) => page.getByRole("tab", { selected: true }).first().evaluate((el) => Number(el.dataset.value));
+const durationTabs = (page) => page.locator("#plans").getByRole("tab");
+const selectedDays = (page) => page.locator("#plans").getByRole("tab", { selected: true }).first().evaluate((el) => Number(el.dataset.value));
 const faDigits = (value) => new Intl.NumberFormat("fa-IR").format(value);
 
 async function axeCheck(page, label) {
@@ -197,7 +198,7 @@ for (const scheme of ["light", "dark"]) {
   });
   await step("tabs are wired per the WAI-ARIA pattern: roving tabindex, tab↔panel ids, labelled panel", async () => {
     const wiring = await page.evaluate(() => {
-      const tabs = [...document.querySelectorAll('[role="tab"]')];
+      const tabs = [...document.querySelectorAll('#plans [role="tab"]')];
       const panel = document.querySelector('[role="tabpanel"]');
       const selected = tabs.filter((tab) => tab.getAttribute("aria-selected") === "true");
       return {
@@ -220,7 +221,7 @@ for (const scheme of ["light", "dark"]) {
 // ───────────────────────── duration tabs: selection, persistence, RTL keyboard ─────────────────────────
 {
   const { context, page } = await open();
-  const triggers = page.getByRole("tab");
+  const triggers = durationTabs(page);
   await step("duration tabs: switching changes the plans, and the choice is remembered after reload", async () => {
     const count = await triggers.count();
     assert.equal(count, catalog.durations.length);
@@ -229,13 +230,13 @@ for (const scheme of ["light", "dark"]) {
     assert.equal(await planButtons(page).count(), expectedPlans(second));
     assert.equal(await page.evaluate(() => localStorage.getItem("swift.store.duration")), String(second));
     await page.reload({ waitUntil: "networkidle" });
-    assert.equal(await page.getByRole("tab", { selected: true }).first().innerText().then((t) => t.includes(String(faDigits(second)))), true, "saved duration restored");
+    assert.equal(await page.locator("#plans").getByRole("tab", { selected: true }).first().innerText().then((t) => t.includes(String(faDigits(second)))), true, "saved duration restored");
   });
   await step("RTL keyboard: ArrowLeft moves to the next duration, ArrowRight back; Home/End jump", async () => {
     await triggers.nth(0).click();
     await triggers.nth(0).focus();
     // Radix moves focus in a timeout after the keydown, so wait for the expected index instead of reading immediately.
-    const focusIndex = (expected, why) => page.waitForFunction((index) => [...document.querySelectorAll("[role=tab]")].indexOf(document.activeElement) === index, expected, { timeout: 3000 }).catch(() => { throw new Error(`${why}: focus never reached tab ${expected}`); });
+    const focusIndex = (expected, why) => page.waitForFunction((index) => [...document.querySelectorAll("#plans [role=tab]")].indexOf(document.activeElement) === index, expected, { timeout: 3000 }).catch(() => { throw new Error(`${why}: focus never reached tab ${expected}`); });
     await page.keyboard.press("ArrowLeft");
     await focusIndex(1, "ArrowLeft → next in RTL");
     assert.equal(await page.evaluate(() => document.activeElement.getAttribute("aria-selected")), "true", "focus selects (automatic activation)");
@@ -317,7 +318,7 @@ await failurePath("failure: empty catalog → friendly notice, no tabs, no plan 
   route: (r) => (r.request().url().includes("/catalog") ? r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, data: { ...catalog, plans: [], durations: [] } }) }) : r.continue()),
   assertions: async (page) => {
     await page.getByText("در حال حاضر پلنی برای فروش فعال نیست").waitFor();
-    assert.equal(await page.getByRole("tab").count(), 0);
+    assert.equal(await durationTabs(page).count(), 0);
     assert.equal(await planButtons(page).count(), 0);
   },
 });
@@ -387,6 +388,126 @@ await failurePath("failure: a hostile hand-off URL from the API is never rendere
   },
 });
 
+// ───────────────────────── landing sections: guides, devices, FAQ, navigation ─────────────────────────
+{
+  const { context, page } = await open({ width: 1280 });
+  await step("payment guide: card-to-card is the default, the crypto tab swaps the guide, both stay in the DOM", async () => {
+    const tabs = page.locator("#payment").getByRole("tab");
+    assert.equal(await tabs.count(), 2);
+    assert.equal(await tabs.first().getAttribute("aria-selected"), "true");
+    assert.equal(await page.locator("#payment [role=tabpanel]:not([hidden]) h3").count(), 5, "five card-to-card steps");
+    assert.equal(await page.locator("#payment [role=tabpanel][hidden]").count(), 1, "the crypto guide is present but hidden");
+    await tabs.nth(1).click();
+    assert.equal(await page.locator("#payment [role=tabpanel]:not([hidden]) h3").count(), 6, "six crypto steps");
+    const panel = await page.locator("#payment [role=tabpanel]:not([hidden])").innerText();
+    assert.ok(panel.includes("شبکه") && panel.includes("قبل از ارسال حتماً بررسی کنید"), "network warning panel is shown");
+    await tabs.first().focus();
+    await page.keyboard.press("ArrowLeft");
+    await page.waitForFunction(() => document.querySelector("#payment [role=tab][aria-selected=true]")?.textContent.includes("کریپتو"));
+  });
+  await step("payment guide: mockups never contain a real-looking card number or address", async () => {
+    const text = await page.locator("#payment").innerText();
+    assert.doesNotMatch(text, /\b\d{4}[ -]?\d{4}[ -]?\d{4}[ -]?\d{4}\b/, "no 16-digit card number");
+    assert.doesNotMatch(text, /\bT[1-9A-HJ-NP-Za-km-z]{33}\b|\b0x[0-9a-fA-F]{40}\b|\bbc1[0-9a-z]{20,}\b/, "no wallet address");
+  });
+  await step("device guide: selecting a platform changes the instructions; the Telegram guide link is the bot's own", async () => {
+    const tabs = page.locator("#devices").getByRole("tab");
+    assert.equal(await tabs.count(), 4);
+    await tabs.nth(2).click(); // Windows
+    const visible = page.locator("#devices [role=tabpanel]:not([hidden])");
+    assert.ok((await visible.innerText()).includes("ویندوز"));
+    assert.equal(await visible.getByRole("link", { name: /آموزش گام‌به‌گام/ }).getAttribute("href"), "https://t.me/swift_shield/8");
+    await tabs.nth(3).click(); // macOS has no bot guide: no invented link
+    assert.equal(await page.locator("#devices [role=tabpanel]:not([hidden])").getByRole("link").count(), 0);
+  });
+  await step("FAQ: accordion opens/closes, cross-links open their entry, structured data matches the visible questions", async () => {
+    const items = page.locator("#faq details");
+    assert.ok(await items.count() >= 12, "expanded FAQ");
+    await items.first().locator("summary").click();
+    assert.equal(await items.first().evaluate((el) => el.open), true);
+    await items.first().locator("summary").click();
+    assert.equal(await items.first().evaluate((el) => el.open), false);
+    const ld = JSON.parse(await page.locator('script[type="application/ld+json"]').textContent());
+    assert.equal(ld["@type"], "FAQPage");
+    assert.equal(ld.mainEntity.length, await items.count());
+    assert.equal(ld.mainEntity[0].name, await items.first().locator("summary").innerText());
+  });
+  await step("anchors: every header link targets a real section and sections clear the sticky header", async () => {
+    const hrefs = await page.locator("header nav a").evaluateAll((links) => links.map((link) => link.getAttribute("href")));
+    assert.deepEqual(hrefs, ["#plans", "#features", "#payment", "#devices", "#faq"]);
+    for (const href of hrefs) {
+      await page.locator(`header nav a[href="${href}"]`).click();
+      await page.waitForFunction((hash) => location.hash === hash, href);
+      // Smooth scrolling: poll until the target section sits just under the header (or fail after 8 s).
+      const gapOf = (hash) => document.querySelector(hash).getBoundingClientRect().top - document.querySelector("header").getBoundingClientRect().bottom;
+      let gap = Infinity;
+      for (let attempt = 0; attempt < 40 && !(gap >= -2 && gap < 120); attempt += 1) { // smooth scrolling: poll until it lands
+        await page.waitForTimeout(200);
+        gap = await page.evaluate(gapOf, href);
+      }
+      assert.ok(gap >= -2 && gap < 120, `${href} starts just below the header (gap ${Math.round(gap)}, scrollY ${await page.evaluate(() => scrollY)}, top ${await page.evaluate((h) => document.querySelector(h).getBoundingClientRect().top, href)}, headerBottom ${await page.evaluate(() => document.querySelector("header").getBoundingClientRect().bottom)}, hash ${await page.evaluate(() => location.hash)})`);
+    }
+  });
+  await context.close();
+}
+
+{
+  const { context, page } = await open({ width: 375 });
+  await step("mobile menu: opens, lists every section + the bot, closes on Escape and on selection, no overflow", async () => {
+    const button = page.getByRole("button", { name: "باز کردن منو" });
+    assert.equal(await button.getAttribute("aria-expanded"), "false");
+    assert.equal(await page.locator("header nav a").first().isVisible(), false, "desktop nav is hidden on phones");
+    await button.click();
+    const menu = page.locator("#mobile-nav");
+    assert.equal(await menu.locator("a").count(), 5 + 1, "five sections + bot link");
+    assert.equal(await page.getByRole("button", { name: "بستن منو" }).getAttribute("aria-expanded"), "true");
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "detached" });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("aria-controls") === "mobile-nav");
+    await page.getByRole("button", { name: "باز کردن منو" }).click();
+    await menu.getByRole("link", { name: "راهنمای پرداخت" }).click();
+    await menu.waitFor({ state: "detached" });
+    assert.equal(await page.evaluate(() => location.hash), "#payment");
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth) <= 1);
+  });
+  await step("scroll reveal: below-the-fold blocks fade in on scroll, pricing never waits for it", async () => {
+    assert.equal(await page.locator("#plans .reveal-hidden").count(), 0, "plans are never hidden");
+    const below = page.locator("#faq [data-reveal]");
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.reload({ waitUntil: "networkidle" });
+    assert.equal(await below.evaluate((el) => el.classList.contains("reveal-hidden")), true, "starts hidden below the fold");
+    await below.scrollIntoViewIfNeeded();
+    await page.waitForFunction(() => !document.querySelector("#faq [data-reveal]").classList.contains("reveal-hidden"));
+  });
+  await context.close();
+}
+
+{
+  const { context, page } = await open({ width: 320 });
+  await step("320px: no horizontal overflow, no clipped section, payment mockups fit", async () => {
+    await page.evaluate(() => document.querySelectorAll("[data-reveal]").forEach((el) => el.classList.remove("reveal-hidden")));
+    const report = await page.evaluate(() => ({
+      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      wide: [...document.querySelectorAll("main *")].filter((el) => !el.closest(".pointer-events-none") && (el.getBoundingClientRect().right > innerWidth + 1 || el.getBoundingClientRect().left < -1)).slice(0, 5).map((el) => `${el.tagName}.${String(el.className).slice(0, 40)}`),
+    }));
+    assert.equal(report.overflow, 0);
+    assert.deepEqual(report.wide, []);
+  });
+  await context.close();
+}
+
+// Reduced motion: nothing is ever hidden by the reveal script, and decorative loops stop.
+{
+  const context = await browser.newContext({ viewport: { width: 375, height: 800 }, reducedMotion: "reduce", locale: "fa-IR" });
+  const page = await context.newPage();
+  await page.goto(base + "/", { waitUntil: "networkidle" });
+  await step("prefers-reduced-motion: no element is hidden for reveal and the connection packets are off", async () => {
+    assert.equal(await page.locator(".reveal-hidden").count(), 0);
+    assert.equal(await page.locator(".flow-packet").first().evaluate((el) => getComputedStyle(el).display), "none");
+  });
+  await context.close();
+}
+
 // ───────────────────────── SEO + structure ─────────────────────────
 {
   const { context, page } = await open();
@@ -397,7 +518,7 @@ await failurePath("failure: a hostile hand-off URL from the API is never rendere
         title: document.title,
         description: meta('meta[name="description"]'),
         canonical: document.querySelector('link[rel="canonical"]')?.href,
-        ogUrl: meta('meta[property="og:url"]'), ogImage: meta('meta[property="og:image"]'), ogLocale: meta('meta[property="og:locale"]'),
+        ogUrl: meta('meta[property="og:url"]'), ogLocale: meta('meta[property="og:locale"]'),
         icons: [...document.querySelectorAll('link[rel~="icon"], link[rel="apple-touch-icon"], link[rel="manifest"]')].map((l) => l.getAttribute("href")),
         h1: document.querySelectorAll("h1").length,
         h2: [...document.querySelectorAll("h2")].map((h) => h.textContent),
@@ -410,17 +531,22 @@ await failurePath("failure: a hostile hand-off URL from the API is never rendere
     assert.ok(seo.description && seo.description.length > 60);
     assert.equal(seo.canonical, "https://shop.example.com/");
     assert.equal(seo.ogUrl, "https://shop.example.com/");
-    assert.equal(seo.ogImage, "/og-image.png");
+    // Crawlers read the server HTML (React re-renders <Head> client-side with the site-relative path), so assert on the raw response.
+    const raw = await (await fetch(`${base}/`)).text();
+    assert.match(raw, /<meta property="og:image" content="https:\/\/shop\.example\.com\/og-image\.png"/, "social image URL is absolute in the served HTML");
+    assert.match(raw, /<meta name="twitter:image" content="https:\/\/shop\.example\.com\/og-image\.png"/);
     assert.equal(seo.ogLocale, "fa_IR");
     assert.deepEqual([...seo.icons].sort(), ["/apple-touch-icon.png", "/favicon.ico", "/favicon.svg", "/site.webmanifest"]);
     assert.equal(seo.h1, 1);
-    assert.deepEqual(seo.h2, ["پلن‌ها و قیمت‌ها", "خرید در چهار مرحله", "سوالات متداول"]);
+    assert.deepEqual(seo.h2, ["پلن‌ها و قیمت‌ها", "خرید در پنج مرحله", "شارژ کیف پول: کارت‌به‌کارت یا ارز دیجیتال", "روی کدام دستگاه استفاده می‌کنید؟", "سرویس تست رایگان", "آنچه از این سرویس انتظار دارید", "سوالات متداول"]);
     assert.ok(seo.landmarks[0] >= 1 && seo.landmarks[1] === 1 && seo.landmarks[2] === 1 && seo.landmarks[3] >= 1);
     assert.ok(seo.skipLink && seo.trialDetails);
   });
   await step("hero 'free trial' link opens the FAQ entry; trial bot link and footer links appear from the live catalog", async () => {
-    await page.getByRole("link", { name: "سرویس تست رایگان" }).click();
-    await page.waitForFunction(() => document.querySelector("details#faq-trial")?.open === true);
+    await page.locator("[aria-labelledby=hero-title]").getByRole("link", { name: "سرویس تست رایگان" }).click();
+    await page.waitForFunction(() => location.hash === "#trial");
+    assert.equal(await page.locator("#trial").getByRole("link", { name: "دریافت سرویس تست رایگان" }).getAttribute("href"), catalog.checkout.botUrl, "trial CTA opens the bot");
+    await page.locator("details#faq-trial summary").click();
     const bot = page.locator("details#faq-trial").getByRole("link", { name: "باز کردن ربات" });
     assert.equal(await bot.getAttribute("href"), catalog.checkout.botUrl);
     assert.equal(await page.locator("footer").getByRole("link", { name: "ربات تلگرام" }).getAttribute("href"), catalog.checkout.botUrl);
@@ -428,7 +554,7 @@ await failurePath("failure: a hostile hand-off URL from the API is never rendere
   await step("payment methods and the Persian-calendar year come from the client after hydration", async () => {
     const chips = await page.locator("#how [aria-label='روش‌های پرداخت فعال']").innerText();
     for (const method of catalog.paymentMethods.filter((m) => m.available && ["hooshpay", "crypto"].includes(m.id))) assert.ok(chips.length > 0, method.id);
-    assert.match(await page.locator("footer p").innerText(), /©\s*[۰-۹]{4}/);
+    assert.match(await page.locator("footer p", { hasText: "©" }).innerText(), /©\s*[۰-۹]{4}/);
   });
   await step("skip link is the first tab stop and moves focus to <main>", async () => {
     await page.goto(base + "/", { waitUntil: "networkidle" }); // fresh page: no earlier focus or #fragment
@@ -461,7 +587,7 @@ await step("no-JavaScript visitors still get the Persian content, the heading st
   const page = await context.newPage();
   await page.goto(base + "/");
   const text = await page.locator("body").innerText();
-  for (const phrase of ["اینترنت آزاد", "پلن‌ها و قیمت‌ها", "خرید در چهار مرحله", "سوالات متداول", "جاوااسکریپت"]) assert.ok(text.includes(phrase), phrase);
+  for (const phrase of ["اینترنت آزاد", "پلن‌ها و قیمت‌ها", "خرید در پنج مرحله", "سوالات متداول", "جاوااسکریپت"]) assert.ok(text.includes(phrase), phrase);
   await context.close();
 });
 

@@ -11,6 +11,33 @@
  * backgrounds in both themes (verified with axe-core in a real browser). No blue, purple,
  * or cyan anywhere. Dark surfaces are layered on the brand's Vault Black.
  */
+/* Primary face IRANYekanX (proprietary, fontiran.com) with Vazirmatn (OFL) as fallback, both served from web/public/store/fonts by Express (same origin).
+ * IRANYekanX needs a confirmed web licence before it is published (not confirmed yet, see docs/storefront.md); the woff2 is gitignored. */
+@font-face {
+  font-family: "IRANYekanX";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url(/store/fonts/iranyekanx-vf.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: "Vazirmatn";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url(/store/fonts/vazirmatn-arabic-wght-normal.woff2) format("woff2");
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1, U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC;
+}
+@font-face {
+  font-family: "Vazirmatn";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url(/store/fonts/vazirmatn-latin-wght-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 @layer base {
   :root {
     --background: 0 0% 98%;
@@ -96,6 +123,24 @@
 .brand-on-dark { display: none; }
 .dark .brand-on-light { display: none; }
 .dark .brand-on-dark { display: inline-block; }
+
+/* System-health ECG: a bright 30% window sweeps along the (faint) full waveform. With reduced motion the full trace is simply drawn bright and still. */
+@media (prefers-reduced-motion: no-preference) {
+  .ecg-sweep {
+    stroke-dasharray: 30 70;
+    animation: ecg-sweep 2.4s linear infinite;
+  }
+  .ecg-sweep-slow {
+    animation-duration: 4s;
+  }
+  @keyframes ecg-sweep {
+    from { stroke-dashoffset: 30; }
+    to { stroke-dashoffset: -100; }
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ecg-sweep { stroke-dasharray: none; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

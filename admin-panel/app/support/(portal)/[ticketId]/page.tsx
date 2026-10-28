@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ArrowRight } from "lucide-react";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 
@@ -28,7 +29,7 @@ export default async function CustomerTicketPage({ params }: { params: Promise<{
 
   return (
     <div className="space-y-4">
-      <Link href="/support" className="text-sm text-muted-foreground hover:underline">→ بازگشت به تیکت‌های من</Link>
+      <Link href="/support" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:underline"><ArrowRight className="size-4" aria-hidden="true" />بازگشت به تیکت‌های من</Link>
       <Card>
         <CardHeader className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">

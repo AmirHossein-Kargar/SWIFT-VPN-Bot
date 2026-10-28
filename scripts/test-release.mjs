@@ -11,9 +11,9 @@
  * Then runs `node --test` with REQUIRE_MONGO_TESTS=1 and REQUIRE_REDIS_TESTS=1 (unavailable => failure, not skip) and exits
  * non-zero on any failure OR any skipped test: a skip is "not verified", never "passed".
  */
-import { spawn } from "node:child_process";
 import mongoose from "mongoose";
 import { createClient } from "redis";
+import { runTests } from "./run-tests.mjs";
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 const SYSTEM_DBS = new Set(["admin", "config", "local"]);
@@ -62,10 +62,7 @@ try {
 }
 
 console.log(`test:release targets: MongoDB ${mongoUrl.host} (disposable, db "${dbName}"), Redis ${redisUrl.host} (empty). Skips are treated as failures.`);
-const child = spawn(process.execPath, ["--test", "tests/**/*.test.js"], {
-  stdio: ["ignore", "pipe", "inherit"],
-  env: { ...process.env, REQUIRE_MONGO_TESTS: "1", REQUIRE_REDIS_TESTS: "1" },
-});
+const child = runTests([], { ...process.env, REQUIRE_MONGO_TESTS: "1", REQUIRE_REDIS_TESTS: "1" });
 let output = "";
 child.stdout.on("data", (chunk) => { output += chunk; process.stdout.write(chunk); });
 child.on("close", (code) => {

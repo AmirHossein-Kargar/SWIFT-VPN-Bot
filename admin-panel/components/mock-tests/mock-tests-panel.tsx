@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ChevronDown, FlaskConical, Play, RefreshCw } from "lucide-react";
+import { Check, ChevronDown, FlaskConical, Minus, Play, RefreshCw, X } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -17,7 +17,7 @@ import { adminGet, adminMutate } from "@/lib/adminApi.client";
 import { describeError } from "@/lib/errors";
 import { formatDuration, isGenuinePass, normalizeListing, runBlockedReason, runDurationMs } from "@/lib/mockTests";
 import type { MockTestRunReport, MockTestsListing, MockScenarioResult } from "@/lib/types";
-import { formatDateTime } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
 
 // Scenarios run sequentially on the server; allow a generous ceiling, then
 // tell the admin the outcome is unknown rather than leaving a spinner forever.
@@ -266,8 +266,8 @@ function ScenarioDetail({ scenario }: { scenario: MockScenarioResult }) {
             <ul className="mt-2 space-y-1">
               {assertions.map((assertion, index) => (
                 <li key={`${assertion.name}-${index}`} className="flex gap-2 text-xs">
-                  <span className={assertion.status === "pass" ? "text-success" : assertion.status === "fail" ? "text-destructive" : "text-muted-foreground"}>
-                    {assertion.status === "pass" ? "✓" : assertion.status === "fail" ? "✗" : "–"}
+                  <span className={cn("mt-px flex size-4 shrink-0 items-center justify-center", assertion.status === "pass" ? "text-success" : assertion.status === "fail" ? "text-destructive" : "text-muted-foreground")}>
+                    {assertion.status === "pass" ? <Check className="size-3.5" aria-label="Passed" /> : assertion.status === "fail" ? <X className="size-3.5" aria-label="Failed" /> : <Minus className="size-3.5" aria-label="Skipped" />}
                   </span>
                   <span>
                     {assertion.name}

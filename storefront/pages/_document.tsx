@@ -11,9 +11,8 @@ export default function Document() {
     <Html lang="fa" dir="rtl" className="dark" data-theme="dark">
       <Head>
         <script src="/store/theme-init.js" />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
-        <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+        {/* Self-hosted font (see globals.css). Fonts are always fetched in CORS mode, so the preload needs crossOrigin. */}
+        <link rel="preload" href="/store/fonts/iranyekanx-vf.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
       </Head>
       <body>
         <Main />

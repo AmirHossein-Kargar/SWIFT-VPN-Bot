@@ -188,7 +188,8 @@ describe("HTML security headers (clickjacking and caching)", () => {
     const page = await call("GET", "/");
     assert.match(page.text, /src="\/brand\/logo-horizontal\.svg"/);
     assert.match(page.text, /src="\/brand\/logo-horizontal-on-dark\.svg"/);
-    assert.match(page.text, /property="og:image" content="\/og-image\.png"/);
+    // Absolute when WEBHOOK_BASE_URL provides an origin (crawlers need that), site-relative otherwise.
+    assert.match(page.text, /property="og:image" content="(?:https?:\/\/[^"]+)?\/og-image\.png"/);
     assert.match(page.text, /rel="manifest" href="\/site\.webmanifest"/);
     // Judge the stylesheet(s) the live page really links (hashed when the Next.js build is installed).
     const hrefs = [...page.text.matchAll(/<link[^>]+rel="stylesheet"[^>]+href="(\/[^"]+\.css)"/g)].map((match) => match[1]);

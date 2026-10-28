@@ -1,0 +1,339 @@
+{
+  "$comment": "Change-impact map for scripts/check-context.mjs. Each area lists the source globs it owns and the context files to re-check when they change. impact=high areas trigger the Stop-hook reminder; low areas are only reported. optional=true areas may match no file yet. mayBeAbsent lists generated, ignored or not-yet-created paths that docs may name. Update it in the same edit that adds, renames or removes a module (see CLAUDE.md, Engineering context maintenance).",
+  "contextFiles": [
+    "CLAUDE.md",
+    ".claude/rules/*.md",
+    ".claude/skills/*/SKILL.md",
+    ".claude/agents/*.md",
+    ".claude/context-map.json"
+  ],
+  "humanDocs": [
+    "README.md",
+    "DEPLOYMENT_CHECKLIST.md",
+    "docs/*.md"
+  ],
+  "mayBeAbsent": [
+    ".claude/agents",
+    ".claude/_generated",
+    ".git/claude-context-state.json",
+    "admin-panel/.next",
+    "storefront/.next",
+    "web/public/_next",
+    "web/public/storefront.html",
+    "admin-panel/tsconfig.tsbuildinfo",
+    ".env",
+    "sessions",
+    ".git/info/privacy-blocklist"
+  ],
+  "areas": [
+    {
+      "id": "money-paths",
+      "impact": "high",
+      "summary": "Wallet credit, top-ups, purchases, refunds, provider webhooks and recovery",
+      "globs": [
+        "services/hooshpay/**",
+        "services/nowpayments/**",
+        "services/payments/**",
+        "services/pricing/**",
+        "services/buyService/**",
+        "services/walletCredit.js",
+        "services/trxWalletScanner.js",
+        "services/createTestService.js",
+        "services/manualFulfillment.js",
+        "paymentHandlers/**",
+        "api/**",
+        "handlers/reservedOrderCallbacks.js"
+      ],
+      "review": [
+        "docs/payments.md",
+        "docs/reserved-orders.md",
+        ".claude/rules/money-paths.md",
+        ".claude/skills/swift-audit/SKILL.md",
+        ".claude/skills/swift-test/SKILL.md"
+      ]
+    },
+    {
+      "id": "persistence",
+      "impact": "high",
+      "summary": "Mongoose models, unique indexes, index migrations, Redis leases",
+      "globs": [
+        "models/**",
+        "config/db.js",
+        "config/mongoIndexMigration.js",
+        "config/redisClient.js",
+        "config/sessionStore.js",
+        "services/jobLease.js",
+        "services/redisLease.js"
+      ],
+      "review": [
+        "docs/payments.md",
+        "docs/operations.md",
+        ".claude/rules/money-paths.md",
+        "CLAUDE.md"
+      ]
+    },
+    {
+      "id": "catalog",
+      "impact": "high",
+      "summary": "AdminProduct catalog that drives checkout, storefront and quotes",
+      "globs": [
+        "services/plans.js",
+        "services/admin/products.js",
+        "keyboards/generatePlanButtons.js",
+        "admin-panel/components/products/**"
+      ],
+      "review": [
+        "docs/admin.md",
+        "docs/payments.md",
+        ".claude/rules/money-paths.md"
+      ]
+    },
+    {
+      "id": "admin-security",
+      "impact": "high",
+      "summary": "Admin auth, sessions, CSRF, authorization, audit log, admin API",
+      "globs": [
+        "services/admin/auth.js",
+        "services/admin/authorization.js",
+        "services/admin/audit.js",
+        "services/admin/throttle.js",
+        "services/admin/adminRegistry.js",
+        "services/admin/validation.js",
+        "web/adminRouter.js",
+        "web/adminMiddleware.js",
+        "web/nextAdminMiddleware.js",
+        "utils/auth.js",
+        "utils/adminStepSession.js",
+        "handlers/admin/panel.js"
+      ],
+      "review": [
+        "docs/admin.md",
+        ".claude/rules/security-privacy.md",
+        ".claude/skills/swift-audit/SKILL.md"
+      ]
+    },
+    {
+      "id": "admin-features",
+      "impact": "low",
+      "summary": "Admin services and dashboard screens that do not change trust boundaries",
+      "globs": [
+        "services/admin/**",
+        "handlers/admin/**",
+        "admin-panel/**"
+      ],
+      "review": [
+        "docs/admin.md"
+      ]
+    },
+    {
+      "id": "support",
+      "impact": "high",
+      "summary": "Support ticket lifecycle, customer portal auth, attachments, retention",
+      "globs": [
+        "services/support/**",
+        "services/admin/tickets.js",
+        "web/supportRouter.js",
+        "handlers/support/**",
+        "handlers/supportMessageHandler.js",
+        "handlers/message/handleSupport.js",
+        "models/SupportTicket.js",
+        "models/SupportTicketMessage.js"
+      ],
+      "review": [
+        "docs/support.md",
+        ".claude/skills/swift-audit/SKILL.md"
+      ]
+    },
+    {
+      "id": "storefront",
+      "impact": "high",
+      "summary": "Public storefront build, serving, CSP and the Telegram hand-off",
+      "globs": [
+        "storefront/**",
+        "web/storeRouter.js",
+        "web/spa.js",
+        "scripts/build-storefront.mjs",
+        "web/public/store.html",
+        "web/public/store/**"
+      ],
+      "review": [
+        "docs/storefront.md",
+        ".claude/rules/frontend.md"
+      ]
+    },
+    {
+      "id": "startup-runtime",
+      "impact": "high",
+      "summary": "Process startup order, HTTP routes, health/readiness, crons, shutdown",
+      "globs": [
+        "bot.js",
+        "startBot.js",
+        "server.js",
+        "config/startupDiagnostics.js",
+        "config/botInstance.js",
+        "config/botIdentity.js",
+        "services/admin/monitoring.js",
+        "scripts/preflight.js"
+      ],
+      "review": [
+        "CLAUDE.md",
+        "README.md",
+        "docs/deployment.md",
+        "docs/operations.md"
+      ]
+    },
+    {
+      "id": "configuration",
+      "impact": "high",
+      "summary": "Environment variables, aliases and their documentation",
+      "globs": [
+        "config/env.js",
+        ".env.example"
+      ],
+      "review": [
+        "docs/configuration.md",
+        "README.md"
+      ]
+    },
+    {
+      "id": "package-scripts",
+      "impact": "high",
+      "summary": "npm scripts, engines and toolchain (dependency-only edits are low impact)",
+      "globs": [
+        "package.json"
+      ],
+      "review": [
+        "CLAUDE.md",
+        "README.md",
+        "docs/testing.md",
+        ".claude/skills/swift-test/SKILL.md"
+      ]
+    },
+    {
+      "id": "test-infra",
+      "impact": "high",
+      "summary": "Test runners, DB/Redis helpers, release gate, browser suites",
+      "globs": [
+        "scripts/run-tests.mjs",
+        "scripts/test-release.mjs",
+        "tests/helpers/**",
+        "tests/e2e/**"
+      ],
+      "review": [
+        "CLAUDE.md",
+        "docs/testing.md",
+        ".claude/skills/swift-test/SKILL.md"
+      ]
+    },
+    {
+      "id": "privacy-tooling",
+      "impact": "high",
+      "summary": "Sensitive-data scanner, git hooks, ignore rules",
+      "globs": [
+        "scripts/check-sensitive.mjs",
+        ".githooks/**",
+        ".gitignore"
+      ],
+      "review": [
+        "docs/privacy.md",
+        ".claude/rules/security-privacy.md",
+        ".claude/skills/swift-audit/SKILL.md"
+      ]
+    },
+    {
+      "id": "context-tooling",
+      "impact": "high",
+      "summary": "The drift checker and its hook wiring",
+      "globs": [
+        "scripts/check-context.mjs",
+        ".claude/settings.json"
+      ],
+      "review": [
+        "CLAUDE.md"
+      ]
+    },
+    {
+      "id": "ci-deploy-config",
+      "impact": "high",
+      "optional": true,
+      "summary": "CI workflows and platform deploy files (none exist yet; adding one changes the verification and deploy story)",
+      "globs": [
+        ".github/**",
+        "Dockerfile",
+        "Procfile",
+        "railway.json",
+        "railway.toml",
+        "nixpacks.toml",
+        "ecosystem.config.cjs"
+      ],
+      "review": [
+        "docs/deployment.md",
+        "DEPLOYMENT_CHECKLIST.md",
+        "docs/testing.md",
+        ".claude/skills/swift-test/SKILL.md"
+      ]
+    },
+    {
+      "id": "user-spend",
+      "impact": "low",
+      "summary": "Persisted reporting counters for the admin top-spenders list",
+      "globs": [
+        "services/users/userSpend*.js",
+        "scripts/user-spend-backfill.mjs"
+      ],
+      "review": [
+        "docs/user-spend.md"
+      ]
+    },
+    {
+      "id": "telegram-ui",
+      "impact": "low",
+      "summary": "Customer menus, texts and message handlers (Persian UI)",
+      "globs": [
+        "handlers/**",
+        "keyboards/**",
+        "messages/**",
+        "services/manageServices/**",
+        "services/messaging/**",
+        "services/users/**",
+        "utils/**"
+      ],
+      "review": [
+        "README.md"
+      ]
+    },
+    {
+      "id": "mock-tests",
+      "impact": "low",
+      "summary": "Opt-in mock-test harness",
+      "globs": [
+        "services/mockTests/**"
+      ],
+      "review": [
+        "docs/admin.md"
+      ]
+    },
+    {
+      "id": "tests",
+      "impact": "low",
+      "summary": "Test files (update the coverage table in docs/testing.md only for a new area or a new Mongo-backed suite)",
+      "globs": [
+        "tests/**"
+      ],
+      "review": [
+        "docs/testing.md"
+      ]
+    },
+    {
+      "id": "docs",
+      "impact": "low",
+      "summary": "Human documentation (its references are validated)",
+      "globs": [
+        "README.md",
+        "DEPLOYMENT_CHECKLIST.md",
+        "docs/**"
+      ],
+      "review": []
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import type { Config } from "tailwindcss";
+import defaultTheme from "tailwindcss/defaultTheme";
 import animate from "tailwindcss-animate";
 
 // Absolute paths: this file can be loaded with a process.cwd() other than
@@ -23,6 +24,7 @@ const config: Config = {
       screens: { "2xl": "1400px" },
     },
     extend: {
+      fontFamily: { sans: ["IRANYekanX", "Vazirmatn", ...defaultTheme.fontFamily.sans] },
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",

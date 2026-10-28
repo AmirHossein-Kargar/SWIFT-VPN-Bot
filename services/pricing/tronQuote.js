@@ -13,7 +13,10 @@ import { fetchNowPaymentsCatalog, validateCatalogSelection } from "../nowpayment
 import { getSellablePlanById, getSellablePlans } from "../plans.js";
 import { getUsdtTomanQuote, gheymatCacheTtlMs, gheymatMaxAgeMs } from "./gheymatClient.js";
 import { logQuoteFailure } from "./quoteLog.js";
+import { makeRoom, pruneExpired } from "../../utils/boundedMap.js";
 
+// One entry per distinct (rate, amount, currency): amounts are user-entered, so the cache is capped.
+const ESTIMATE_CACHE_MAX = 500;
 const estimateCache = new Map();
 let estimatePending = new Map();
 
@@ -74,6 +77,14 @@ async function estimatedCrypto({ amount, currencyFrom, currencyTo, request, cach
         message: "estimate response was not usable",
       });
       return null;
+    }
+    // Eviction order is the time of the last write (hits do not refresh it). A re-set
+    // key keeps its old Map position, so drop it first: a just-refreshed entry must
+    // not be the next one evicted, and replacing a key must not evict an unrelated one.
+    estimateCache.delete(cacheKey);
+    if (estimateCache.size >= ESTIMATE_CACHE_MAX) {
+      pruneExpired(estimateCache, (entry) => entry.expiresAt <= Date.now());
+      makeRoom(estimateCache, ESTIMATE_CACHE_MAX);
     }
     estimateCache.set(cacheKey, { amount: parsed.amount, expiresAt: Date.now() + ttlMs });
     return parsed.amount;
@@ -344,6 +355,10 @@ export function quoteSnapshotIsFresh(snapshot, now = new Date(), env = process.e
   if (nowMs - confirmedAt > gheymatCacheTtlMs(env)) return false;
   return Number.isFinite(snapshot.tomanPerUsdt) && snapshot.tomanPerUsdt > 0
     && Number.isSafeInteger(snapshot.amountToman) && snapshot.amountToman > 0;
+}
+
+export function tronQuoteCacheSizeForTests() {
+  return estimateCache.size;
 }
 
 export function resetTronQuoteCacheForTests() {

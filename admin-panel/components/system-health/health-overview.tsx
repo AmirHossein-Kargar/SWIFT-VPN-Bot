@@ -7,7 +7,9 @@ import { RefreshCw, CheckCircle2, AlertTriangle, XCircle, HelpCircle } from "luc
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EcgTrace } from "@/components/system-health/ecg-trace";
 import { stripBasePath } from "@/lib/basePath";
+import { presentHealth } from "@/lib/health-status";
 import { detailRows } from "@/lib/health-details";
 import type { SystemHealth, SystemHealthService } from "@/lib/types";
 import { formatDateTime } from "@/lib/utils";
@@ -65,16 +67,21 @@ export function HealthOverview({ health }: { health: SystemHealth }) {
     setTimeout(() => setRefreshing(false), 600);
   }
 
+  const overall = presentHealth(health.overall);
+
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0">
           <div>
             <CardTitle>System health</CardTitle>
             <CardDescription>Generated {formatDateTime(health.generatedAt)}</CardDescription>
           </div>
-          <div className="flex items-center gap-2">
-            <Badge variant={STATUS_VARIANT[health.overall]} className="text-sm">
+          <div className="flex items-center gap-3">
+            <div className={`hidden w-28 sm:block ${overall.tone}`} data-testid="overall-ecg">
+              <EcgTrace motion={overall.motion} />
+            </div>
+            <Badge variant={STATUS_VARIANT[health.overall]} className="text-sm" title={overall.description}>
               {health.overall}
             </Badge>
             <Button variant="outline" size="sm" onClick={refresh} disabled={refreshing}>
@@ -87,7 +94,8 @@ export function HealthOverview({ health }: { health: SystemHealth }) {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {health.services.map((service) => {
-          const Icon = STATUS_ICON[service.status];
+          const Icon = STATUS_ICON[service.status] ?? HelpCircle;
+          const view = presentHealth(service.status);
           return (
             <Card key={service.name}>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -105,9 +113,12 @@ export function HealthOverview({ health }: { health: SystemHealth }) {
                 />
               </CardHeader>
               <CardContent className="space-y-1.5 text-sm">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">Status</span>
-                  <Badge variant={STATUS_VARIANT[service.status]}>{service.status}</Badge>
+                  <Badge variant={STATUS_VARIANT[service.status] ?? "outline"} title={view.description}>{view.status}</Badge>
+                </div>
+                <div className={`flex h-7 items-center ${view.tone}`} data-testid={`ecg-${service.name}`}>
+                  <EcgTrace motion={view.motion} />
                 </div>
                 {service.latencyMs != null ? (
                   <div className="flex items-center justify-between">

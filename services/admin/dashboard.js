@@ -63,7 +63,8 @@ async function revenueForPeriod(from, to) {
   };
 }
 
-async function countExpiredTrackedVpns(now) {
+/** Tracked VPN orders split by expiry in one pass over the completed, non-revoked orders. */
+async function knownVpnCounts(now) {
   const [row] = await WalletPurchase.aggregate([
     { $match: { status: "completed", revokedAt: null } },
     {
@@ -76,32 +77,16 @@ async function countExpiredTrackedVpns(now) {
         },
       },
     },
-    { $match: { effectiveExpiry: { $lte: now } } },
-    { $count: "count" },
-  ]).allowDiskUse(true);
-  return Number(row?.count || 0);
-}
-
-async function knownVpnCounts(now) {
-  const [active, expired] = await Promise.all([
-    WalletPurchase.aggregate([
-      { $match: { status: "completed", revokedAt: null } },
-      {
-        $addFields: {
-          effectiveExpiry: {
-            $ifNull: [
-              "$expiresAt",
-              { $add: [{ $ifNull: ["$completedAt", "$createdAt"] }, { $multiply: [{ $ifNull: ["$days", 0] }, DAY_MS] }] },
-            ],
-          },
-        },
+    {
+      $group: {
+        _id: null,
+        active: { $sum: { $cond: [{ $gt: ["$effectiveExpiry", now] }, 1, 0] } },
+        // An order without a computable expiry date is neither active nor expired.
+        expired: { $sum: { $cond: [{ $and: [{ $eq: [{ $type: "$effectiveExpiry" }, "date"] }, { $lte: ["$effectiveExpiry", now] }] }, 1, 0] } },
       },
-      { $match: { effectiveExpiry: { $gt: now } } },
-      { $count: "count" },
-    ]).allowDiskUse(true),
-    countExpiredTrackedVpns(now),
-  ]);
-  return { active: Number(active?.[0]?.count || 0), expired };
+    },
+  ]).allowDiskUse(true);
+  return { active: Number(row?.active || 0), expired: Number(row?.expired || 0) };
 }
 
 async function topPackages(from) {

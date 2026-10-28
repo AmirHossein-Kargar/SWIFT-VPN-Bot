@@ -5,7 +5,6 @@ import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
 import { Plus, Trash2, Send, Eye } from "lucide-react";
-import { z } from "zod";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,22 +21,7 @@ import { useAdminSession } from "@/components/session-provider";
 import { adminMutate, newOperationId } from "@/lib/adminApi.client";
 import { AdminApiError } from "@/lib/types";
 import type { BroadcastPreview } from "@/lib/types";
-
-const broadcastSchema = z.object({
-  message: z.string().trim().min(1, "Message is required").max(4096, "Message must be at most 4096 characters"),
-  audience: z.enum(["all", "active", "expired", "paying", "custom"]),
-  customTelegramIds: z.string().optional(),
-  buttons: z
-    .array(
-      z.object({
-        text: z.string().trim().min(1, "Button text is required").max(64, "At most 64 characters"),
-        url: z.string().trim().url("Must be a valid URL").refine((value) => /^https:\/\/(t\.me|telegram\.me|telegram\.dog)\//.test(value), "Must be a t.me link"),
-      })
-    )
-    .max(4, "At most 4 buttons"),
-});
-
-type BroadcastFormValues = z.infer<typeof broadcastSchema>;
+import { broadcastSchema, type BroadcastFormValues } from "@/lib/form-schemas";
 
 const AUDIENCE_LABEL: Record<string, string> = {
   all: "All users",

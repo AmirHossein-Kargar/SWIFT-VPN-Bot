@@ -112,6 +112,8 @@ export function serveAdminSpa(req, res, next) {
   // API and health endpoints are never handled by the SPA.
   if (req.path.startsWith("/api/") || ["/health", "/ready", "/livez"].includes(req.path)) return next();
   if (req.path === "/") return serveStorefront(req, res, next);
+  if (req.path === "/robots.txt") return serveRobots(req, res, next);
+  if (req.path === "/sitemap.xml") return serveSitemap(req, res, next);
   if (PRECOMPRESSED_ASSET.test(req.path)) return servePrecompressed(req, res, () => servePublicFile(req, res, next));
   return servePublicFile(req, res, next);
 }
@@ -133,7 +135,7 @@ function servePublicFile(req, res, next) {
       if (shell === "notFound") return notFoundHandler(req, res);
       return ensureStatic()(req, res, next);
     }
-    // The admin app lives at /panel (and the legacy /admin); it routes by hash.
+    // Legacy-shell fallback for /panel and /admin; in practice nextAdminMiddleware answers those first (Next.js panel / 307), so only /index.html reaches the legacy dashboard.
     if (!ADMIN_PAGE.test(req.path)) return next();
     sendAdminShell(res, next);
   });
@@ -219,9 +221,14 @@ export function injectCanonical(html, canonical) {
   const escaped = canonical ? canonical.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) : null;
   const tags = escaped ? `<link rel="canonical" href="${escaped}" />
   <meta property="og:url" content="${escaped}" />` : "";
-  if (html.includes("<!--canonical-->")) return html.replace("<!--canonical-->", () => tags);
+  // Social crawlers (Telegram, X, ...) need absolute image URLs; the page ships site-relative ones.
+  const origin = escaped ? escaped.replace(/\/$/, "") : null;
+  const absolute = origin
+    ? html.replace(/(<meta[^>]*?(?:property="og:image"|name="twitter:image")[^>]*?content=")(\/[^"]*)(")/g, (_match, before, imagePath, after) => `${before}${origin}${imagePath}${after}`)
+    : html;
+  if (absolute.includes("<!--canonical-->")) return absolute.replace("<!--canonical-->", () => tags);
   // The Next.js build has no HTML comments to anchor on: insert before </head>.
-  return tags ? html.replace("</head>", () => `${tags}</head>`) : html;
+  return tags ? absolute.replace("</head>", () => `${tags}</head>`) : absolute;
 }
 
 let storeTemplate = null;
@@ -266,6 +273,36 @@ export function serveStorefront(req, res, next) {
     return res.type("html").send(encoded.body);
   }
   res.type("html").send(html);
+}
+
+/** robots.txt: the storefront is indexable; the admin panels and JSON APIs are not. */
+export function robotsTxt(canonical) {
+  const lines = ["User-agent: *", "Disallow: /panel", "Disallow: /admin", "Disallow: /api/"];
+  if (canonical) lines.push("", `Sitemap: ${canonical}sitemap.xml`);
+  return `${lines.join("\n")}\n`;
+}
+
+/** sitemap.xml: only the storefront URL. Null without a valid public HTTPS WEBHOOK_BASE_URL (sitemaps need absolute URLs). */
+export function sitemapXml(canonical) {
+  if (!canonical) return null;
+  const loc = canonical.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url><loc>${loc}</loc></url>\n</urlset>\n`;
+}
+
+function serveRobots(req, res, next) {
+  if (req.method !== "GET" && req.method !== "HEAD") return next();
+  res.setHeader("Cache-Control", "public, max-age=3600");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.type("text/plain").send(robotsTxt(storefrontCanonical()));
+}
+
+function serveSitemap(req, res, next) {
+  if (req.method !== "GET" && req.method !== "HEAD") return next();
+  const xml = sitemapXml(storefrontCanonical());
+  if (!xml) return notFoundHandler(req, res);
+  res.setHeader("Cache-Control", "public, max-age=3600");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.type("application/xml").send(xml);
 }
 
 export function notFoundHandler(req, res) {

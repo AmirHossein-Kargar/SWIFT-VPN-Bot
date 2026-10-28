@@ -21,7 +21,7 @@ flowchart TD
 |---|---|---|
 | Telegram panel | Send `/admin`, `/panel`, `پنل` or the **👑 SWIFT ADMIN** button | Allow-listed admins in a private chat, or the admin group (`GROUP_ID`). Every callback is re-authorized on the server |
 | Web `/panel` | `<WEBHOOK_BASE_URL>/panel` | Next.js dashboard, English only, light/dark/system theme. Needs `npm run build` (see [storefront and build](storefront.md#build-and-serving)) |
-| Web `/panel` (alias `/admin`) | `<WEBHOOK_BASE_URL>/panel` | Original static dashboard, Persian (RTL) and English, hash-routed |
+| Legacy static dashboard | `<WEBHOOK_BASE_URL>/index.html` | Original dashboard, Persian (RTL) and English, hash-routed. No longer served at `/panel`: `/admin` redirects (307) to the Next.js `/panel` above (`web/nextAdminMiddleware.js` runs before `web/spa.js`) |
 
 ### Web sign-in
 

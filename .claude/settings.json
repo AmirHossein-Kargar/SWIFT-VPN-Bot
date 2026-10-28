@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/check-context.mjs\" --hook-stop",
+            "shell": "bash",
+            "timeout": 30,
+            "statusMessage": "Checking engineering-context drift"
+          }
+        ]
+      }
+    ]
+  }
+}

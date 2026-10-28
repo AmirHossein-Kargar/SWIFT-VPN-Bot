@@ -18,6 +18,7 @@ logs/
 # ── Next.js admin panel (admin-panel/) ───────────────────────────────────────
 admin-panel/.next/
 admin-panel/next-env.d.ts
+admin-panel/tsconfig.tsbuildinfo
 admin-panel/node_modules/
 
 # ── Public storefront (storefront/ → built into web/public by scripts/build-storefront.mjs) ──
@@ -28,9 +29,13 @@ storefront/tsconfig.tsbuildinfo
 web/public/_next/
 web/public/_next.staging/
 web/public/storefront.html
+# Proprietary web font (IRANYekanX Pro, licensed via fontiran.com): never commit it to this public repo. Pages fall back to Vazirmatn when it is absent.
+web/public/store/fonts/iranyekanx-*.woff2
 
 # ── Editor / tooling state ───────────────────────────────────────────────────
 .vscode/settings.json
 .mimocode/
 .workbuddy-ai/
 .mimocode/.cron-lock
+# Reports written by the swift-code-review / swift-test / swift-audit skills (may describe unreleased weaknesses)
+.claude/_generated/

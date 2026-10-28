@@ -54,6 +54,13 @@ describe("plans", () => {
     assert.equal(store.pricePerGb({ gig: 0, price: 0 }), null);
   });
 
+  test("the lowest price per GB is highlighted only when it is a strict, comparable fact", () => {
+    assert.equal(store.lowestPerGbPlanId(store.plansFor(catalog, 30)), "p30-50", "5000/GB beats 7000/GB; the free (0 GB) plan is ignored");
+    assert.equal(store.lowestPerGbPlanId([{ id: "only", gig: 10, price: 70000 }]), null, "nothing to compare");
+    assert.equal(store.lowestPerGbPlanId([{ id: "a", gig: 10, price: 50000 }, { id: "b", gig: 20, price: 100000 }]), null, "a tie highlights nothing");
+    assert.equal(store.lowestPerGbPlanId([]), null);
+  });
+
   test("only available, known payment methods are advertised", () => {
     assert.deepEqual(store.visiblePayMethods(catalog).map((method) => method.id), ["hooshpay"]);
     assert.deepEqual(store.visiblePayMethods({ paymentMethods: [] }), []);

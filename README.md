@@ -111,6 +111,8 @@ The full reference, with defaults and optional settings, is in
 | `npm start` | Run the bot and web server (`node bot.js`) |
 | `npm run preflight` | Validate configuration and connectivity |
 | `npm test` | Unit and integration suites (`node --test`) |
+| `npm run check:sensitive` | Scan tracked files for card numbers, tokens, emails and other sensitive values (never prints them) |
+| `npm run check:context` | Check that paths, scripts and links named in `CLAUDE.md`, `.claude/` and the docs still exist |
 | `npm run build` | Build `/panel` and the storefront |
 | `npm run admin:dev` / `npm run storefront:dev` | Next.js dev servers (ports 3100 / 3101) |
 | `npm run test:e2e` / `npm run test:e2e:store` | Browser suites (need Chrome) |
@@ -177,6 +179,7 @@ are in [docs/operations.md](docs/operations.md).
 | [docs/deployment.md](docs/deployment.md) | Railway, webhooks, health, scaling, troubleshooting |
 | [docs/operations.md](docs/operations.md) | Production checklist, alerts, recovery |
 | [docs/testing.md](docs/testing.md) | Test suites, MongoDB-backed tests, browser suites |
+| [docs/privacy.md](docs/privacy.md) | Sensitive-data policy, fixture rules, commit identity, pre-commit check |
 | [DEPLOYMENT_CHECKLIST.md](DEPLOYMENT_CHECKLIST.md) | VPS / PM2 / Nginx deployment and sign-off |
 
 This repository does not currently include a license file.

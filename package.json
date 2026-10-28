@@ -10,7 +10,9 @@
   "scripts": {
     "start": "node bot.js",
     "preflight": "node scripts/preflight.js",
-    "test": "node --test \"tests/**/*.test.js\"",
+    "check:sensitive": "node scripts/check-sensitive.mjs --all",
+    "check:context": "node scripts/check-context.mjs",
+    "test": "node scripts/run-tests.mjs",
     "test:release": "node scripts/test-release.mjs",
     "test:e2e": "node tests/e2e/adminResponsive.e2e.mjs",
     "test:e2e:store": "node tests/e2e/storefront.e2e.mjs",
@@ -20,7 +22,7 @@
     "admin:dev": "next dev admin-panel -p 3100"
   },
   "dependencies": {
-    "@hookform/resolvers": "^3.10.0",
+    "@hookform/resolvers": "^5.9.2",
     "@radix-ui/react-alert-dialog": "^1.1.4",
     "@radix-ui/react-checkbox": "^1.4.1",
     "@radix-ui/react-collapsible": "^1.2.1",
@@ -54,14 +56,18 @@
     "sonner": "^1.7.1",
     "tailwind-merge": "^2.6.0",
     "tailwindcss-animate": "^1.0.7",
-    "zod": "^3.25.76"
+    "zod": "^4.6.7"
   },
   "overrides": {
     "request": "npm:@cypress/request@3.0.10",
     "uuid": "11.1.1",
-    "qs": "6.16.0",
+    "qs": "6.16.1",
     "form-data": "4.0.6",
-    "tough-cookie": "5.1.2"
+    "tough-cookie": "5.1.2",
+    "postcss-selector-parser": "7.1.7",
+    "next": {
+      "postcss": "$postcss"
+    }
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

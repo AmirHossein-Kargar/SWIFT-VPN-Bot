@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import User from "../../models/User.js";
 
+const ACCOUNT_PROJECTION = { telegramId: 1, isBanned: 1, blockedBy: 1 };
+
 function referralCode() {
   return `SWIFT-${randomBytes(4).toString("hex").toUpperCase()}`;
 }
@@ -40,7 +42,9 @@ export async function ensureTelegramUser(from, { userModel = User, now = () => n
         lastActivityAt: now(),
       },
     },
-    { upsert: true, new: true, setDefaultsOnInsert: true },
+    // Runs on every private message. Callers only need the access-gate fields, and
+    // a hydrated document would carry the whole (ever-growing) services array.
+    { upsert: true, new: true, setDefaultsOnInsert: true, lean: true, projection: ACCOUNT_PROJECTION },
   );
 }
 

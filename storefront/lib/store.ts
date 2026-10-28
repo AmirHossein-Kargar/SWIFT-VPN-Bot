@@ -45,6 +45,22 @@ export function pricePerGb(plan: Pick<StorePlan, "gig" | "price">): number | nul
   return plan.gig > 0 ? Math.round(plan.price / plan.gig) : null;
 }
 
+/**
+ * The one plan with the strictly lowest price per GB among `plans`, or null.
+ * A verifiable fact from catalog data, not a "most popular" claim: with fewer
+ * than two comparable plans, or a tie for the lowest, nothing is highlighted.
+ */
+export function lowestPerGbPlanId(plans: Pick<StorePlan, "id" | "gig" | "price">[]): string | null {
+  const priced = plans.flatMap((plan) => {
+    const perGb = pricePerGb(plan);
+    return perGb === null ? [] : [{ id: plan.id, perGb }];
+  });
+  if (priced.length < 2) return null;
+  const lowest = Math.min(...priced.map((entry) => entry.perGb));
+  const winners = priced.filter((entry) => entry.perGb === lowest);
+  return winners.length === 1 ? (winners[0]?.id ?? null) : null;
+}
+
 export function visiblePayMethods(catalog: Pick<StoreCatalog, "paymentMethods">) {
   return (catalog.paymentMethods || []).filter((method) => method.available && PAY_LABELS[method.id]);
 }

@@ -1,0 +1,15 @@
+/*
+ * LOCAL PREVIEW ONLY. IRANYekanX is proprietary (fontiran.com) and no web licence is on record for this project,
+ * so production never links this file and web/spa.js refuses to serve it (and the font) when NODE_ENV=production.
+ * Linked only by builds made with NEXT_PUBLIC_DEV_FONT=1. The font file itself is gitignored.
+ */
+@font-face {
+  font-family: "IRANYekanX";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url(/store/fonts/iranyekanx-vf.woff2) format("woff2");
+}
+html, body, button, input, select, textarea {
+  font-family: "IRANYekanX", "Vazirmatn", Tahoma, "Segoe UI", system-ui, sans-serif;
+}

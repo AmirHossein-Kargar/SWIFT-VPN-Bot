@@ -174,7 +174,8 @@ const custody = {
     { id: "PO-2", batchWithdrawalId: "BATCH-2", currency: "trx", ticker: "TRX", network: "TRX", address: "TAbc", extraId: "memo-1", amountDisplay: "10", fee: 1, status: "finished", hash: "abc", createdAt: NOW.toISOString() },
   ],
 };
-const calls = { convert: [], payout: [], verify: [], reply: [] };
+const calls = { convert: [], payout: [], verify: [], reply: [], product: [], broadcastPreview: [], broadcast: [] };
+const productFixture = { id: "P-1", name: "1-month · 50GB", durationDays: 30, trafficGb: 50, priceToman: 100000, costToman: 60000, profitToman: 40000, enabled: true, published: true, archived: false, archivedAt: null, revision: 3, supportedDuration: true, system: false, references: 0, displayOrder: 0, createdAt: null, updatedAt: null };
 let remoteFails = false;
 const paged = (items, page = 1, pageSize = 20) => ({ items: items.slice((page - 1) * pageSize, page * pageSize), total: items.length, page, pages: Math.max(1, Math.ceil(items.length / pageSize)), pageSize, lastSyncedAt: NOW.toISOString(), balanceError: null });
 
@@ -260,6 +261,22 @@ api.get("/tickets/:id/messages", guard(async (req, res) => ok(res, await adminTi
 api.get("/tickets/:id", guard(async (req, res) => ok(res, await adminTickets.getSupportTicket({ actorId: actor(req), ticketId: req.params.id, limit: req.query.limit }))));
 api.post("/tickets/:id/reply", json, guard(async (req, res) => { calls.reply.push(req.body); ok(res, await adminTickets.replyToSupportTicket({ actorId: actor(req), operationId: req.body.operationId, ticketId: req.params.id, text: req.body.text, bot: fakeBot, auditModel: audits })); }));
 api.post("/tickets/:id/status", json, guard(async (req, res) => ok(res, await adminTickets.setSupportTicketStatus({ actorId: actor(req), operationId: req.body.operationId, ticketId: req.params.id, status: req.body.status, bot: fakeBot, auditModel: audits }))));
+// Plans and broadcasts: fixtures only; the point is the browser-side form validation and what the forms submit.
+// System health: a controlled fixture (the page reads GET /api/admin/system/health), swapped per test via `healthFixture`.
+const healthFixture = { overall: "healthy", services: [], fail: false };
+api.get("/system/health", guard((req, res) => {
+  if (healthFixture.fail) return res.status(500).json({ ok: false, error: "internal_error" });
+  return ok(res, { generatedAt: NOW.toISOString(), overall: healthFixture.overall, services: healthFixture.services, notes: {} });
+}));
+api.get("/products", guard((req, res) => ok(res, { items: [productFixture], page: 1, pageSize: 20, total: 1, filteredTotal: 1, pages: 1 })));
+api.post("/products", json, guard((req, res) => { calls.product.push({ method: "POST", body: req.body }); ok(res, { product: { ...productFixture, ...req.body, id: "P-NEW" } }); }));
+api.patch("/products/:id", json, guard((req, res) => { calls.product.push({ method: "PATCH", id: req.params.id, body: req.body }); ok(res, { product: { ...productFixture, ...req.body } }); }));
+api.get("/broadcasts", guard((req, res) => ok(res, paged([]))));
+api.post("/broadcast/preview", json, guard((req, res) => {
+  calls.broadcastPreview.push(req.body);
+  ok(res, { preview: { message: req.body.message, lineCount: 1, characterCount: String(req.body.message).length, buttons: req.body.buttons || [] }, warnings: [], validationErrors: [] });
+}));
+api.post("/broadcast", json, guard((req, res) => { calls.broadcast.push(req.body); ok(res, { started: true }); }));
 api.use((req, res) => res.status(404).json({ ok: false, error: "not_stubbed", path: req.path }));
 app.use("/api/admin", api);
 app.use(nextAdminMiddleware);
@@ -973,6 +990,205 @@ for (const theme of ["light", "dark"]) {
   }
 }
 
+// ── System health: ECG trace reflects the reported status, never invents health ─────────────
+const healthService = (name, status, extra = {}) => ({ name, status, latencyMs: status === "unknown" ? null : 12, error: status === "down" ? "connection refused" : null, details: {}, lastCheckedAt: NOW.toISOString(), lastSuccessAt: null, lastFailureAt: null, lastErrorMessage: null, ...extra });
+for (const theme of ["light", "dark"]) {
+  await step(`system health (${theme}): each status gets its own ECG state, with a text label; unknown and an unrecognised value never look healthy`, async () => {
+    healthFixture.overall = "degraded";
+    healthFixture.services = [healthService("mongodb", "healthy"), healthService("redis", "degraded"), healthService("telegram", "down"), healthService("webhook", "unknown"), healthService("hooshpay", "something-new")];
+    const page = await newPage({ theme, width: 1280 });
+    await go(page, "/system-health");
+    await page.getByTestId("ecg-mongodb").waitFor();
+    const state = (name) => page.getByTestId(`ecg-${name}`).locator("svg").getAttribute("data-ecg");
+    assert.equal(await state("mongodb"), "beat");
+    assert.equal(await state("redis"), "irregular");
+    assert.equal(await state("telegram"), "flatline");
+    assert.equal(await state("webhook"), "idle");
+    assert.equal(await state("hooshpay"), "idle", "an unrecognised status is shown as unknown, not healthy");
+    assert.equal(await page.getByTestId("overall-ecg").locator("svg").getAttribute("data-ecg"), "irregular");
+    // Only healthy and degraded animate; down and unknown are static.
+    const animated = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll("[data-testid^=ecg-]")].map((el) => [el.dataset.testid, !!el.querySelector(".ecg-sweep")])));
+    assert.deepEqual(animated, { "ecg-mongodb": true, "ecg-redis": true, "ecg-telegram": false, "ecg-webhook": false, "ecg-hooshpay": false });
+    const anim = await page.evaluate(() => ({ healthy: getComputedStyle(document.querySelector("[data-testid=ecg-mongodb] .ecg-sweep")).animationName, duration: getComputedStyle(document.querySelector("[data-testid=ecg-redis] .ecg-sweep")).animationDuration }));
+    assert.equal(anim.healthy, "ecg-sweep");
+    assert.equal(anim.duration, "4s", "degraded sweeps more slowly");
+    // Colour is never the only signal: each card names its status, and the unrecognised value reads "unknown".
+    const card = (name) => page.getByTestId(`ecg-${name}`).locator("xpath=ancestor::*[contains(@class,'rounded')][1]");
+    assert.match(await card("mongodb").innerText(), /healthy/);
+    assert.match(await card("telegram").innerText(), /down/);
+    assert.match(await card("hooshpay").innerText(), /unknown/);
+    // No overflow or clipping of the waveform, and the same box in every state.
+    const geometry = await page.evaluate(() => [...document.querySelectorAll("[data-testid^=ecg-] svg")].map((svg) => { const r = svg.getBoundingClientRect(), p = svg.parentElement.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height), inside: r.right <= p.right + 0.5 && r.left >= p.left - 0.5 }; }));
+    assert.ok(geometry.every((g) => g.inside && g.h === 28 && g.w === geometry[0].w), JSON.stringify(geometry));
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true);
+    await page.screenshot({ path: join(shots, `system-health-${theme}.png`) });
+    assert.deepEqual(page.errors.splice(0), []);
+    await page.context().close();
+  });
+}
+await step("system health: with prefers-reduced-motion nothing animates and the full trace is drawn; a 320px viewport has no overflow", async () => {
+  healthFixture.overall = "healthy";
+  healthFixture.services = [healthService("mongodb", "healthy"), healthService("redis", "degraded")];
+  const context = await browser.newContext({ viewport: { width: 320, height: 800 }, reducedMotion: "reduce", baseURL: base });
+  await context.addCookies([cookieHeader("/api/admin"), cookieHeader("/panel")]);
+  const page = await context.newPage();
+  await go(page, "/system-health");
+  await page.getByTestId("ecg-mongodb").waitFor();
+  const motion = await page.evaluate(() => [...document.querySelectorAll(".ecg-sweep")].map((el) => { const s = getComputedStyle(el); return { animationName: s.animationName, dash: s.strokeDasharray }; }));
+  assert.ok(motion.length === 3 && motion.every((m) => m.animationName === "none" && m.dash === "none"), JSON.stringify(motion));
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true);
+  await page.screenshot({ path: join(shots, "system-health-reduced-320.png") });
+  await context.close();
+});
+await step("system health: an all-unknown report stays neutral (no animated trace, overall not healthy)", async () => {
+  healthFixture.overall = "unknown";
+  healthFixture.services = [healthService("mongodb", "unknown"), healthService("redis", "unknown")];
+  const page = await newPage({ width: 1280 });
+  await go(page, "/system-health");
+  await page.getByTestId("ecg-mongodb").waitFor();
+  assert.equal(await page.locator(".ecg-sweep").count(), 0);
+  assert.equal(await page.getByTestId("overall-ecg").locator("svg").getAttribute("data-ecg"), "idle");
+  await page.context().close();
+});
+
+// ── System health: Telegram diagnostics and order backlog (shapes mirror services/admin/monitoring.js) ──────────
+const telegramDetails = (overrides = {}) => ({
+  polling: { failing: false, stalled: false, source: "poller", lastErrorAgeSec: null, lastErrorStatus: null, lastErrorCode: null, lastSuccessAgeSec: 4 },
+  webhook: { registered: false, pendingUpdates: 0, lastErrorAgeSec: null, lastErrorMessage: null },
+  ...overrides,
+});
+const ordersDetails = (overrides = {}) => ({ awaitingProvider: 0, needsReview: 0, refundPending: 0, stalledProvisioning: 0, ledgerStalled: 0, deliveryPending: 0, alertPending: 0, oldestAwaitingMinutes: null, ...overrides });
+const TOKEN_LIKE = /\d{6,}:[A-Za-z0-9_-]{20,}/;
+const cardText = (page, name) => page.getByTestId(`ecg-${name}`).locator("xpath=ancestor::*[contains(@class,'rounded')][1]").innerText();
+
+for (const [label, viewport, theme] of [["desktop", { width: 1280, height: 900 }, "light"], ["mobile 375px", { width: 375, height: 800 }, "dark"]]) {
+  await step(`system health (${label}): Telegram polling/webhook warnings and the order backlog render accurately, existing cards stay, no overflow, no secrets`, async () => {
+    healthFixture.fail = false;
+    healthFixture.overall = "down";
+    healthFixture.services = [
+      healthService("mongodb", "healthy"),
+      healthService("redis", "healthy"),
+      healthService("wizardxray", "healthy"),
+      healthService("telegram", "down", { error: "Another process is polling with this bot token (409 Conflict); keep exactly one replica; A webhook is registered while the bot uses long polling; 250 updates are waiting at Telegram",
+        details: telegramDetails({ polling: { failing: true, stalled: false, source: "poller", lastErrorAgeSec: 3, lastErrorStatus: 409, lastErrorCode: "ETELEGRAM", lastSuccessAgeSec: 45 }, webhook: { registered: true, pendingUpdates: 250, lastErrorAgeSec: null, lastErrorMessage: null } }) }),
+      healthService("orders", "degraded", { error: "1 order(s) need manual reconciliation with the panel; 2 order(s) waiting for WizardXray funds; 1 admin alert(s) not delivered",
+        details: ordersDetails({ awaitingProvider: 2, needsReview: 1, alertPending: 1, oldestAwaitingMinutes: 125 }) }),
+      healthService("webhook", "healthy"),
+    ];
+    const page = await newPage({ ...viewport, theme });
+    await go(page, "/system-health");
+    await page.getByTestId("details-telegram").waitFor();
+
+    const telegram = await cardText(page, "telegram");
+    assert.match(telegram, /down/);
+    assert.match(telegram, /Long polling\s+failing/);
+    assert.match(telegram, /Last successful poll\s+45 s ago/);
+    assert.match(telegram, /Webhook registered\s+yes/);
+    assert.match(telegram, /Updates waiting at Telegram\s+250/);
+    assert.match(telegram, /409 Conflict/);
+
+    const orders = await cardText(page, "orders");
+    assert.match(orders, /degraded/);
+    assert.match(orders, /Waiting for provider funds\s+2/);
+    assert.match(orders, /Need manual reconciliation\s+1/);
+    assert.match(orders, /of which admin alert not delivered\s+1/);
+    assert.match(orders, /Created, not delivered\s+0/);
+    assert.match(orders, /Oldest waiting\s+125 min/);
+    // Warning styling only where the value is non-zero.
+    const warned = await page.evaluate(() => [...document.querySelectorAll("[data-testid=details-orders] div")].map((row) => [row.querySelector("dt")?.textContent, row.querySelector("dd")?.className.includes("text-warning")]));
+    const warnOf = (label) => warned.find(([name]) => name === label)?.[1];
+    assert.equal(warnOf("Waiting for provider funds"), true);
+    assert.equal(warnOf("Created, not delivered"), false);
+
+    // Existing cards are intact.
+    for (const name of ["mongodb", "redis", "wizardxray", "webhook"]) assert.match(await cardText(page, name), /healthy/);
+    assert.equal(await page.getByTestId("details-mongodb").count(), 0, "services without diagnostics get no empty details block");
+
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, "no horizontal overflow");
+    assert.equal(TOKEN_LIKE.test(await page.content()), false, "nothing token-shaped reaches the browser");
+    assert.equal(await page.evaluate(() => /api\.telegram\.org|BOT_TOKEN/.test(document.documentElement.outerHTML)), false);
+    await page.screenshot({ path: join(shots, `system-health-diagnostics-${label.replace(/\W+/g, "-")}.png`), fullPage: true });
+    assert.deepEqual(page.errors.splice(0), []);
+    await page.context().close();
+  });
+}
+await step("system health: a stalled poller and a healthy bot are labelled differently; a clean ledger shows zeros without warnings", async () => {
+  healthFixture.fail = false;
+  healthFixture.overall = "degraded";
+  healthFixture.services = [
+    healthService("telegram", "degraded", { error: "No successful long-poll for 200 s", details: telegramDetails({ polling: { failing: false, stalled: true, source: "poller", lastErrorAgeSec: null, lastErrorStatus: null, lastErrorCode: null, lastSuccessAgeSec: 200 } }) }),
+    healthService("orders", "healthy", { details: ordersDetails() }),
+  ];
+  const page = await newPage({ width: 1280 });
+  await go(page, "/system-health");
+  await page.getByTestId("details-telegram").waitFor();
+  assert.match(await cardText(page, "telegram"), /Long polling\s+stalled/);
+  assert.match(await cardText(page, "telegram"), /Last successful poll\s+200 s ago/);
+  const ordersCard = await cardText(page, "orders");
+  assert.match(ordersCard, /healthy/);
+  assert.equal(await page.evaluate(() => document.querySelectorAll("[data-testid=details-orders] .text-warning").length), 0, "zero counts carry no warning style");
+  // And a healthy bot reads "ok", never "failing".
+  healthFixture.services = [healthService("telegram", "healthy", { details: telegramDetails() })];
+  await go(page, "/system-health");
+  await page.getByTestId("details-telegram").waitFor();
+  assert.match(await cardText(page, "telegram"), /Long polling\s+ok/);
+  assert.doesNotMatch(await cardText(page, "telegram"), /failing|stalled/);
+  await page.context().close();
+});
+await step("system health: an empty report renders no cards and does not crash; a failing API shows the framework error page, never a healthy state", async () => {
+  healthFixture.fail = false;
+  healthFixture.overall = "healthy";
+  healthFixture.services = [];
+  let page = await newPage({ width: 1280 });
+  await go(page, "/system-health");
+  await page.getByText("System health", { exact: true }).first().waitFor();
+  assert.equal(await page.locator("[data-testid^=ecg-]:not([data-testid=overall-ecg])").count(), 0, "no service cards for an empty report");
+  assert.deepEqual(page.errors.splice(0), []);
+  await page.context().close();
+
+  healthFixture.fail = true;
+  try {
+    page = await newPage({ width: 1280 });
+    const response = await page.goto("/panel/system-health", { waitUntil: "networkidle" });
+    assert.ok(response.status() >= 500, `API failure surfaces as a server error page (got ${response.status()})`);
+    const text = await page.locator("body").innerText();
+    assert.doesNotMatch(text, /\bhealthy\b/i, "a failed fetch never renders a healthy state");
+    assert.equal(TOKEN_LIKE.test(await page.content()), false);
+    await page.context().close();
+  } finally {
+    healthFixture.fail = false;
+  }
+});
+
+// ── Disabled Selects: only those that change data ──────────────────────────
+await step("broadcast audience Select works: it opens, every audience is offered, picking the custom list reveals the Telegram IDs field and switching back hides it", async () => {
+  const page = await newPage({ width: 1280 });
+  await go(page, "/broadcasts");
+  const audience = page.getByRole("combobox").first();
+  assert.equal(await audience.isDisabled(), false);
+  assert.equal((await audience.innerText()).trim(), "All users", "default audience");
+  await audience.click();
+  assert.deepEqual(await page.getByRole("option").allInnerTexts(), ["All users", "Active in last 30 days", "Has an expired service", "Has paid at least once", "Custom Telegram ID list"]);
+  await page.getByRole("option", { name: "Custom Telegram ID list" }).click();
+  assert.equal((await audience.innerText()).trim(), "Custom Telegram ID list");
+  await page.getByText("Up to 10,000 recipients.").waitFor();
+  await audience.focus(); await page.keyboard.press("Enter");
+  await page.getByRole("option", { name: "Has paid at least once" }).click();
+  assert.equal((await audience.innerText()).trim(), "Has paid at least once");
+  assert.equal(await page.getByText("Up to 10,000 recipients.").count(), 0);
+  await page.context().close();
+});
+await step("read-only filter Selects stay operable (Users sort still opens)", async () => {
+  const page = await newPage({ width: 1280 });
+  await go(page, "/users");
+  const sort = page.getByRole("combobox", { name: "Sort users" });
+  assert.equal(await sort.isDisabled(), false);
+  await sort.click();
+  await page.getByRole("listbox").waitFor();
+  await page.keyboard.press("Escape");
+  await page.context().close();
+});
+
 await step("tickets: the customer in the header opens that user's detail sheet (mouse and keyboard) without leaving the conversation", async () => {
   const id = await openTicket(910020, "Profile link", "Who is this customer?");
   const page = await newPage();
@@ -1037,6 +1253,127 @@ for (const theme of ["light", "dark"]) {
     await page.context().close();
   }
 }
+
+// ── Form validation (zod + @hookform/resolvers run in the browser) ───────────────────────────────
+// The two forms that use zod. Assertions use the schemas' own messages and what the forms submit; default
+// library messages (e.g. for an empty number field) are only asserted to exist, so they may be reworded by a zod upgrade.
+const formMessages = (scope) => scope.locator("p[id$='-form-item-message']").allInnerTexts();
+
+await step("plan form: schema messages, coerced numbers, no request while invalid, create and edit bodies", async () => {
+  const page = await newPage();
+  await go(page, "/products");
+  calls.product.length = 0;
+  await page.getByRole("button", { name: "Add service" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: "Add service" }).click(); // empty name, price 0
+  await dialog.getByText("Name is required").waitFor();
+  assert.deepEqual((await formMessages(dialog)).sort(), ["Name is required", "Price must be positive"]);
+  assert.equal(calls.product.length, 0, "an invalid form sends nothing");
+
+  await dialog.getByLabel("Name", { exact: true }).fill("x".repeat(121));
+  await dialog.getByLabel("Traffic (GB)").fill("100001");
+  await dialog.getByLabel("Price (Toman)").fill("2000000001");
+  await dialog.getByLabel("Cost (Toman)").fill("-1");
+  await dialog.getByLabel("ID (optional)").fill("Bad Id");
+  await dialog.getByRole("button", { name: "Add service" }).click();
+  await dialog.getByText("Cost cannot be negative").waitFor();
+  assert.deepEqual((await formMessages(dialog)).sort(), [
+    "Cost cannot be negative", "Must be at most 100,000 GB", "Name must be at most 120 characters", "Price is too large",
+    "Use 3–32 lowercase letters, digits or _, starting with a letter",
+  ].sort());
+  assert.equal(calls.product.length, 0);
+
+  // Duration is a select limited to the bot's four subscription lengths, so it cannot be invalid.
+  await dialog.getByLabel("Duration").click();
+  assert.deepEqual(await page.getByRole("option").allInnerTexts(), ["30 days", "90 days", "180 days", "365 days"]);
+  await page.getByRole("option", { name: "90 days" }).click();
+
+  await dialog.getByLabel("Name", { exact: true }).fill("  E2E plan  ");
+  await dialog.getByLabel("ID (optional)").fill("");
+  await dialog.getByLabel("Traffic (GB)").fill("10");
+  await dialog.getByLabel("Price (Toman)").fill("150000");
+  await dialog.getByLabel("Cost (Toman)").fill("90000");
+  await dialog.getByRole("switch", { name: "Available for purchase" }).click();
+  await dialog.getByRole("button", { name: "Add service" }).click();
+  await page.waitForFunction(() => document.body.innerText.includes('"E2E plan" created.'));
+  assert.equal(calls.product.length, 1);
+  const created = calls.product[0];
+  assert.equal(created.method, "POST");
+  assert.match(created.body.operationId, /^[0-9a-f-]{36}$/);
+  assert.deepEqual({ ...created.body, operationId: undefined }, { operationId: undefined, name: "E2E plan", durationDays: 90, trafficGb: 10, priceToman: 150000, costToman: 90000, enabled: true, published: true, displayOrder: 0 },
+    "numbers are submitted as numbers (coerced from the inputs), the name is trimmed");
+
+  await page.getByRole("button", { name: "Actions for 1-month · 50GB" }).click();
+  await page.getByRole("menuitem", { name: "Edit" }).click();
+  const edit = page.getByRole("dialog");
+  assert.equal(await edit.getByLabel("Price (Toman)").inputValue(), "100000");
+  await edit.getByLabel("Price (Toman)").fill("120000");
+  await edit.getByRole("button", { name: "Save changes" }).click();
+  await page.waitForFunction(() => document.body.innerText.includes("updated."));
+  assert.equal(calls.product.length, 2);
+  assert.equal(calls.product[1].method, "PATCH");
+  assert.equal(calls.product[1].id, "P-1");
+  assert.equal(calls.product[1].body.priceToman, 120000);
+  assert.equal(calls.product[1].body.durationDays, 30);
+  assert.equal(calls.product[1].body.expectedRevision, 3, "edits echo the revision they were opened with so stale saves are refused");
+  await page.context().close();
+});
+
+await step("broadcast form: message and button rules, 4-button limit, t.me-only links, what preview and send submit", async () => {
+  const page = await newPage();
+  await go(page, "/broadcasts");
+  calls.broadcastPreview.length = 0;
+  calls.broadcast.length = 0;
+  const form = page.locator("form").first();
+  await form.getByRole("button", { name: "Preview" }).click();
+  await page.getByText("Message is required").waitFor();
+  assert.equal(calls.broadcastPreview.length, 0, "an invalid form is not previewed");
+
+  const add = form.getByRole("button", { name: "Add button" });
+  for (let i = 0; i < 4; i += 1) await add.click();
+  assert.equal(await add.isDisabled(), true, "the UI stops at 4 buttons");
+  assert.equal(await form.getByPlaceholder("Button text").count(), 4);
+  await form.getByRole("button", { name: "Preview" }).click();
+  await page.getByText("Button text is required").first().waitFor();
+  const messages = await formMessages(form);
+  assert.equal(messages.filter((m) => m === "Button text is required").length, 4);
+  assert.equal(messages.filter((m) => m === "Must be a valid URL").length, 4);
+
+  await form.getByPlaceholder("What would you like to tell your users?").fill("Hello everyone");
+  const texts = form.getByPlaceholder("Button text");
+  const urls = form.getByPlaceholder("https://t.me/...");
+  await texts.nth(0).fill("Channel");
+  await urls.nth(0).fill("https://t.me/swift_shield");
+  await texts.nth(1).fill("Evil");
+  await urls.nth(1).fill("https://t.me.evil.example/x"); // a valid URL, but not a Telegram link
+  await texts.nth(2).fill("x".repeat(65));
+  await urls.nth(2).fill("https://telegram.me/swift_shield");
+  await form.getByRole("button", { name: "Remove button" }).nth(3).click();
+  await form.getByRole("button", { name: "Preview" }).click();
+  await page.getByText("Must be a t.me link").waitFor();
+  assert.deepEqual((await formMessages(form)).sort(), ["At most 64 characters", "Must be a t.me link"]);
+  assert.equal(calls.broadcastPreview.length, 0);
+
+  await urls.nth(1).fill("https://telegram.dog/swift_shield");
+  await texts.nth(1).fill("Dog");
+  await texts.nth(2).fill("Me");
+  await form.getByRole("button", { name: "Preview" }).click();
+  await page.waitForFunction(() => document.body.innerText.includes("14 characters"));
+  assert.equal(calls.broadcastPreview.length, 1);
+  assert.deepEqual(calls.broadcastPreview[0], { message: "Hello everyone", buttons: [
+    { text: "Channel", url: "https://t.me/swift_shield" }, { text: "Dog", url: "https://telegram.dog/swift_shield" }, { text: "Me", url: "https://telegram.me/swift_shield" },
+  ] });
+
+  await form.getByRole("button", { name: "Send broadcast" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Send", exact: true }).click();
+  await page.waitForFunction(() => document.body.innerText.includes("Broadcast started."));
+  assert.equal(calls.broadcast.length, 1);
+  assert.match(calls.broadcast[0].operationId, /^[0-9a-f-]{36}$/);
+  assert.equal(calls.broadcast[0].audience, "all");
+  assert.equal(calls.broadcast[0].message, "Hello everyone");
+  assert.equal(calls.broadcast[0].buttons.length, 3);
+  await page.context().close();
+});
 
 // ── Performance snapshot (opt-in: E2E_PERF=1; numbers are from this machine, not a benchmark) ──
 if (process.env.E2E_PERF) {

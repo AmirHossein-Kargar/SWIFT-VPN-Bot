@@ -6,6 +6,7 @@ import { createNowPaymentsTopUp, resetNowPaymentsCreateLocksForTests } from "../
 import { fetchPaymentCatalog, validateCatalogSelection } from "../services/nowpayments/catalog.js";
 import { formatTrxAmount, quoteSnapshotIsFresh, quoteTronTopUp, resetTronQuoteCacheForTests } from "../services/pricing/tronQuote.js";
 import { logQuoteFailure } from "../services/pricing/quoteLog.js";
+import { pruneExpired } from "../utils/boundedMap.js";
 
 const BACK = [[{ text: "🔙 بازگشت", callback_data: "back_to_topup" }]];
 const BACK_TO_CURRENCY = [{ text: "🔙 بازگشت", callback_data: "np_select_currency" }];
@@ -21,6 +22,7 @@ const FLOW_STEPS = new Set([
 ]);
 const ORDER_ID_PATTERN = /^NP-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const confirmLocks = new Set();
+const RECENT_CREATE_WINDOW_MS = 60_000;
 const recentCreates = new Map();
 
 const FAILURE_TEXT = {
@@ -647,7 +649,9 @@ export async function confirmNowPaymentsTopUp(bot, query, session, deps = {}) {
   }
 
   const createKey = `${chatId}:${amount}:${snapshot.confirmedAt}:${selectedAsset.payCurrency}`;
-  if (recentCreates.has(createKey) && Date.now() - recentCreates.get(createKey) < 60_000) return;
+  if (recentCreates.has(createKey) && Date.now() - recentCreates.get(createKey) < RECENT_CREATE_WINDOW_MS) return;
+  // Only entries past their window are dropped: every one that can still block a repeat tap is kept.
+  pruneExpired(recentCreates, (at) => Date.now() - at >= RECENT_CREATE_WINDOW_MS);
   recentCreates.set(createKey, Date.now());
   confirmLocks.add(String(chatId));
   await setSession(chatId, {
@@ -724,6 +728,10 @@ export async function confirmNowPaymentsTopUp(bot, query, session, deps = {}) {
   } catch (error) {
     console.error("[confirmNowPaymentsTopUp] invoice message error:", error?.name || "TelegramError");
   }
+}
+
+export function recentCreateGuardSizeForTests() {
+  return recentCreates.size;
 }
 
 export function resetNowPaymentsConfirmLocksForTests() {

@@ -37,6 +37,7 @@ Suites that need MongoDB: `adminBankConfirm`, `adminRegistryMutations`, `adminSe
 | Storefront | `tests/integration/storefrontAndPanel.test.js`, `storefrontBuild.test.js`, `tests/unit/storefrontLogic`, `storefrontApi` | Routing, CSP, canonical URL, caching and compression, hand-off URL safety, API client |
 | Configuration and startup | `envResolution`, `mongoStartup`, `moduleSmoke` | Environment aliases and validation, startup ordering, every production module imports cleanly |
 | Telegram UI | `messageManager`, `myServicesFlow`, `handleGuide`, `persianUiGuard`, `profile*`, `showPaymentMethods`, `supportContact` | Message handling, Persian UI guard, privacy of profile data |
+| Engineering context | `tests/unit/checkContext.test.js` | References in `CLAUDE.md` and `.claude/` resolve; impact map and skills are valid; change classification and the Stop-hook decision (`scripts/check-context.mjs`) |
 
 ## Browser suites
 
@@ -55,6 +56,6 @@ Suites that need MongoDB: `adminBankConfirm`, `adminRegistryMutations`, `adminSe
 
 ## Housekeeping
 
-`next build` output (`admin-panel/.next`, `storefront/.next`) contains `.js` files that the module
-smoke test would import. Remove those directories before running `npm test`;
-`npm run build:storefront` already deletes the storefront cache.
+`next build` output (`admin-panel/.next`, `storefront/.next`) is git-ignored and skipped by the module
+smoke test, so it can stay in place while running `npm test`; `npm run build:storefront` deletes the
+storefront cache itself.
