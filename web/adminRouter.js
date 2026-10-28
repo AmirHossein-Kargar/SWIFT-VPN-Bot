@@ -34,7 +34,7 @@ import { listAdmins, addAdmin, removeAdmin } from "../services/admin/adminRegist
 import { getUserProfilePhoto } from "../services/admin/userPhoto.js";
 import { sendUserMessage } from "../services/admin/userMessaging.js";
 import { getSettingsOverview } from "../services/admin/settings.js";
-import { listSupportTickets, getSupportTicket, getSupportTicketUpdates, getSupportTicketHistory, replyToSupportTicket, setSupportTicketStatus } from "../services/admin/tickets.js";
+import { listSupportTickets, getSupportTicket, getSupportTicketUpdates, getSupportTicketHistory, replyToSupportTicket, setSupportTicketStatus, deleteSupportTickets, clearSupportHistory } from "../services/admin/tickets.js";
 import { getMessageAttachment, toAdminError } from "../services/support/tickets.js";
 import { streamAttachment } from "../services/support/attachments.js";
 import { default as botInstance } from "../config/botInstance.js";
@@ -780,6 +780,40 @@ router.post("/tickets/:ticketId/status", rateLimitMiddleware({ limit: 30 }), req
       ipAddress: clientIp(req),
     });
     res.json({ ok: true, data: result });
+  } catch (error) { next(error); }
+});
+
+// Deletion: eligible (closed 72h+) tickets only; clearing the whole history is owner-only and phrase-confirmed.
+router.post("/tickets/bulk-delete", requireBody(), async (req, res, next) => {
+  try {
+    res.json({ ok: true, data: await deleteSupportTickets({
+      actorId: req.adminActorId,
+      operationId: parseOperationId(req.body),
+      ticketIds: req.body.ticketIds,
+      ipAddress: clientIp(req),
+    }) });
+  } catch (error) { next(error); }
+});
+
+router.post("/tickets/clear-history", rateLimitMiddleware({ limit: 5 }), requireBody(), async (req, res, next) => {
+  try {
+    res.json({ ok: true, data: await clearSupportHistory({
+      actorId: req.adminActorId,
+      operationId: parseOperationId(req.body),
+      confirmation: req.body.confirmation,
+      ipAddress: clientIp(req),
+    }) });
+  } catch (error) { next(error); }
+});
+
+router.delete("/tickets/:ticketId", requireBody(), async (req, res, next) => {
+  try {
+    res.json({ ok: true, data: await deleteSupportTickets({
+      actorId: req.adminActorId,
+      operationId: parseOperationId(req.body),
+      ticketIds: [req.params.ticketId],
+      ipAddress: clientIp(req),
+    }) });
   } catch (error) { next(error); }
 });
 

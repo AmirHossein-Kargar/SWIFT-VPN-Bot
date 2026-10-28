@@ -10,6 +10,7 @@ import { ConnectionStatus, useVisiblePolling } from "@/components/tickets/live-r
 import { TicketCustomer } from "@/components/tickets/ticket-customer";
 import { MessageList, TicketStatusBadge } from "@/components/tickets/ticket-thread";
 import { TicketComposer, TicketStatusControl } from "@/components/tickets/admin-ticket-actions";
+import { TicketDeleteControl } from "@/components/tickets/ticket-deletion";
 import { adminGet } from "@/lib/adminApi.client";
 import { BASE_PATH } from "@/lib/basePath";
 import { AdminApiError } from "@/lib/types";
@@ -50,10 +51,12 @@ export function LiveTicketThread({
   ticketId,
   onBack,
   onTicketChange,
+  onDeleted,
 }: {
   ticketId: string;
   onBack: () => void;
   onTicketChange: (ticket: TicketSummary) => void;
+  onDeleted: () => void;
 }) {
   const { actorTelegramId } = useAdminSession();
   const [phase, setPhase] = useState<Phase>("loading");
@@ -217,7 +220,10 @@ export function LiveTicketThread({
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1.5">
             <TicketStatusControl ticketId={ticket.ticketId} status={ticket.status} onChanged={(status: TicketStatus) => { setTicket((current) => (current ? { ...current, status } : current)); trigger(); }} />
-            <ConnectionStatus connection={connection} />
+            <div className="flex items-center gap-2">
+              <TicketDeleteControl ticket={ticket} onDeleted={onDeleted} />
+              <ConnectionStatus connection={connection} />
+            </div>
           </div>
         </div>
         {ticket.userTelegramId ? <TicketCustomer key={ticket.userTelegramId} telegramId={ticket.userTelegramId} /> : null}

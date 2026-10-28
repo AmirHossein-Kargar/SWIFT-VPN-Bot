@@ -23,6 +23,9 @@ export interface TicketSummary {
   userTelegramId?: string;
   closedBy?: "customer" | "admin" | null;
   closedByAdminId?: string | null;
+  /** Admin view only: closed 72h+ ago, computed by the server. */
+  deletable?: boolean;
+  deletableAt?: string | null;
 }
 
 export type MessageDelivery = "pending" | "sent" | "failed";
@@ -69,7 +72,28 @@ export interface AdminTicketPage {
   pageSize: number;
   needsAttention: number;
   unreadTotal: number;
+  /** Only the primary owner may clear the whole history. */
+  canClearHistory?: boolean;
 }
+
+export interface BulkDeleteResult {
+  requested: number;
+  deleted: number;
+  deletedIds: string[];
+  skipped: { ticketId: string; reason: string; message: string }[];
+  failed: { ticketId: string }[];
+}
+
+export interface ClearHistoryResult {
+  complete: boolean;
+  deletedTickets: number;
+  deletedMessages: number;
+  remaining: number | null;
+  newerKept: number | null;
+  errorCode: string | null;
+}
+
+export const CLEAR_HISTORY_PHRASE = "CLEAR ALL TICKET HISTORY";
 
 export const STATUS_LABELS: Record<TicketStatus, string> = {
   open: "Open",
@@ -100,6 +124,9 @@ const KNOWN_CODES: Record<string, string> = {
   ticket_closed: "This ticket is closed and cannot receive new messages.",
   reopen_not_allowed: "Closed tickets cannot be reopened. The customer can open a new ticket.",
   ticket_not_found: "Ticket not found.",
+  owner_only: "Only the primary owner can clear the ticket history.",
+  confirmation_required: "The confirmation phrase does not match.",
+  delete_failed: "The ticket could not be deleted. Try again.",
   invalid_transition: "This status change is not allowed.",
   rate_limited: "Too many requests. Wait a moment and try again.",
   csrf_token_invalid: "Your session needs to be refreshed. Reload the page and try again.",

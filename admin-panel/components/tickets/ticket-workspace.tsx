@@ -6,6 +6,8 @@ import { MessageSquareText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { ConnectionStatus, useVisiblePolling } from "@/components/tickets/live-refresh";
 import { LiveTicketThread } from "@/components/tickets/live-ticket-thread";
+import { BulkDeleteDialog, ClearHistoryControl } from "@/components/tickets/ticket-deletion";
+import { Button } from "@/components/ui/button";
 import { TicketInbox } from "@/components/tickets/ticket-inbox";
 import { TicketsFilters, type InboxFilters } from "@/components/tickets/tickets-filters";
 import { adminGet } from "@/lib/adminApi.client";
@@ -16,6 +18,8 @@ import { cn } from "@/lib/utils";
 
 const LIST_POLL_MS = 5_000;
 const PAGE_SIZE = 30;
+/** Mirrors MAX_BULK_DELETE in services/support/deletion.js. */
+const MAX_BULK_SELECT = 20;
 const TICKET_ID = /^T-[A-HJ-NP-Z2-9]{6}$/;
 
 export interface WorkspaceInitial {
@@ -67,6 +71,9 @@ export function TicketWorkspace({ initial }: { initial: WorkspaceInitial }) {
   const [list, setList] = useState<AdminTicketPage | null>(initial.list);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(initial.list === null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [checked, setChecked] = useState<ReadonlySet<string>>(new Set());
+  const [bulkOpen, setBulkOpen] = useState(false);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latest = useRef({ filters, page });
   useEffect(() => { latest.current = { filters, page }; });
@@ -158,13 +165,26 @@ export function TicketWorkspace({ initial }: { initial: WorkspaceInitial }) {
       : current));
   }, []);
 
+  // Only tickets the server currently marks deletable stay selected as the list refreshes.
+  const deletableIds = new Set((list?.tickets ?? []).filter((ticket) => ticket.deletable).map((ticket) => ticket.ticketId));
+  const selectedIds = [...checked].filter((id) => deletableIds.has(id));
+  function toggle(ticketId: string) {
+    setChecked((current) => {
+      const next = new Set(current);
+      if (next.has(ticketId)) next.delete(ticketId);
+      else if (next.size < MAX_BULK_SELECT) next.add(ticketId);
+      return next;
+    });
+  }
+  function leaveSelectMode() { setSelectMode(false); setChecked(new Set()); }
+
   const pages = list ? Math.max(1, Math.ceil(list.total / list.pageSize)) : 1;
 
   return (
     <div className="flex h-[calc(100dvh-3.5rem-3rem)] min-h-[30rem] overflow-hidden rounded-lg border border-border bg-card">
       <section aria-label="Conversation" className={cn("min-h-0 min-w-0 flex-1 md:block", selectedId ? "block" : "hidden")}>
         {selectedId ? (
-          <LiveTicketThread key={selectedId} ticketId={selectedId} onBack={() => select(null)} onTicketChange={onTicketChange} />
+          <LiveTicketThread key={selectedId} ticketId={selectedId} onBack={() => select(null)} onTicketChange={onTicketChange} onDeleted={() => { select(null); trigger(); }} />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-muted-foreground">
             <MessageSquareText className="h-8 w-8" aria-hidden />
@@ -186,6 +206,21 @@ export function TicketWorkspace({ initial }: { initial: WorkspaceInitial }) {
             </div>
           </div>
           <TicketsFilters filters={filters} search={search} onSearchChange={onSearchChange} onChange={updateFilters} />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant={selectMode ? "secondary" : "outline"} className="h-8 text-xs" onClick={() => (selectMode ? leaveSelectMode() : setSelectMode(true))}>
+              {selectMode ? "Cancel selection" : "Select to delete"}
+            </Button>
+            {list?.canClearHistory ? <ClearHistoryControl onCleared={() => { leaveSelectMode(); select(null); trigger(); }} /> : null}
+          </div>
+          {selectMode ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+              <span>{selectedIds.length} selected (max {MAX_BULK_SELECT}) · only tickets closed over 72 hours ago can be ticked</span>
+              <span className="flex gap-2">
+                <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setChecked(new Set([...deletableIds].slice(0, MAX_BULK_SELECT)))} disabled={deletableIds.size === 0}>Select all deletable</Button>
+                <Button size="sm" variant="destructive" className="h-7 text-xs" disabled={selectedIds.length === 0} onClick={() => setBulkOpen(true)}>Delete selected</Button>
+              </span>
+            </div>
+          ) : null}
         </div>
         <TicketInbox
           tickets={list ? list.tickets : null}
@@ -198,6 +233,19 @@ export function TicketWorkspace({ initial }: { initial: WorkspaceInitial }) {
           onSelect={select}
           onPage={changePage}
           onRetry={() => trigger()}
+          selectMode={selectMode}
+          checked={checked}
+          onToggle={toggle}
+        />
+        <BulkDeleteDialog
+          ticketIds={selectedIds}
+          open={bulkOpen}
+          onOpenChange={setBulkOpen}
+          onDone={(result) => {
+            setChecked(new Set());
+            if (selectedId && result.deletedIds.includes(selectedId)) select(null);
+            trigger();
+          }}
         />
       </section>
     </div>

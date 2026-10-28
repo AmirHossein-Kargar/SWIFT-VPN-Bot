@@ -20,6 +20,8 @@ import {
   SupportError,
 } from "../support/tickets.js";
 import { adminReply, adminSetStatus } from "../support/workflow.js";
+import { assertClearConfirmation, clearAllTickets, deleteTickets, describeSkip } from "../support/deletion.js";
+import { isOwnerUser } from "./adminRegistry.js";
 
 /**
  * Ticket failures reach the panel as AdminServiceError with the English text.
@@ -40,7 +42,8 @@ async function asAdmin(work) {
 
 export async function listSupportTickets({ actorId, status, query, unreadOnly, page, pageSize }) {
   assertAdminUser(actorId);
-  return asAdmin(() => listAdminTickets({ status: status || undefined, query, unreadOnly: unreadOnly === true || unreadOnly === "1", page, pageSize }));
+  const data = await asAdmin(() => listAdminTickets({ status: status || undefined, query, unreadOnly: unreadOnly === true || unreadOnly === "1", page, pageSize }));
+  return { ...data, canClearHistory: isOwnerUser(actorId) };
 }
 
 export async function getSupportTicket({ actorId, ticketId, limit }) {
@@ -105,4 +108,78 @@ export async function setSupportTicketStatus({ actorId, operationId, ticketId, s
     },
   }));
   return { ticketId, status: result?.status ?? status, changed: result?.changed ?? null, replayed };
+}
+
+// ── Deletion ────────────────────────────────────────────────────────────────
+
+const deletionShape = (r) => ({
+  requested: r?.requested ?? 0,
+  deleted: r?.deleted ?? 0,
+  deletedIds: Array.isArray(r?.deletedIds) ? r.deletedIds : [],
+  skipped: (Array.isArray(r?.skipped) ? r.skipped : []).map((item) => ({ ticketId: item.ticketId, reason: item.reason, message: describeSkip(item.reason) })),
+  failed: Array.isArray(r?.failed) ? r.failed : [],
+});
+
+/** Deletes eligible tickets (closed 72h+). Any allowlisted admin; eligibility is re-checked per ticket at delete time. */
+export async function deleteSupportTickets({ actorId, operationId, ticketIds, ipAddress, auditModel }) {
+  assertAdminUser(actorId);
+  const single = Array.isArray(ticketIds) && ticketIds.length === 1;
+  const { result, replayed } = await asAdmin(() => runAuditedAction({
+    actorTelegramId: actorId,
+    operationId,
+    action: single ? "TICKET_DELETE" : "TICKET_BULK_DELETE",
+    targetType: "ticket",
+    targetId: single ? ticketIds[0] : null,
+    ipAddress,
+    metadata: { channel: "web", requested: Array.isArray(ticketIds) ? ticketIds.length : 0, ticketIds: Array.isArray(ticketIds) ? ticketIds.filter((id) => typeof id === "string").slice(0, 20) : [] },
+    auditModel,
+    execute: async () => {
+      const outcome = await deleteTickets({ ticketIds }).catch((error) => { throw adminFailure(error); });
+      if (single && outcome.deleted === 0) {
+        const reason = outcome.skipped[0]?.reason;
+        throw new AdminServiceError(outcome.failed.length ? "The ticket could not be deleted. Try again." : describeSkip(reason), { status: outcome.failed.length ? 503 : 409, code: outcome.failed.length ? "delete_failed" : `ticket_not_deletable_${reason}` });
+      }
+      return { ...outcome, auditSummary: outcome };
+    },
+  }));
+  return { ...deletionShape(result), replayed };
+}
+
+let clearInFlight = false;
+
+/** Owner-only, phrase-confirmed removal of the entire ticket history (open tickets included). */
+export async function clearSupportHistory({ actorId, operationId, confirmation, ipAddress, auditModel }) {
+  assertAdminUser(actorId);
+  if (!isOwnerUser(actorId)) {
+    throw new AdminServiceError("Only the primary owner can clear the ticket history.", { status: 403, code: "owner_only" });
+  }
+  try { assertClearConfirmation(confirmation); } catch (error) { throw adminFailure(error); }
+  if (clearInFlight) throw new AdminServiceError("A history clear is already running.", { status: 409, code: "action_in_progress" });
+  clearInFlight = true;
+  try {
+    const { result, replayed } = await asAdmin(() => runAuditedAction({
+      actorTelegramId: actorId,
+      operationId,
+      action: "TICKET_HISTORY_CLEAR",
+      targetType: "ticket_history",
+      ipAddress,
+      metadata: { channel: "web" },
+      auditModel,
+      execute: async () => {
+        const outcome = await clearAllTickets();
+        return { ...outcome, auditSummary: outcome };
+      },
+    }));
+    return {
+      complete: result?.complete === true,
+      deletedTickets: result?.deletedTickets ?? 0,
+      deletedMessages: result?.deletedMessages ?? 0,
+      remaining: result?.remaining ?? null,
+      newerKept: result?.newerKept ?? null,
+      errorCode: result?.errorCode ?? null,
+      replayed,
+    };
+  } finally {
+    clearInFlight = false;
+  }
 }
