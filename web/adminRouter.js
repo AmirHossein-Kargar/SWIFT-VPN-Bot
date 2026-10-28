@@ -6,7 +6,7 @@ import { runAuditedAction } from "../services/admin/audit.js";
 import { getDashboardMetrics } from "../services/admin/dashboard.js";
 import { listUsers, getUserDetail, changeUserBalance, setUserBlocked, getReferralOverview, resetTestServiceEligibility } from "../services/admin/users.js";
 import { listVpns, getVpnDetail, performVpnAction, listRemoteClients } from "../services/admin/vpns.js";
-import { listProducts, createProduct, updateProduct, duplicateProduct, reorderProducts } from "../services/admin/products.js";
+import { listProductsPage, createProduct, updateProduct, duplicateProduct, reorderProducts, moveProduct, archiveProduct, restoreProduct, deleteProduct } from "../services/admin/products.js";
 import { releaseCreationUnknownLock } from "../services/admin/creationUnknown.js";
 import { listPayments, getPaymentDetail, retryPayment, markPaymentRecoveryRequired, resolvePaymentRecovery, confirmBankInvoice, rejectBankInvoice } from "../services/admin/payments.js";
 import { previewPaymentDeletion, deletePayments } from "../services/admin/paymentDeletion.js";
@@ -601,7 +601,7 @@ router.post("/custody/reconcile", requireBody(), async (req, res, next) => {
 
 // Products
 router.get("/products", async (req, res, next) => {
-  try { res.json({ ok: true, data: await listProducts({ actorId: req.adminActorId }) }); }
+  try { res.json({ ok: true, data: await listProductsPage({ actorId: req.adminActorId, query: req.query }) }); }
   catch (error) { next(error); }
 });
 
@@ -625,6 +625,27 @@ router.post("/products/:productId/duplicate", requireBody(), async (req, res, ne
     res.json({ ok: true, data: result });
   } catch (error) { next(error); }
 });
+
+function productAction(handler) {
+  return [requireBody(), async (req, res, next) => {
+    try {
+      const result = await handler({
+        actorId: req.adminActorId,
+        operationId: parseOperationId(req.body),
+        productId: req.params.productId,
+        expectedRevision: req.body.expectedRevision ?? null,
+        body: req.body,
+        ipAddress: clientIp(req),
+      });
+      res.json({ ok: true, data: result });
+    } catch (error) { next(error); }
+  }];
+}
+
+router.post("/products/:productId/archive", ...productAction(({ body, ...args }) => archiveProduct(args)));
+router.post("/products/:productId/restore", ...productAction(({ body, ...args }) => restoreProduct(args)));
+router.post("/products/:productId/move", ...productAction(({ body, ...args }) => moveProduct({ ...args, direction: body.direction })));
+router.delete("/products/:productId", ...productAction(({ body, ...args }) => deleteProduct(args)));
 
 router.post("/products/reorder", requireBody(), async (req, res, next) => {
   try {

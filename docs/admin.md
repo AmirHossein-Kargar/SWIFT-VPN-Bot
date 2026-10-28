@@ -43,7 +43,7 @@ rate-limited. Sign-in requests are rate-limited per Telegram ID and per IP.
 | VPN services | Registry plus live WizardXray detail: change link, enable/disable, revoke, extend time, add traffic |
 | Payments | All providers, status tabs, full timeline (wallet debit/refund and webhook events), safe retry, mark for recovery, manual resolve, bank-receipt confirm/reject; NOWPayments orders with an unknown invoice outcome: read-only provider check and an audited, reason-and-confirmation-gated lock release |
 | Recovery | Queue of stuck payments and orders, safe retry-all |
-| Plans & pricing | `AdminProduct` catalog: create, edit, duplicate, reorder, enable. Used for management and analytics only |
+| Service catalog | `AdminProduct` catalog (delete uses a lock + reference-count handshake with purchases, see `docs/payments.md`), the source of truth for the bot and storefront: paginated search/filter/sort, add, edit (optimistic concurrency via `revision`), duplicate, reorder, put on/off sale (`enabled`), show/hide on storefront (`published`), archive/restore, delete (only if unreferenced and not a shipped plan) |
 | Custody | NOWPayments custody balances, conversions, payouts and reconciliation (needs `NOWPAYMENTS_EMAIL` / `NOWPAYMENTS_PASSWORD`) |
 | Broadcasts | Preview, audience selection, rate-limited delivery, cancel, progress |
 | Admins | Add or remove database admins (owner only) |
@@ -99,7 +99,7 @@ idempotent through `operationId`. `GET /api/admin/operations/new-id` returns a f
 | VPN | `GET /vpns` · `GET /vpns/:username` · `POST /vpns/:username/actions` · `GET /vpns-remote/clients` |
 | Payments | `GET /payments` · `GET /payments/:key` · `POST /payments/:key/retry` · `/recovery-required` · `/resolve` · `/release-creation-lock` (NOWPayments `creation_unknown` only) · `POST /payments/bank/:id/confirm` · `/reject` |
 | Recovery | `GET /recovery` · `POST /recovery/retry-safe` |
-| Plans & pricing | `GET/POST /products` · `PATCH /products/:id` · `POST /products/:id/duplicate` · `POST /products/reorder` |
+| Service catalog | `GET /products?search&status&duration&sort&order&page&pageSize` · `POST /products` · `PATCH /products/:id` (send `expectedRevision`) · `DELETE /products/:id` · `POST /products/:id/{duplicate,archive,restore,move}` · `POST /products/reorder`. Audit actions: `PRODUCT_CREATED/UPDATED/AVAILABILITY_CHANGED/ARCHIVED/RESTORED/DELETED` |
 | Broadcast | `POST /broadcast/preview` · `POST /broadcast` · `GET /broadcast/status/:id` · `POST /broadcast/cancel/:id` · `GET /broadcasts` |
 | Custody | `GET /custody/overview` · `/assets` · `/conversions` · `/payouts` · `/payouts/fee` · `/transactions` · `POST /custody/conversions[/preview]` · `/payouts[/validate-address]` · `/payouts/:batchId/verify` · `/reconcile` |
 | Admins (owner) | `GET /admins` · `POST /admins` · `DELETE /admins/:telegramId` |

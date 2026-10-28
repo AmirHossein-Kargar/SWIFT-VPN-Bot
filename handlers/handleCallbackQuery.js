@@ -29,7 +29,7 @@ import keyboard, { MENU_PREFIX } from "../keyboards/mainKeyboard.js";
 import { runMenuAction, showMainMenu } from "./menuActions.js";
 import { claimCallback, withSingleAck } from "../utils/callbackGuard.js";
 import promptForReceipt from "../paymentHandlers/promptForReceipt.js";
-import { getActiveProducts, getCustomerPlans, getCustomerPlanById } from "../services/plans.js";
+import { getActiveProducts, getSellablePlans, getSellablePlanById } from "../services/plans.js";
 import handleBuyService, { buildDurationPlansMessage } from "../services/buyService/buyService.js";
 import generatePlanButtons from "../keyboards/generatePlanButtons.js";
 import { handleReservedOrderCallback } from "./reservedOrderCallbacks.js";
@@ -779,8 +779,8 @@ const handleCallbackQueryInner = async (bot, query) => {
     return;
   }
 
-  // Customer selling plans and prices are resolved from the fixed server-side
-  // catalog. AdminProduct edits never change the customer checkout price.
+  // Customer plans and prices are resolved server-side from the admin product
+  // catalog (shipped catalog as fallback); callback data carries only ids.
   if (data.startsWith("duration_")) {
     const rawDays = data.slice("duration_".length);
     if (!/^[1-9]\d{0,3}$/.test(rawDays)) {
@@ -792,7 +792,7 @@ const handleCallbackQueryInner = async (bot, query) => {
       await bot.answerCallbackQuery(query.id, { text: "⚠️ مدت زمان نامعتبر است.", show_alert: true });
       return;
     }
-    const products = getCustomerPlans({ durationDays: days });
+    const products = await getSellablePlans({ durationDays: days });
     if (!products.length) {
       await bot.editMessageText("⚠️ در حال حاضر پلن فعالی برای این مدت زمان موجود نیست.", {
         chat_id: chatId,
@@ -898,7 +898,13 @@ const handleCallbackQueryInner = async (bot, query) => {
   if (data.startsWith("plan_")) {
     const planId = data.slice("plan_".length);
     // Render the server-defined customer plan; callback data contains only its id.
-    const selectedPlan = getCustomerPlanById(planId);
+    let selectedPlan;
+    try {
+      selectedPlan = await getSellablePlanById(planId, { requireDatabase: true });
+    } catch {
+      await bot.answerCallbackQuery(query.id, { text: "⚠️ فروشگاه موقتاً در دسترس نیست. کمی بعد دوباره تلاش کنید.", show_alert: true });
+      return;
+    }
     if (!selectedPlan) {
       await bot.editMessageText("❌ این پلن در حال حاضر فعال نیست یا حذف شده است.", {
         chat_id: chatId,
@@ -922,7 +928,13 @@ const handleCallbackQueryInner = async (bot, query) => {
     const planId = data.slice("confirm_order_".length);
     // Re-resolve server-defined terms at charge time; never pass price, traffic,
     // or duration supplied by the callback/UI into the business layer.
-    const selectedPlan = getCustomerPlanById(planId);
+    let selectedPlan;
+    try {
+      selectedPlan = await getSellablePlanById(planId, { requireDatabase: true });
+    } catch {
+      await bot.answerCallbackQuery(query.id, { text: "⚠️ فروشگاه موقتاً در دسترس نیست. کمی بعد دوباره تلاش کنید.", show_alert: true });
+      return;
+    }
     if (!selectedPlan) {
       await bot.sendMessage(chatId, "❌ این پلن در حال حاضر فعال نیست یا حذف شده است. لطفاً از منوی خرید دوباره انتخاب کنید.", keyboard);
       return;

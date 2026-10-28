@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import AdminProduct from "../models/AdminProduct.js";
 
 export const SUBSCRIPTION_DURATION_OPTIONS = Object.freeze([
@@ -230,6 +231,13 @@ const DEFAULT_DURATIONS = [30, 60, 90];
 let injectedProductModel = null;
 export function setProductModelForTests(model) { injectedProductModel = model; }
 function productModel() { return injectedProductModel || AdminProduct; }
+/** Without a live Mongo connection (unit tests, early boot) the shipped catalog is used instead of buffering queries. */
+function catalogDbReady() { return Boolean(injectedProductModel) || mongoose.connection.readyState === 1; }
+
+const PRODUCT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const SUPPORTED_DAYS = new Set(SUBSCRIPTION_DURATIONS);
+/** Matches products that were never archived (field absent) or were restored (null). */
+const NOT_ARCHIVED = { archivedAt: null };
 
 function productToPlan(product) {
   return {
@@ -241,11 +249,44 @@ function productToPlan(product) {
   };
 }
 
-/** Add the currently shipped plans as durable products without overwriting admin edits. */
+/** Customer-safe plan (same shape as `customerPlans`): never carries cost or profit. */
+function productToCustomerPlan(product) {
+  const plan = productToPlan(product);
+  const duration = DURATION_OPTION_BY_DAYS.get(plan.days);
+  return { ...plan, ...(duration ? { durationLabel: duration.title } : {}) };
+}
+
+/** A permanent delete holds this lock only for milliseconds; a lock older than this is a crashed delete and is ignored. */
+export const DELETE_LOCK_MS = 120_000;
+
+export function isDeleteLocked(product, nowMs = Date.now()) {
+  const lockedAt = product?.deleteLockedAt ? new Date(product.deleteLockedAt).getTime() : 0;
+  return lockedAt > 0 && nowMs - lockedAt < DELETE_LOCK_MS;
+}
+
+/** A product is sellable only when it is enabled, not archived, not being deleted, and uses a supported duration. */
+export function isProductSellable(product, { storefront = false } = {}) {
+  if (!product || product.enabled !== true || product.archivedAt || isDeleteLocked(product)) return false;
+  if (!SUPPORTED_DAYS.has(Number(product.durationDays))) return false;
+  if (storefront && product.published === false) return false;
+  return true;
+}
+
+const LEGACY_DEFAULT_IDS = defaultPlans.map((plan) => plan.id);
+
+/** Ids that ship with the code (current and legacy). They are re-seeded or referenced by history, so never hard-deleted. */
+export function isShippedPlanId(productId) {
+  return internalPlanById.has(productId) || legacyPlanById.has(productId) || LEGACY_DEFAULT_IDS.includes(productId);
+}
+
+/**
+ * Import the shipped customer catalog as durable products without overwriting admin edits, and retire the legacy
+ * `plan30_*`/`plan60_*`/`plan90_*` rows (never sold to customers) so they cannot become purchasable. Both steps are
+ * idempotent: retirement only touches rows that were never archived or restored.
+ * @returns {Promise<number>} number of newly inserted products
+ */
 export async function seedDefaultProducts() {
-  const costPerDay = Number(process.env.COST_PER_DAY || 200);
-  const costPerGb = Number(process.env.COST_PER_GB || 300);
-  const operations = defaultPlans.map((plan, displayOrder) => ({
+  const operations = internalPlanCatalog.map((plan, displayOrder) => ({
     updateOne: {
       filter: { productId: plan.id },
       update: {
@@ -254,80 +295,105 @@ export async function seedDefaultProducts() {
           name: plan.name,
           durationDays: plan.days,
           trafficGb: plan.gig,
-          priceToman: plan.price,
-          costToman: Math.max(0, Math.round(plan.days * costPerDay + plan.gig * costPerGb)),
+          priceToman: plan.sellingPrice,
+          costToman: plan.purchaseCost,
           enabled: true,
+          published: true,
           displayOrder,
+          revision: 0,
         },
       },
       upsert: true,
     },
   }));
   const result = await productModel().bulkWrite(operations, { ordered: false });
+  await productModel().updateMany(
+    { productId: { $in: LEGACY_DEFAULT_IDS }, archivedAt: { $exists: false } },
+    { $set: { enabled: false, published: false, archivedAt: new Date(), archivedBy: "system" }, $inc: { revision: 1 } },
+  );
   return Number(result.upsertedCount || 0);
 }
 
+function staticSellablePlans({ durationDays } = {}) {
+  return getCustomerPlans(Number.isSafeInteger(durationDays) ? { durationDays } : {})
+    .filter((plan) => customerPlans.some((candidate) => candidate.id === plan.id));
+}
+
 /**
- * The Telegram shop reads from the same product collection used by the Admin
- * Panel — this is the authoritative source of purchasable products and their
- * prices. The static catalog remains a safe fallback for tests/development and
- * lets a DB outage never turn the existing checkout into an empty menu.
+ * Plans offered for NEW purchases. The admin product collection is authoritative once it holds any product (so
+ * disabling or archiving everything yields an empty menu, never the shipped prices). The shipped catalog is used only
+ * when the collection is empty or the database is unreachable, so a DB outage never turns the menu into nothing.
+ * `storefront: true` additionally requires the product to be published on the public storefront.
  */
-export async function getActiveProducts({ durationDays } = {}) {
+export async function getSellablePlans({ durationDays, storefront = false, requireDatabase = false } = {}) {
+  if (Number.isSafeInteger(durationDays) && !SUPPORTED_DAYS.has(durationDays)) return [];
+  if (!catalogDbReady()) {
+    if (requireDatabase) throw new Error("Product catalog database is not connected");
+    return staticSellablePlans({ durationDays });
+  }
   try {
-    const query = { enabled: true };
-    if (Number.isSafeInteger(durationDays)) query.durationDays = durationDays;
+    const query = { enabled: true, ...NOT_ARCHIVED, durationDays: Number.isSafeInteger(durationDays) ? durationDays : { $in: [...SUPPORTED_DAYS] } };
+    if (storefront) query.published = { $ne: false };
     const [products, catalogSize] = await Promise.all([
       productModel().find(query).sort({ displayOrder: 1, productId: 1 }).lean(),
       productModel().countDocuments({}),
     ]);
-    if (catalogSize > 0) return products.map(productToPlan);
-  } catch {
-    // The bot's current payment paths already depend on Mongo. Keeping the
-    // shipped plan fallback avoids introducing an additional failure mode.
+    if (catalogSize > 0) return products.filter((product) => isProductSellable(product, { storefront })).map(productToCustomerPlan);
+  } catch (error) {
+    // Display listings fall back to the shipped catalog; authorization callers pass requireDatabase and fail closed.
+    if (requireDatabase) throw error;
   }
-  const selected = Number.isSafeInteger(durationDays)
-    ? defaultPlans.filter((plan) => plan.days === durationDays)
-    : defaultPlans;
-  return selected.map(productToPlan);
+  return staticSellablePlans({ durationDays });
 }
 
 /**
- * The authoritative price/product lookup for checkout. When the catalog is
- * populated, a product that is missing or disabled there returns null —
- * stale hardcoded prices can never override database products.
+ * Authoritative lookup used at every purchase step (menu, confirmation, charge, quote, storefront hand-off).
+ * A product present in the database decides on its own: disabled, archived, unpublished (storefront) or unsupported
+ * means null. An id absent from the database falls back to the shipped catalog (legacy ids only when not storefront).
+ * Database errors propagate so a purchase never proceeds on unknown state.
  */
-export async function getActiveProductById(productId) {
-  if (typeof productId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(productId)) return null;
-  try {
-    const [product, catalogSize] = await Promise.all([
-      productModel().findOne({ productId, enabled: true }).lean(),
-      productModel().countDocuments({}),
-    ]);
-    if (product) return productToPlan(product);
-    if (catalogSize > 0) return null;
-  } catch {
-    // Fall through to the compatibility catalog if Mongo is unavailable.
+export async function getSellablePlanById(productId, { storefront = false, requireDatabase = false } = {}) {
+  if (typeof productId !== "string" || !PRODUCT_ID_PATTERN.test(productId)) return null;
+  if (!catalogDbReady()) {
+    // Purchase authorization must never fall back to stale shipped data because the database is unreachable.
+    if (requireDatabase) throw new Error("Product catalog database is not connected");
+    return shippedPlan(productId, storefront);
   }
-  return defaultPlans.find((plan) => plan.id === productId) || null;
+  const product = await productModel().findOne({ productId }).lean();
+  if (product) return isProductSellable(product, { storefront }) ? productToCustomerPlan(product) : null;
+  return shippedPlan(productId, storefront);
 }
 
 /**
- * Duration groups offered by the shop, derived from the active catalog so a
- * product created in the admin panel appears in the shop automatically.
- * Falls back to the shipped 30/60/90 groups when the catalog is empty or the
- * database is unreachable.
+ * Second half of the delete/purchase handshake. deleteProduct locks the product, then counts references, then
+ * deletes; a purchase creates its order record first and calls this afterwards. Because the lock is written before
+ * the count and this read happens after the record exists, either the delete sees the order (and aborts) or this
+ * sees the lock/absence (and the order is withdrawn). Returns false when the product may no longer be referenced.
  */
+export async function isProductReferencable(productId, { requireDatabase = false } = {}) {
+  if (!catalogDbReady()) {
+    if (requireDatabase) throw new Error("Product catalog database is not connected");
+    return true;
+  }
+  const product = await productModel().findOne({ productId }).lean();
+  if (product) return !isDeleteLocked(product);
+  return isShippedPlanId(productId);
+}
+
+function shippedPlan(productId, storefront) {
+  if (storefront && !customerPlans.some((plan) => plan.id === productId)) return null;
+  return getCustomerPlanById(productId);
+}
+
+/** Admin-facing alias kept for existing callers (financial report, tests): plans currently on sale in the bot. */
+export const getActiveProducts = getSellablePlans;
+export const getActiveProductById = getSellablePlanById;
+
+/** Duration groups offered by the shop. The four subscription durations are fixed; this lists the ones with a sellable plan. */
 export async function getAvailableDurations() {
-  try {
-    const products = await getActiveProducts();
-    const durations = [...new Set(products.map((plan) => Number(plan.days)).filter(Number.isSafeInteger))]
-      .sort((a, b) => a - b);
-    if (durations.length) return durations;
-  } catch {
-    // fall through to shipped durations
-  }
-  return DEFAULT_DURATIONS;
+  const plans = await getSellablePlans();
+  const present = new Set(plans.map((plan) => plan.days));
+  return SUBSCRIPTION_DURATIONS.filter((days) => present.has(days));
 }
 
 export { defaultPlans, productToPlan };

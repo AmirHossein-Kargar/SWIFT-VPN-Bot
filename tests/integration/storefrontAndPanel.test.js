@@ -246,14 +246,14 @@ describe("public store API", () => {
 });
 
 describe("Telegram integration", () => {
-  test("deep-link payloads resolve only currently sold plans", () => {
+  test("deep-link payloads resolve only currently sold plans", async () => {
     assert.equal(parseStartPayload("/start plan_s30_10"), "plan_s30_10");
     assert.equal(parseStartPayload("/start@Swift_servicebot plan_s30_10"), "plan_s30_10");
     assert.equal(parseStartPayload("/start"), null);
     assert.equal(parseStartPayload("/start plan_s30_10 extra"), null);
-    assert.equal(planFromStartPayload("plan_s30_10")?.price, customerPlans.find((p) => p.id === "s30_10").price);
-    assert.equal(planFromStartPayload("plan_test"), null, "legacy plans are not sold through links");
-    assert.equal(planFromStartPayload("plan_../x"), null);
+    assert.equal((await planFromStartPayload("plan_s30_10"))?.price, customerPlans.find((p) => p.id === "s30_10").price);
+    assert.equal(await planFromStartPayload("plan_test"), null, "legacy plans are not sold through links");
+    assert.equal(await planFromStartPayload("plan_../x"), null);
   });
 
   test("the mock-test button is offered only to admins in private chats", () => {

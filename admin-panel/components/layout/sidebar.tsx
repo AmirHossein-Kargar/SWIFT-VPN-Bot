@@ -43,7 +43,7 @@ const NAV_SECTIONS: NavSection[] = [
   {
     label: "Catalog & finance",
     items: [
-      { href: "/products", label: "Plans & pricing", icon: Package },
+      { href: "/products", label: "Service catalog", icon: Package },
       { href: "/custody", label: "Custody", icon: Coins },
     ],
   },

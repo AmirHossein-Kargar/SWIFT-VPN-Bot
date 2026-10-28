@@ -1,7 +1,5 @@
 import confirmOrder from "../../services/buyService/confirmOrder.js";
-import { customerPlans, getCustomerPlanById } from "../../services/plans.js";
-
-const ACTIVE_PLAN_IDS = new Set(customerPlans.map((plan) => plan.id));
+import { getSellablePlanById } from "../../services/plans.js";
 
 /**
  * Parse the payload of a Telegram deep link (`/start <payload>`). Telegram
@@ -17,16 +15,17 @@ export function parseStartPayload(text) {
  * Only the plan ID travels in the link: price, traffic and duration are read
  * from the server catalog here and again at checkout (confirm_order_).
  */
-export function planFromStartPayload(payload) {
-  const match = /^plan_([a-z][a-z0-9_]{0,31})$/.exec(String(payload ?? ""));
-  if (!match || !ACTIVE_PLAN_IDS.has(match[1])) return null;
-  return getCustomerPlanById(match[1]);
+export async function planFromStartPayload(payload) {
+  const match = /^plan_([A-Za-z0-9][A-Za-z0-9_-]{0,58})$/.exec(String(payload ?? ""));
+  if (!match) return null;
+  // storefront: true keeps legacy ids (plan_test) out of links while honouring publication state.
+  return getSellablePlanById(match[1], { storefront: true });
 }
 
 /** Show the standard order confirmation for a storefront plan link. */
 export async function handleStartPayload(bot, chatId, payload) {
   if (!String(payload ?? "").startsWith("plan_")) return false;
-  const plan = planFromStartPayload(payload);
+  const plan = await planFromStartPayload(payload);
   if (!plan) {
     await bot.sendMessage(chatId, "❌ این پلن در حال حاضر فعال نیست. لطفاً از منوی «🛒 خرید سرویس» یک پلن انتخاب کنید.");
     return true;

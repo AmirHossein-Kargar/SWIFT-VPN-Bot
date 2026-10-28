@@ -35,6 +35,7 @@ export default async function RemoteClientsPage() {
       <nav aria-label="VPN sections" className="flex gap-2">
         <Link href="/vpns" className={buttonVariants({ variant: "outline", size: "sm" })}>Local services</Link>
         <Link href="/vpns/remote" aria-current="page" className={buttonVariants({ variant: "default", size: "sm" })}>Remote clients</Link>
+        <Link href="/products" className={buttonVariants({ variant: "outline", size: "sm" })}>Service catalog</Link>
       </nav>
       <Card>
         <CardHeader>

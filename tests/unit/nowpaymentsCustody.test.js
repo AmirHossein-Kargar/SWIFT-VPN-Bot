@@ -1,4 +1,5 @@
-import { test, describe, beforeEach } from "node:test";
+import { test, describe, beforeEach, after } from "node:test";
+import { useShippedCatalog, resetCatalog } from "../helpers/shippedCatalog.js";
 import assert from "node:assert/strict";
 import express from "express";
 import {
@@ -514,7 +515,9 @@ describe("NOWPayments API capability matrix & dynamic catalog", () => {
 });
 
 describe("Dynamic pricing with Gheymat Online, min-amount enforcement, and immutable quote snapshot", () => {
+  after(resetCatalog);
   beforeEach(() => {
+    useShippedCatalog(); // no MongoDB here: plan authorization uses an empty injected catalog = shipped plans
     resetNowPaymentsCatalogCacheForTests();
     resetTronQuoteCacheForTests();
     resetNowPaymentsCreateLocksForTests();

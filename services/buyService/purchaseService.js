@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import User from "../../models/User.js";
 import WalletPurchase from "../../models/WalletPurchase.js";
-import { getCustomerPlanById } from "../plans.js";
+import { getSellablePlanById, isProductReferencable } from "../plans.js";
 import { createVpnService } from "../../api/wizardApi.js";
 import {
   commitProvisionedPurchase,
@@ -267,7 +267,8 @@ async function recordProvisionedService(purchaseModel, purchaseId, providerServi
 
 /**
  * Business-layer customer purchase entry point. Only planId and userId are
- * request data; price, traffic, and duration always come from customerPlans.
+ * request data; price, traffic, and duration always come from the server-side
+ * product catalog, re-validated here so a disabled or archived plan cannot be bought.
  * Callers must reuse purchaseId when retrying the same user action. When not
  * supplied, a one-off ID is generated for a new purchase intent.
  */
@@ -282,7 +283,14 @@ export async function purchasePlan(
   } = {}
 ) {
   const telegramId = normalizeTelegramId(userId);
-  const plan = getCustomerPlanById(planId);
+  // The real models mean production: the catalog database is then mandatory for authorization (no stale fallback).
+  const requireDatabase = purchaseModel === WalletPurchase;
+  let plan;
+  try {
+    plan = await getSellablePlanById(planId, { requireDatabase });
+  } catch {
+    throw new PurchaseServiceError("Product catalog is temporarily unavailable", "CATALOG_UNAVAILABLE");
+  }
   if (!plan) throw new PurchaseServiceError("Requested customer plan is not available", "INVALID_PLAN");
   if (![plan.days, plan.gig, plan.price].every((value) => Number.isSafeInteger(value) && value > 0)) {
     throw new PurchaseServiceError("Customer plan configuration is invalid", "INVALID_PLAN_CONFIGURATION");
@@ -317,6 +325,20 @@ export async function purchasePlan(
       throw new PurchaseServiceError("Purchase identifier could not be claimed", "PURCHASE_ID_CONFLICT");
     }
     throw error;
+  }
+
+  // Handshake with permanent product deletion: the order record exists now, so confirm the product was not deleted
+  // (or being deleted) in the meantime. Nothing has been debited yet, so the order is simply withdrawn.
+  let referencable;
+  try {
+    referencable = await isProductReferencable(plan.id, { requireDatabase });
+  } catch {
+    referencable = false;
+  }
+  if (!referencable) {
+    await purchaseModel.deleteOne({ purchaseId, status: "reserving", walletDebitStatus: "not_debited" })
+      .catch(() => purchaseModel.updateOne({ purchaseId, status: "reserving" }, { $set: { status: "failed", errorCode: "PLAN_UNAVAILABLE" } }).catch(() => {}));
+    throw new PurchaseServiceError("Requested customer plan is not available", "INVALID_PLAN");
   }
 
   const now = new Date();

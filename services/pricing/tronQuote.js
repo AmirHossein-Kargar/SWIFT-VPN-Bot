@@ -10,7 +10,7 @@ import {
 import { createNowPaymentsRequest } from "../nowpayments/nowpaymentsClient.js";
 import { assertMeetsMinimum, requestMinAmount } from "../nowpayments/minAmount.js";
 import { fetchNowPaymentsCatalog, validateCatalogSelection } from "../nowpayments/catalog.js";
-import { getCustomerPlanByDurationAndVolume, getCustomerPlanById } from "../plans.js";
+import { getSellablePlanById, getSellablePlans } from "../plans.js";
 import { getUsdtTomanQuote, gheymatCacheTtlMs, gheymatMaxAgeMs } from "./gheymatClient.js";
 import { logQuoteFailure } from "./quoteLog.js";
 
@@ -263,6 +263,11 @@ export async function quoteTronTopUp({
   };
 }
 
+async function findSellablePlanByDurationAndVolume(durationDays, gig) {
+  if (!Number.isSafeInteger(durationDays) || !Number.isSafeInteger(gig)) return null;
+  return (await getSellablePlans({ durationDays, requireDatabase: true })).find((plan) => plan.gig === gig) || null;
+}
+
 /**
  * Quote a dynamic cryptocurrency payment for either a wallet top-up or a VPN plan,
  * validating the selected currency & network against the live NOWPayments catalog
@@ -287,9 +292,9 @@ export async function quoteCryptoPayment({
 
   if (planSelection) {
     const plan = typeof planSelection === "string"
-      ? getCustomerPlanById(planSelection)
-      : getCustomerPlanById(planSelection.planId || planSelection.id)
-        || getCustomerPlanByDurationAndVolume(
+      ? await getSellablePlanById(planSelection, { requireDatabase: true })
+      : await getSellablePlanById(planSelection.planId || planSelection.id, { requireDatabase: true })
+        || await findSellablePlanByDurationAndVolume(
           Number(planSelection.durationDays ?? planSelection.days),
           Number(planSelection.gig ?? planSelection.trafficGb),
         );

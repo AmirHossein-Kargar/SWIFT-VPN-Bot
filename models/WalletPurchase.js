@@ -145,6 +145,7 @@ for (const operation of ["findOneAndUpdate", "updateOne", "updateMany"]) {
 }
 
 walletPurchaseSchema.index({ status: 1, createdAt: 1 }, { name: "idx_wallet_purchase_recovery" });
+walletPurchaseSchema.index({ planId: 1 }, { name: "idx_wallet_purchase_plan" });
 walletPurchaseSchema.index({ telegramId: 1, createdAt: -1 }, { name: "idx_wallet_purchase_user_recent" });
 walletPurchaseSchema.index({ recoveryStatus: 1, status: 1, createdAt: 1 }, { name: "idx_wallet_purchase_recovery_queue" });
 // Read-only lookup of recent completions for the user-spend sweeper (services/users/userSpendSweeper.js).

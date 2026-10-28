@@ -135,11 +135,11 @@ describe("web admin API (session-authenticated)", () => {
   skip("products CRUD through the authenticated API", async () => {
     const created = await call("POST", "/api/admin/products", {
       cookie, csrf,
-      body: { operationId: `web${Date.now().toString(36)}`.padEnd(20, "0"), name: "Web test plan", durationDays: 14, trafficGb: 20, priceToman: 30_000, costToman: 5_000, enabled: true },
+      body: { operationId: `web${Date.now().toString(36)}`.padEnd(20, "0"), name: "Web test plan", durationDays: 30, trafficGb: 20, priceToman: 30_000, costToman: 5_000, enabled: true },
     });
     assert.equal(created.status, 200);
-    const list = await call("GET", "/api/admin/products", { cookie, csrf });
-    assert.ok(list.data.data.some((product) => product.name === "Web test plan"));
+    const list = await call("GET", "/api/admin/products?search=Web%20test", { cookie, csrf });
+    assert.ok(list.data.data.items.some((product) => product.name === "Web test plan"));
   });
 
   skip("validation errors return structured 400s, never stack traces", async () => {
