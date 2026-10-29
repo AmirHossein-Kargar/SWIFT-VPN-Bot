@@ -195,6 +195,10 @@ export default async function startBot() {
       }),
     ]);
     setBotIdentity(me);
+    // TEMP DIAGNOSTIC (remove once /start-and-buttons investigation is closed): confirms which
+    // bot account this process is actually authenticated as — a mismatched BOT_TOKEN (wrong/
+    // staging bot) looks identical to "the bot doesn't respond" from the customer's side.
+    console.log(`[diag] Telegram identity confirmed: @${me.username} (bot id ${me.id})`);
     setTelegramReadinessProbe(() => {
       const evidence = getPollingEvidence(bot);
       return !evidence.failing && !evidence.stalled;

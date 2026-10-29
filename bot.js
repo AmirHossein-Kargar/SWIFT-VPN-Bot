@@ -78,6 +78,18 @@ try {
 // * 🏠 Initialize Group Manager
 import { handleGroupMessage } from "./handlers/admin/groupManager.js";
 
+// TEMP DIAGNOSTIC (remove once the /start-and-buttons investigation is closed): the earliest
+// possible hook, before the library even looks at message/callback_query specifics. If this
+// never fires while the user interacts with the bot, updates are not reaching this process at
+// all (wrong BOT_TOKEN / another poller winning the long-poll / Telegram-side issue) — the bug
+// is not in any handler below. Logs only the update shape, never message content or user ids.
+bot.on("message", (msg) => {
+  console.log(`[diag] raw message update: chatType=${msg?.chat?.type} hasText=${typeof msg?.text === "string"} isCommand=${typeof msg?.text === "string" && msg.text.startsWith("/")}`);
+});
+bot.on("callback_query", (query) => {
+  console.log(`[diag] raw callback_query update: data=${typeof query?.data === "string" ? query.data : "<none>"}`);
+});
+
 // * 📨 Message Handler
 // Every inbound update is contained: a failure in one handler must never take
 // down the bot or leave the user without feedback.
