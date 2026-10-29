@@ -30,6 +30,10 @@ Copy `.env.example` to `.env` and set every required variable. The complete refe
 defaults, aliases and validation rules, is [docs/configuration.md](docs/configuration.md); do
 not duplicate it here. Points that most often go wrong on a VPS:
 
+- **`NODE_ENV=production`** must be set (in `.env` or the PM2 `ecosystem.config.cjs` below) —
+  nothing sets it for you on a bare VPS. Without it, production-only safety checks (rejecting a
+  loopback MongoDB/Redis host, requiring HTTPS) never activate; see
+  [Deployment mode](docs/configuration.md#deployment-mode).
 - **`GROUP_ID`** is the admin group's chat ID (a negative number). Read it from the `chat.id`
   field of a bot update (for example from `getUpdates` after posting in the group). Do **not**
   add unknown third-party bots to the admin group to discover it.
@@ -142,6 +146,7 @@ module.exports = {
     watch: false,
     max_memory_restart: "500M",
     env_file: ".env",
+    env: { NODE_ENV: "production" },
     log_date_format: "YYYY-MM-DD HH:mm:ss",
     error_file: "logs/error.log",
     out_file: "logs/out.log",

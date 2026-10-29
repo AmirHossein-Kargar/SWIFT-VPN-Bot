@@ -23,6 +23,12 @@ here is read by the code (`config/env.js` and the modules named in the notes).
 - Never log or print connection strings, tokens or payment identifiers. The startup and
   preflight code reports only the failing stage or variable name.
 
+## Deployment mode
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `NODE_ENV` | unset (treated as non-production) | Set to `production` on every production host (Railway does **not** set this for you). It gates several production-only checks: rejecting a loopback MongoDB/Redis host, requiring HTTPS for `WIZARD_API_URL`/`HOOSHPAY_API_BASE_URL`, disabling Mongoose's per-boot `autoIndex`, and switching the admin dashboard's internal Next.js middleware out of dev-server mode. Leaving it unset does not stop the bot from starting; it silently skips those checks |
+
 ## Required
 
 The bot refuses to start (fail-fast, with the variable name) if any of these is missing or
@@ -122,3 +128,10 @@ The first name that is set wins.
 
 Railway's native variable names are accepted as-is. The retired names
 `NOW_PAYMENTS_API_KEY` (extra underscore) and any TON flow are not used.
+
+## Owner-run scripts (not app configuration)
+
+`NOWPAYMENTS_SANDBOX_API_KEY` is read only by `scripts/sandbox-invoice-check.mjs`, a manual
+owner-run check against the NOWPayments sandbox (never CI, never production). It is documented
+in that script's header comment, not here or in `.env.example`, because it is never read by the
+running bot.
