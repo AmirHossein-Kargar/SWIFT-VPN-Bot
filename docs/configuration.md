@@ -116,6 +116,7 @@ malformed.
 | Variable | Default | Purpose |
 |---|---|---|
 | `TEST_MONGO_URL` | `mongodb://127.0.0.1:27017/swiftvpn_test` | MongoDB for the DB-backed suites. The database name **must** contain `test` (each test file gets its own database). Never point it at production |
+| `TEST_CONCURRENCY` | `max(8, availableParallelism() * 4)` | `--test-concurrency` for `npm test` (`scripts/run-tests.mjs`); set to `1` for a serial run while debugging |
 
 ## Alternate names
 
