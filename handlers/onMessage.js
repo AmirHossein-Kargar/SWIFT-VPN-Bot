@@ -128,16 +128,25 @@ async function handleMessage(bot, msg) {
   // Admin: search HooshPay invoice by UID or Order ID
   if (session?.step === "admin_waiting_for_hoosh_search" && msg.text) {
     const term = msg.text.trim();
+    const promptMessageId = session.messageId;
     await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
     const { default: HooshPayInvoice } = await import("../models/HooshPayInvoice.js");
     const inv = await HooshPayInvoice.findOne({
       $or: [{ uid: term }, { orderId: term }],
     });
+    const editOptions = { chat_id: chatId, message_id: promptMessageId, parse_mode: "HTML" };
     if (!inv) {
-      await bot.sendMessage(chatId, `❌ فاکتوری با شناسه <code>${term}</code> یافت نشد.`, { parse_mode: "HTML" });
+      const text = `❌ فاکتوری با شناسه <code>${term}</code> یافت نشد.`;
+      if (promptMessageId != null) {
+        await bot.editMessageText(text, {
+          ...editOptions,
+          reply_markup: { inline_keyboard: [[{ text: "🏠 بازگشت", callback_data: "admin_back_to_panel" }]] },
+        }).catch(() => bot.sendMessage(chatId, text, { parse_mode: "HTML" }));
+      } else {
+        await bot.sendMessage(chatId, text, { parse_mode: "HTML" });
+      }
     } else {
-      await bot.sendMessage(
-        chatId,
+      const text =
         `🔍 <b>جزئیات فاکتور HooshPay</b>\n\n` +
         `🆔 UID: <code>${inv.uid}</code>\n` +
         `📦 Order ID: <code>${inv.orderId}</code>\n` +
@@ -146,17 +155,18 @@ async function handleMessage(bot, msg) {
         `📌 وضعیت: <code>${inv.status}</code>\n` +
         `✅ تسویه: <code>${inv.fulfilled ? "بله" : "خیر"}</code>\n` +
         `📅 ایجاد: <code>${inv.createdAt.toLocaleString("fa-IR")}</code>\n` +
-        `${inv.paidAt ? `💳 پرداخت: <code>${inv.paidAt.toLocaleString("fa-IR")}</code>\n` : ""}`,
-        {
-          parse_mode: "HTML",
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "🔄 ارسال مجدد موجودی", callback_data: `admin_hoosh_resend:${inv.uid}` }],
-              [{ text: "🏠 بازگشت", callback_data: "admin_back_to_panel" }],
-            ],
-          },
-        }
-      );
+        `${inv.paidAt ? `💳 پرداخت: <code>${inv.paidAt.toLocaleString("fa-IR")}</code>\n` : ""}`;
+      const reply_markup = {
+        inline_keyboard: [
+          [{ text: "🔄 ارسال مجدد موجودی", callback_data: `admin_hoosh_resend:${inv.uid}` }],
+          [{ text: "🏠 بازگشت", callback_data: "admin_back_to_panel" }],
+        ],
+      };
+      if (promptMessageId != null) {
+        await bot.editMessageText(text, { ...editOptions, reply_markup }).catch(() => bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup }));
+      } else {
+        await bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup });
+      }
     }
     await setSession(chatId, { step: null });
     return;

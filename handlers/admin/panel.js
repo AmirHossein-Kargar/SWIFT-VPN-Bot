@@ -151,7 +151,7 @@ async function screenDashboard(bot, chatId, messageId) {
 }
 
 async function screenUserSearch(bot, chatId, messageId) {
-  await setSession(sk(chatId), { step: "admin_panel_user_search" });
+  await setSession(sk(chatId), { step: "admin_panel_user_search", messageId });
   await editOrSend(bot, chatId, messageId,
     "👥 <b>مدیریت کاربران</b>\n\n<b>شناسه عددی تلگرام</b>، <b>@یوزرنیم</b> یا بخشی از <b>نام</b> کاربر را ارسال کنید، یا فهرست کاربران را مرور کنید.",
     { inline_keyboard: [[{ text: "📋 فهرست همه کاربران", callback_data: "adm:ul:1" }], [BACK_BTN]] });
@@ -179,7 +179,7 @@ async function screenUserList(bot, chatId, messageId, page = 1, search = "") {
     { inline_keyboard: [...rows, pager, [{ text: "🔎 جستجو", callback_data: "adm:us" }, BACK_BTN]] });
 }
 
-async function showUserProfile(bot, chatId, messageId, telegramId) {
+async function showUserProfile(bot, chatId, messageId, telegramId, { banner } = {}) {
   const data = await getUserDetail({ actorId: bot.__adminActorId, telegramId });
   const user = data.user;
   const testService = data.testService || {};
@@ -208,7 +208,7 @@ async function showUserProfile(bot, chatId, messageId, telegramId) {
     adminUserSearch: previous.adminUserSearch,
   });
   
-  await editOrSend(bot, chatId, messageId, text, {
+  await editOrSend(bot, chatId, messageId, banner ? `${banner}\n\n${text}` : text, {
     inline_keyboard: [
       [{ text: "🌐 سرویس‌ها", callback_data: "adm:usvpns" }, { text: "💳 پرداخت‌ها", callback_data: "adm:uspay" }],
       [{ text: "➕ افزایش موجودی", callback_data: "adm:bal:add" }, { text: "➖ کاهش موجودی", callback_data: "adm:bal:remove" }],
@@ -314,7 +314,7 @@ async function screenPaymentDetail(bot, chatId, messageId, session, rowIndex) {
 }
 
 async function screenVpnSearch(bot, chatId, messageId) {
-  await setSession(sk(chatId), { step: "admin_panel_vpn_search" });
+  await setSession(sk(chatId), { step: "admin_panel_vpn_search", messageId });
   await editOrSend(bot, chatId, messageId,
     "🌐 <b>سرویس‌های VPN</b>\n\n<b>شناسه سرویس/کلاینت</b> یا <b>شناسه تلگرام کاربر</b> را برای جستجو ارسال کنید.",
     { inline_keyboard: [[BACK_BTN]] });
@@ -450,7 +450,7 @@ async function screenSystem(bot, chatId, messageId) {
 }
 
 async function screenBroadcast(bot, chatId, messageId) {
-  await setSession(sk(chatId), { step: "admin_panel_broadcast_message" });
+  await setSession(sk(chatId), { step: "admin_panel_broadcast_message", messageId });
   await editOrSend(bot, chatId, messageId,
     "📢 <b>ارسال پیام همگانی</b>\n\nمتن پیام را ارسال کنید. در مرحله بعد مخاطبان را انتخاب و تأیید خواهید کرد.",
     { inline_keyboard: [[BACK_BTN]] });
@@ -458,12 +458,13 @@ async function screenBroadcast(bot, chatId, messageId) {
 
 // ── Admin management (owner-only mutations) ──────────────────────────────────
 
-async function screenAdmins(bot, chatId, messageId, userId) {
+async function screenAdmins(bot, chatId, messageId, userId, { banner } = {}) {
   const admins = await listAdmins({ actorId: userId });
   const isOwner = isOwnerUser(userId);
   const lines = admins.map((admin) =>
     `${admin.role === "owner" ? "👑" : "🛡"} <code>${esc(admin.telegramId)}</code> · ${admin.role === "owner" ? "مالک" : "مدیر"} · ${admin.source === "environment" ? "از تنظیمات سرور" : "از پایگاه داده"}`);
   const text =
+    (banner ? `${banner}\n\n` : "") +
     `🛡 <b>مدیریت مدیران</b>\n\n${lines.join("\n")}\n\n` +
     `${isOwner ? "👤 شما مالک اصلی هستید و می‌توانید مدیر اضافه یا حذف کنید." : "فقط مالک اصلی می‌تواند مدیران را تغییر دهد."}`;
   const keyboard = { inline_keyboard: [] };
@@ -655,13 +656,13 @@ async function handleAdminCallbackInner(bot, query) {
         await screenUserVpns(bot, chatId, messageId, session);
         break;
       case "bal":
-        await setSession(sk(chatId), { ...session, step: `admin_panel_balance:${arg1}`, adminPanelUser: session?.adminPanelUser });
+        await setSession(sk(chatId), { ...session, step: `admin_panel_balance:${arg1}`, adminPanelUser: session?.adminPanelUser, messageId });
         await editOrSend(bot, chatId, messageId,
           `💰 <b>${arg1 === "add" ? "افزایش" : "کاهش"} موجودی</b>\n\nکاربر: <code>${esc(session?.adminPanelUser || "؟")}</code>\n\nمبلغ را به تومان ارسال کنید.`,
           { inline_keyboard: [[{ text: "⬅️ انصراف", callback_data: "adm:usback" }]] });
         break;
       case "blk":
-        await setSession(sk(chatId), { ...session, step: `admin_panel_block:${arg1}`, adminPanelUser: session?.adminPanelUser });
+        await setSession(sk(chatId), { ...session, step: `admin_panel_block:${arg1}`, adminPanelUser: session?.adminPanelUser, messageId });
         await editOrSend(bot, chatId, messageId,
           `${arg1 === "yes" ? "🚫 <b>مسدودسازی کاربر</b> — دلیل را ارسال کنید" : "🔓 <b>رفع مسدودی</b> — توضیح ارسال کنید (اختیاری)"}\n\nکاربر: <code>${esc(session?.adminPanelUser || "؟")}</code>`,
           { inline_keyboard: [[{ text: "⬅️ انصراف", callback_data: "adm:usback" }]] });
@@ -683,7 +684,7 @@ async function handleAdminCallbackInner(bot, query) {
         handled = true;
         break;
       case "payresolve":
-        await setSession(sk(chatId), { ...session, step: `admin_panel_resolve:${arg1}` });
+        await setSession(sk(chatId), { ...session, step: `admin_panel_resolve:${arg1}`, messageId });
         await editOrSend(bot, chatId, messageId,
           "✅ <b>تعیین تکلیف دستی</b>\n\nتوضیح کوتاهی درباره نحوه تسویه این پرداخت ارسال کنید. این عمل فقط ثبت وضعیت است و مبلغی جابه‌جا نمی‌کند.",
           { inline_keyboard: [[{ text: "⬅️ انصراف", callback_data: `adm:payv:${arg1}` }]] });
@@ -794,7 +795,7 @@ async function handleAdminCallbackInner(bot, query) {
           await bot.answerCallbackQuery(query.id, { text: "⛔️ فقط مالک اصلی می‌تواند مدیر اضافه کند.", show_alert: true }).catch(() => {});
           break;
         }
-        await setSession(sk(chatId), { step: "admin_panel_add_admin" });
+        await setSession(sk(chatId), { step: "admin_panel_add_admin", messageId });
         await editOrSend(bot, chatId, messageId,
           "➕ <b>افزودن مدیر</b>\n\n<b>شناسه عددی تلگرام</b> کاربر را ارسال کنید.\n\nℹ️ کاربر پس از افزودن، به همه بخش‌های پنل دسترسی خواهد داشت (به جز مدیریت مدیران).",
           { inline_keyboard: [[{ text: "⬅️ انصراف", callback_data: "adm:admins" }]] });
@@ -947,18 +948,24 @@ async function handleAdminPanelStepInner(bot, msg) {
   const text = String(msg.text || "").trim();
   const finish = async (clear = true) => { if (clear) await setSession(sk(chatId), { step: null }); };
 
+  // The prompt screen's own message id, tracked in the session when it was
+  // shown; every branch below edits it into the result instead of sending a
+  // throwaway "…" placeholder and a separate confirmation message.
+  const promptMessageId = session.messageId;
+  const editPrompt = (replyText, keyboard) => editOrSend(bot, chatId, promptMessageId, replyText, keyboard);
+
   try {
     if (step === "admin_panel_user_search") {
       const found = await listUsers({ actorId: userId, query: { search: text, pageSize: 5 } });
       if (!found.items.length) {
-        await bot.sendMessage(chatId, "❌ کاربری برای <code>" + esc(text) + "</code> یافت نشد.", { parse_mode: "HTML" });
+        await editPrompt("❌ کاربری برای <code>" + esc(text) + "</code> یافت نشد.",
+          { inline_keyboard: [[{ text: "📋 فهرست همه کاربران", callback_data: "adm:ul:1" }], [BACK_BTN]] });
         return true;
       }
-      const sent = await bot.sendMessage(chatId, "…", { parse_mode: "HTML" });
       if (found.items.length === 1) {
-        await showUserProfile(bot, chatId, sent.message_id, found.items[0].telegramId);
+        await showUserProfile(bot, chatId, promptMessageId, found.items[0].telegramId);
       } else {
-        await screenUserList(bot, chatId, sent.message_id, 1, text.slice(0, 100));
+        await screenUserList(bot, chatId, promptMessageId, 1, text.slice(0, 100));
       }
       return true;
     }
@@ -966,12 +973,11 @@ async function handleAdminPanelStepInner(bot, msg) {
     if (step === "admin_panel_vpn_search") {
       const data = await listVpns({ actorId: userId, query: { search: text, status: "all", pageSize: 8 } });
       if (!data.items.length) {
-        await bot.sendMessage(chatId, `❌ سرویسی برای <code>${esc(text)}</code> یافت نشد.`, { parse_mode: "HTML" });
+        await editPrompt(`❌ سرویسی برای <code>${esc(text)}</code> یافت نشد.`, { inline_keyboard: [[BACK_BTN]] });
         return true;
       }
       await setSession(sk(chatId), { step: null, adminVpnKeys: data.items.map((item) => item.clientId) });
-      const sent = await bot.sendMessage(chatId, "…", { parse_mode: "HTML" });
-      await screenVpnDetail(bot, chatId, sent.message_id, { adminVpnKeys: data.items.map((item) => item.clientId) }, 0);
+      await screenVpnDetail(bot, chatId, promptMessageId, { adminVpnKeys: data.items.map((item) => item.clientId) }, 0);
       await finish(false);
       return true;
     }
@@ -980,16 +986,17 @@ async function handleAdminPanelStepInner(bot, msg) {
       const direction = step.split(":")[1];
       const amount = Number(text.replace(/[,\s]/g, ""));
       if (!Number.isSafeInteger(amount) || amount <= 0) {
-        await bot.sendMessage(chatId, "❌ مبلغ را به صورت عدد مثبت و به تومان ارسال کنید.");
+        await editPrompt("❌ مبلغ را به صورت عدد مثبت و به تومان ارسال کنید.",
+          { inline_keyboard: [[{ text: "⬅️ انصراف", callback_data: "adm:usback" }]] });
         return true;
       }
       const result = await changeUserBalance({
         actorId: userId, operationId: randomUUID(), telegramId: session.adminPanelUser,
         amount, direction, reason: `Telegram admin panel (${direction})`,
       });
-      await bot.sendMessage(chatId, `✅ موجودی ${direction === "add" ? "افزایش" : "کاهش"} یافت. موجودی جدید: <b>${money(result.balance)}</b>.`, { parse_mode: "HTML" });
-      const sent = await bot.sendMessage(chatId, "…", { parse_mode: "HTML" });
-      await showUserProfile(bot, chatId, sent.message_id, session.adminPanelUser);
+      await showUserProfile(bot, chatId, promptMessageId, session.adminPanelUser, {
+        banner: `✅ موجودی ${direction === "add" ? "افزایش" : "کاهش"} یافت. موجودی جدید: <b>${money(result.balance)}</b>.`,
+      });
       await finish();
       return true;
     }
@@ -1000,21 +1007,20 @@ async function handleAdminPanelStepInner(bot, msg) {
         actorId: userId, operationId: randomUUID(), telegramId: session.adminPanelUser,
         blocked: blocking, reason: text || "Telegram admin panel",
       });
-      await bot.sendMessage(chatId, `✅ کاربر ${result.isBanned ? "مسدود" : "از مسدودی خارج"} شد.`, { parse_mode: "HTML" });
-      const sent = await bot.sendMessage(chatId, "…", { parse_mode: "HTML" });
-      await showUserProfile(bot, chatId, sent.messageId, session.adminPanelUser);
+      await showUserProfile(bot, chatId, promptMessageId, session.adminPanelUser, {
+        banner: `✅ کاربر ${result.isBanned ? "مسدود" : "از مسدودی خارج"} شد.`,
+      });
       await finish();
       return true;
     }
 
     if (step === "admin_panel_broadcast_message") {
       if (!text || text.length > 4096) {
-        await bot.sendMessage(chatId, "❌ متن پیام باید بین ۱ تا ۴۰۹۶ نویسه باشد.");
+        await editPrompt("❌ متن پیام باید بین ۱ تا ۴۰۹۶ نویسه باشد.", { inline_keyboard: [[BACK_BTN]] });
         return true;
       }
       await setSession(sk(chatId), { step: null, adminPanelBroadcastMessage: text });
-      const sent = await bot.sendMessage(chatId, "…", { parse_mode: "HTML" });
-      await editOrSend(bot, chatId, sent.message_id,
+      await editPrompt(
         `📢 <b>پیش‌نمایش پیام همگانی</b>\n\n——\n${esc(text.slice(0, 1200))}\n——\n\nمخاطبان را انتخاب کنید:`,
         broadcastAudienceKeyboard());
       return true;
@@ -1025,32 +1031,33 @@ async function handleAdminPanelStepInner(bot, msg) {
       const key = session.adminPayKeys?.[rowIndex];
       if (!key) { await finish(); return true; }
       if (text.length < 10) {
-        await bot.sendMessage(chatId, "❌ توضیح حداقل ۱۰ نویسه درباره نحوه تسویه ارسال کنید.");
+        await editPrompt("❌ توضیح حداقل ۱۰ نویسه درباره نحوه تسویه ارسال کنید.",
+          { inline_keyboard: [[{ text: "⬅️ انصراف", callback_data: `adm:payv:${rowIndex}` }]] });
         return true;
       }
       await resolvePaymentRecovery({ actorId: userId, operationId: randomUUID(), key, reason: text });
-      await bot.sendMessage(chatId, "✅ تعیین تکلیف ثبت و در گزارش عملیات درج شد.");
+      await editPrompt("✅ تعیین تکلیف ثبت و در گزارش عملیات درج شد.", { inline_keyboard: [[HOME_BTN]] });
       await finish();
       return true;
     }
 
     if (step === "admin_panel_add_admin") {
       if (!isOwnerUser(userId)) {
-        await bot.sendMessage(chatId, "⛔️ فقط مالک اصلی می‌تواند مدیر اضافه کند.");
+        await editPrompt("⛔️ فقط مالک اصلی می‌تواند مدیر اضافه کند.", { inline_keyboard: [[HOME_BTN]] });
         await finish();
         return true;
       }
       const result = await addAdmin({ actorId: userId, telegramId: text });
       const already = result?.alreadyPresent ? " (از قبل مدیر بود)" : "";
-      await bot.sendMessage(chatId, `✅ مدیر <code>${esc(text)}</code> ثبت شد${already}. دسترسی حداکثر تا یک دقیقه دیگر فعال می‌شود.`, { parse_mode: "HTML" });
-      const sent = await bot.sendMessage(chatId, "…", { parse_mode: "HTML" });
-      await screenAdmins(bot, chatId, sent.message_id, userId);
+      await screenAdmins(bot, chatId, promptMessageId, userId, {
+        banner: `✅ مدیر <code>${esc(text)}</code> ثبت شد${already}. دسترسی حداکثر تا یک دقیقه دیگر فعال می‌شود.`,
+      });
       await finish();
       return true;
     }
   } catch (error) {
     const message = error?.safeMessage || "عملیات در حال حاضر انجام نشد.";
-    await bot.sendMessage(chatId, `❌ ${esc(message)}`, { parse_mode: "HTML" });
+    await editPrompt(`❌ ${esc(message)}`, { inline_keyboard: [[HOME_BTN]] });
     console.error(JSON.stringify({
       ts: new Date().toISOString(), service: "admin-panel", level: "error",
       message: "Admin panel input step failed", step, errorType: error?.name || "Error",

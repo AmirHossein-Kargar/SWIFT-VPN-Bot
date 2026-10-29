@@ -87,7 +87,9 @@ const STEPS = [
     name: "HooshPay invoice search",
     session: owned({ step: "admin_waiting_for_hoosh_search", hooshSearchType: "uid", messageId: 10 }),
     message: (from) => groupMsg(from, { text: "HP-abc" }),
-    succeeded: () => invoiceFinds === 1 && bot.of("sendMessage").length === 1,
+    // "Not found" edits the original prompt (session.messageId) in place
+    // instead of sending a second message.
+    succeeded: () => invoiceFinds === 1 && bot.of("editMessageText").length === 1,
   },
   {
     name: "support-message target lookup",
