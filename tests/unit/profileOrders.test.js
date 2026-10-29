@@ -167,4 +167,36 @@ describe("profile layout", () => {
     assert.equal(sent[0][2].parse_mode, "HTML");
     assert.ok(sent[0][1].includes("&lt;b&gt;x&lt;/b&gt;"));
   });
+
+  // Regression: both error paths below used to call bot.sendMessage()
+  // directly, ignoring a given messageId and leaving the caller's screen
+  // (e.g. the main menu) untouched with a separate error message on top.
+  function editBotStub() {
+    const edits = [];
+    const sends = [];
+    return {
+      edits,
+      sends,
+      async editMessageText(text, options) { edits.push({ text, options }); },
+      async sendMessage(chatId, text, options) { sends.push({ chatId, text, options }); return { message_id: 1 }; },
+    };
+  }
+
+  test("no account yet: edits the given message instead of sending a separate error message", async () => {
+    const bot = editBotStub();
+    await handleProfile(bot, 5, 42, { messageId: 77, userModel: { async findOne() { return null; } } });
+    assert.equal(bot.sends.length, 0);
+    assert.equal(bot.edits.length, 1);
+    assert.equal(bot.edits[0].options.message_id, 77);
+    assert.match(bot.edits[0].text, /\/start/);
+  });
+
+  test("a database error edits the given message instead of sending a separate error message", async () => {
+    const bot = editBotStub();
+    await handleProfile(bot, 5, 42, { messageId: 77, userModel: { async findOne() { throw new Error("boom"); } } });
+    assert.equal(bot.sends.length, 0);
+    assert.equal(bot.edits.length, 1);
+    assert.equal(bot.edits[0].options.message_id, 77);
+    assert.match(bot.edits[0].text, /خطایی رخ داده است/);
+  });
 });

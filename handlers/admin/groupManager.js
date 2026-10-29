@@ -124,10 +124,11 @@ const handleGroupMessage = async (bot, msg) => {
 // اسکن دستی ولت TRX
 const handleTrxScan = async (bot, msg) => {
   const chatId = msg.chat.id;
+  let scanningMsg;
 
   try {
     // ارسال پیام در حال اسکن
-    const scanningMsg = await bot.sendMessage(
+    scanningMsg = await bot.sendMessage(
       chatId,
       "🔍 در حال اسکن ولت TRX...\n\n⏳ لطفاً صبر کنید..."
     );
@@ -135,18 +136,18 @@ const handleTrxScan = async (bot, msg) => {
     // اجرای اسکن دستی
     await trxScanner.manualScan();
 
-    // ارسال پیام موفقیت
-    await bot.sendMessage(
-      chatId,
-      "✅ اسکن ولت TRX با موفقیت انجام شد!\n\n📊 نتایج در console نمایش داده می‌شود."
-    );
+    // ویرایش پیام «در حال اسکن» به نتیجه، به‌جای ارسال پیام جدید
+    await bot.editMessageText(
+      "✅ اسکن ولت TRX با موفقیت انجام شد!\n\n📊 نتایج در console نمایش داده می‌شود.",
+      { chat_id: chatId, message_id: scanningMsg?.message_id }
+    ).catch(() => bot.sendMessage(chatId, "✅ اسکن ولت TRX با موفقیت انجام شد!\n\n📊 نتایج در console نمایش داده می‌شود."));
   } catch (error) {
     console.error("❌ Error in TRX wallet scan:", error.message);
 
-    await bot.sendMessage(
-      chatId,
-      `❌ خطا در اسکن ولت TRX:\n\n${error.message}`
-    );
+    await bot.editMessageText(
+      `❌ خطا در اسکن ولت TRX:\n\n${error.message}`,
+      { chat_id: chatId, message_id: scanningMsg?.message_id }
+    ).catch(() => bot.sendMessage(chatId, `❌ خطا در اسکن ولت TRX:\n\n${error.message}`));
   }
 };
 
