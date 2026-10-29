@@ -102,9 +102,15 @@ describe("legacy Reply Keyboard migration", () => {
     assert.equal(legacyMenuAction("__proto__"), null);
   });
 
-  test("bot.js clears the old keyboard on /start and on legacy taps", () => {
+  test("bot.js clears the old keyboard on legacy taps, and routes /start through the single-message welcome screen", () => {
     const src = readFileSync(path.join(root, "bot.js"), "utf8");
-    assert.match(src, /case "\/start"[\s\S]{0,400}hideKeyboard\(bot, chatId\)/);
+    // /start no longer sends-then-deletes a throwaway "⏳" placeholder before
+    // the welcome screen (that flash is exactly what handleStart.renderWelcome
+    // was introduced to eliminate — see tests/unit/handleStart.test.js); the
+    // legacy-keyboard clear for a tap on an old Reply Keyboard button is still
+    // targeted and unconditional, since that path provably has one to remove.
+    assert.match(src, /case "\/start"[\s\S]{0,400}renderWelcome\(bot,/);
+    assert.doesNotMatch(src, /case "\/start"[\s\S]{0,400}hideKeyboard\(bot, chatId\)/);
     assert.match(src, /legacyMenuAction[\s\S]{0,300}hideKeyboard\(bot, chatId\)[\s\S]{0,120}runMenuAction/);
   });
 });

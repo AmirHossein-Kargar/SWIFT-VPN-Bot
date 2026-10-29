@@ -8,15 +8,15 @@ import handleCallbackQuery from "./handlers/handleCallbackQuery.js";
 // * 📦 Services & Handlers
 import handleMessage from "./handlers/onMessage.js";
 import { handleSupportGroupReply } from "./handlers/support/groupReply.js";
-import { keyboardFor, MOCK_TEST_BUTTON, ADMIN_PANEL_BUTTON } from "./keyboards/mainKeyboard.js";
+import { MOCK_TEST_BUTTON, ADMIN_PANEL_BUTTON } from "./keyboards/mainKeyboard.js";
 import { legacyMenuAction, runMenuAction } from "./handlers/menuActions.js";
 import { parseStartPayload, handleStartPayload } from "./handlers/message/handleStartPayload.js";
+import { renderWelcome } from "./handlers/message/handleStart.js";
 import supportMessageHandler from "./handlers/supportMessageHandler.js";
 
 // * 📦 Utilities & Config
 import { getSession, clearSession } from "./config/sessionStore.js";
 import hideKeyboard from "./utils/hideKeyboard.js";
-import { WELCOME_MESSAGE } from "./messages/staticMessages.js";
 import { getUnsupportedMediaMessage, getSupportDirectButton } from "./messages/supportContact.js";
 
 /** Edit the standing support notice with the unsupported-media message. */
@@ -113,20 +113,19 @@ bot.on("message", async (msg) => {
     // confirmation for that server-side plan (price is re-read at checkout).
     const startPayload = parseStartPayload(userText);
     if (startPayload && msg.chat?.type === "private") {
-      await hideKeyboard(bot, chatId); // drop any Reply Keyboard left by older versions
-      await bot.sendMessage(chatId, WELCOME_MESSAGE, keyboardFor(userId, msg.chat.type));
-      await handleStartPayload(bot, chatId, startPayload);
+      const { messageId } = await renderWelcome(bot, { chatId, userId, chatType: msg.chat.type });
+      await handleStartPayload(bot, chatId, startPayload, { messageId });
       return;
     }
 
     switch (userText) {
       case "/start": {
-        // Opening the main menu also clears a persistent Reply Keyboard that an
-        // older version left in this user's client (private chats only).
-        if (msg.chat?.type === "private") await hideKeyboard(bot, chatId);
         // /start is an explicit reset: abandon any half-finished text input.
         if (session?.step) await clearSession(chatId);
-        await bot.sendMessage(chatId, WELCOME_MESSAGE, keyboardFor(userId, msg.chat?.type));
+        // Edits the chat's single standing screen in place (sends one fresh
+        // message only when there is none yet); never a separate loading
+        // placeholder, never a deleted message.
+        await renderWelcome(bot, { chatId, userId, chatType: msg.chat?.type });
         break;
       }
       case MOCK_TEST_BUTTON: {

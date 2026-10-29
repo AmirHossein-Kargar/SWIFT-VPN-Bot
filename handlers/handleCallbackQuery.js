@@ -238,8 +238,14 @@ const handleCallbackQueryInner = async (bot, query) => {
     const result = await verifyHooshPayment(uid, bot, chatId);
 
     if (result.success) {
-      // fulfillHooshOrder already sent the confirmation message + keyboard.
-      await bot.deleteMessage(chatId, messageId).catch(() => {});
+      // fulfillHooshOrder already sent the durable confirmation + keyboard as
+      // its own standalone message; this "checking…" screen is only closed
+      // out in place, never deleted.
+      await bot.editMessageText("✅ <b>پرداخت تأیید شد.</b>", {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: "HTML",
+      }).catch(() => {});
       await clearSession(chatId);
       return;
     }
@@ -379,8 +385,7 @@ const handleCallbackQueryInner = async (bot, query) => {
       await bot.answerCallbackQuery(query.id, { text: "❌ فاکتور یافت نشد", show_alert: true });
       return;
     }
-    await bot.sendMessage(
-      chatId,
+    await bot.editMessageText(
       `🔍 <b>جزئیات فاکتور HooshPay</b>\n\n` +
       `🆔 UID: <code>${inv.uid}</code>\n` +
       `📦 Order ID: <code>${inv.orderId}</code>\n` +
@@ -391,6 +396,8 @@ const handleCallbackQueryInner = async (bot, query) => {
       `📅 ایجاد: <code>${inv.createdAt.toLocaleString("fa-IR")}</code>\n` +
       `${inv.paidAt ? `💳 پرداخت: <code>${inv.paidAt.toLocaleString("fa-IR")}</code>\n` : ""}`,
       {
+        chat_id: chatId,
+        message_id: messageId,
         parse_mode: "HTML",
         reply_markup: {
           inline_keyboard: [
@@ -477,7 +484,6 @@ const handleCallbackQueryInner = async (bot, query) => {
     case "back_to_topup":
       // Another admin's active prompt lives in this shared session: neither clear nor replace it.
       if (isActiveForeignAdminPrompt({ session, chatId, userId })) break;
-      await bot.deleteMessage(chatId, messageId);
 
       // Clean up any pending invoice for the current payment type
       if (session?.paymentId) {
@@ -498,7 +504,7 @@ const handleCallbackQueryInner = async (bot, query) => {
       }
 
       await clearSession(chatId);
-      await showPaymentMethods(bot, chatId);
+      await showPaymentMethods(bot, chatId, { messageId });
       break;
 
     case "back_to_home":
@@ -883,13 +889,22 @@ const handleCallbackQueryInner = async (bot, query) => {
     if (!isAdmin(chatId, userId)) { await denyAdmin(bot, query.id); return; }
 
     const targetUserId = data.split("send_config_to_user_")[1];
-    const sentMsg = await bot.sendMessage(chatId, "📝 لطفاً کانفیگ سرویس را ارسال کنید:", {
-      reply_markup: { inline_keyboard: [] },
-    });
+    const prompt = "📝 لطفاً کانفیگ سرویس را ارسال کنید:";
+    let promptMessageId = messageId;
+    try {
+      await bot.editMessageText(prompt, {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: { inline_keyboard: [] },
+      });
+    } catch (error) {
+      const sentMsg = await bot.sendMessage(chatId, prompt, { reply_markup: { inline_keyboard: [] } });
+      promptMessageId = sentMsg?.message_id ?? messageId;
+    }
     await setSession(chatId, {
       step: "waiting_for_config_details",
       targetUserId,
-      messageId: sentMsg.message_id,
+      messageId: promptMessageId,
       ...adminOwnerFields(userId),
     });
     return;
@@ -936,10 +951,21 @@ const handleCallbackQueryInner = async (bot, query) => {
       return;
     }
     if (!selectedPlan) {
-      await bot.sendMessage(chatId, "❌ این پلن در حال حاضر فعال نیست یا حذف شده است. لطفاً از منوی خرید دوباره انتخاب کنید.", keyboard);
+      await bot.editMessageText("❌ این پلن در حال حاضر فعال نیست یا حذف شده است. لطفاً از منوی خرید دوباره انتخاب کنید.", {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: keyboard.reply_markup,
+      }).catch(() => bot.sendMessage(chatId, "❌ این پلن در حال حاضر فعال نیست یا حذف شده است. لطفاً از منوی خرید دوباره انتخاب کنید.", keyboard));
       return;
     }
-    await bot.deleteMessage(chatId, messageId).catch(() => {});
+    // Close out the confirmation screen in place (never delete it): the
+    // purchase outcome itself is intentionally sent as its own durable
+    // message by orderService, a protected money-path invariant.
+    await bot.editMessageText("⏳ <b>در حال ثبت سفارش شما...</b>", {
+      chat_id: chatId,
+      message_id: messageId,
+      parse_mode: "HTML",
+    }).catch(() => {});
     await orderService(bot, chatId, userId, planId, { messageId });
     return;
   }

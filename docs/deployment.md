@@ -33,6 +33,9 @@ day-two tasks see [Operations](operations.md).
    `The "uri" parameter to openUri() must be a string`.
 4. **Set the remaining required variables** from the
    [configuration reference](configuration.md#required). Do not set `PORT`; Railway provides it.
+   Also set `NODE_ENV=production` — Railway does not set this automatically, and without it the
+   production-only safety checks (rejecting a loopback MongoDB/Redis host, requiring HTTPS)
+   never activate; see [Deployment mode](configuration.md#deployment-mode).
 5. **Build and start commands.**
 
    | Setting | Value |

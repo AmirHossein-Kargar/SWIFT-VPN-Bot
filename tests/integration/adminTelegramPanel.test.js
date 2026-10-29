@@ -121,4 +121,56 @@ describe("text-input steps", () => {
     const handled = await handleAdminPanelStep(bot, { chat: { id: 555, type: "private" }, from: { id: ADMIN }, text: "424242" });
     assert.equal(handled, false);
   });
+
+  // F-?? single-message-UX regression: a text-input step must edit the
+  // prompt it was opened from into its result, never send a throwaway "…"
+  // placeholder or a separate confirmation message alongside it.
+  skip("admin_panel_user_search: a match edits the prompt into the profile screen (no placeholder, no second message)", async () => {
+    const { default: User } = await import("../../models/User.js");
+    const telegramId = `au_${Date.now()}`;
+    await User.create({ telegramId, firstName: "Regress", balance: 1000 });
+
+    const bot = makeBotStub();
+    await handleAdminPanelCallbacks(bot, query(bot, "adm:us")); // opens screenUserSearch, tracks message_id 42
+    await handleAdminPanelStep(bot, { chat: { id: 555, type: "private" }, from: { id: ADMIN }, text: telegramId });
+
+    assert.equal(bot.sent.filter((entry) => entry.kind === "message").length, 0, "no placeholder or extra message was sent");
+    const edits = bot.sent.filter((entry) => entry.kind === "edit");
+    assert.ok(edits.length >= 1);
+    assert.ok(edits.every((entry) => entry.opts.message_id === 42), "every edit targets the original prompt message");
+    assert.match(edits.at(-1).text, /پروفایل کاربر/);
+    assert.match(edits.at(-1).text, new RegExp(telegramId));
+  });
+
+  skip("admin_panel_user_search: no match edits the prompt in place instead of sending a new message", async () => {
+    const bot = makeBotStub();
+    await handleAdminPanelCallbacks(bot, query(bot, "adm:us"));
+    await handleAdminPanelStep(bot, { chat: { id: 555, type: "private" }, from: { id: ADMIN }, text: "no_such_user_xyz" });
+
+    assert.equal(bot.sent.filter((entry) => entry.kind === "message").length, 0);
+    const edit = bot.sent.filter((entry) => entry.kind === "edit").at(-1);
+    assert.equal(edit.opts.message_id, 42);
+    assert.match(edit.text, /یافت نشد/);
+  });
+
+  skip("admin_panel_balance: a successful adjustment edits the prompt into the profile screen with a confirmation banner", async () => {
+    const { default: User } = await import("../../models/User.js");
+    const telegramId = `au_${Date.now()}_2`;
+    await User.create({ telegramId, firstName: "Regress2", balance: 1000 });
+
+    const bot = makeBotStub();
+    await handleAdminPanelCallbacks(bot, query(bot, "adm:us"));
+    await handleAdminPanelStep(bot, { chat: { id: 555, type: "private" }, from: { id: ADMIN }, text: telegramId });
+    await handleAdminPanelCallbacks(bot, query(bot, "adm:bal:add")); // opens the amount prompt, re-tracks message_id 42
+    bot.sent.length = 0; // only inspect what the amount submission itself produces
+
+    await handleAdminPanelStep(bot, { chat: { id: 555, type: "private" }, from: { id: ADMIN }, text: "5000" });
+
+    assert.equal(bot.sent.filter((entry) => entry.kind === "message").length, 0, "no placeholder or separate confirmation message");
+    const edit = bot.sent.find((entry) => entry.kind === "edit");
+    assert.ok(edit, "the prompt was edited into the result");
+    assert.equal(edit.opts.message_id, 42);
+    assert.match(edit.text, /افزایش یافت/); // confirmation banner
+    assert.match(edit.text, /پروفایل کاربر/); // merged into the same single message as the profile screen
+  });
 });
