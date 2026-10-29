@@ -1,7 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import sendServiceSelectionMenu from "../../services/manageServices/sendServiceSelectionMenu.js";
-import { sendDetailsMessage } from "../../services/manageServices/showServiceDetails.js";
+import showServiceDetails, { sendDetailsMessage } from "../../services/manageServices/showServiceDetails.js";
 
 function botStub({ editFails, editError } = {}) {
   const edits = [];
@@ -77,6 +77,19 @@ describe("sendServiceSelectionMenu (entry / my_services_from_profile)", () => {
     assert.equal(bot.edits.length, 0);
     assert.equal(bot.sends.length, 1);
   });
+
+  // Regression: this catch-all used to call bot.sendMessage() directly,
+  // ignoring a given messageId and sending a second message on top of the
+  // caller's screen instead of editing it.
+  test("a database error edits the given message in place instead of sending a separate error message", async () => {
+    const bot = botStub();
+    const throwingUserModel = { async findOne() { throw new Error("boom"); } };
+    await sendServiceSelectionMenu(bot, 1, 42, { messageId: 55, userModel: throwingUserModel });
+    assert.equal(bot.sends.length, 0);
+    assert.equal(bot.edits.length, 1);
+    assert.equal(bot.edits[0].options.message_id, 55);
+    assert.match(bot.edits[0].text, /خطایی رخ داد/);
+  });
 });
 
 describe("sendDetailsMessage (service details: entry, refresh, QR-return fallback)", () => {
@@ -144,5 +157,25 @@ describe("sendDetailsMessage (service details: entry, refresh, QR-return fallbac
       "show_service_svc-1",
       "buy_service_back_to_main",
     ]);
+  });
+});
+
+describe("showServiceDetails: input validation edits in place", () => {
+  // Regression: this used to call bot.sendMessage() directly, ignoring the
+  // given messageId and leaving the caller's screen untouched alongside it.
+  test("an invalid username edits the given message instead of sending a separate error message", async () => {
+    const bot = botStub();
+    await showServiceDetails(bot, 1, "../not-a-valid-username", 55);
+    assert.equal(bot.sends.length, 0);
+    assert.equal(bot.edits.length, 1);
+    assert.equal(bot.edits[0].options.message_id, 55);
+    assert.match(bot.edits[0].text, /نامعتبر/);
+  });
+
+  test("an invalid username with no messageId sends exactly one fresh message", async () => {
+    const bot = botStub();
+    await showServiceDetails(bot, 1, "../not-a-valid-username", undefined);
+    assert.equal(bot.edits.length, 0);
+    assert.equal(bot.sends.length, 1);
   });
 });

@@ -297,6 +297,29 @@ describe("prompts record their owner when they are opened", () => {
   });
 });
 
+describe("API purchase: invalid gig/day input edits the prompt in place", () => {
+  // Regression: these two validation messages and their catch-all error used
+  // to call bot.sendMessage() directly, ignoring the already-known prompt
+  // messageId and leaving a second message next to the admin's running prompt.
+  test("a non-numeric gig value edits the prompt instead of sending a new message", async () => {
+    await setSession(GROUP, owned({ step: "waiting_for_api_gig", per_gb: 100, per_day: 10, messageId: 10 }));
+    await handleMessage(bot, groupMsg(OWNER, { text: "not-a-number" }));
+    assert.equal(bot.of("sendMessage").length, 0);
+    const edit = bot.of("editMessageText").at(-1);
+    assert.equal(edit.args[1].message_id, 10);
+    assert.match(edit.args[0], /عدد معتبر/);
+  });
+
+  test("a non-numeric days value edits the prompt instead of sending a new message", async () => {
+    await setSession(GROUP, owned({ step: "waiting_for_api_days", per_gb: 100, per_day: 10, gig: 5, gigPrice: 500, messageId: 10 }));
+    await handleMessage(bot, groupMsg(OWNER, { text: "not-a-number" }));
+    assert.equal(bot.of("sendMessage").length, 0);
+    const edit = bot.of("editMessageText").at(-1);
+    assert.equal(edit.args[1].message_id, 10);
+    assert.match(edit.args[0], /عدد معتبر/);
+  });
+});
+
 describe("canContinueAdminStep", () => {
   test("requires the exact recorded owner and current authorization", () => {
     const session = { adminUserId: "9001" };

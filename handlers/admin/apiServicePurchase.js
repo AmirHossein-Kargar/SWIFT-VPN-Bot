@@ -18,6 +18,19 @@ import {
   resolveApiPurchase,
 } from "../../services/admin/apiPurchaseLedger.js";
 
+/** Edit `messageId` (the admin's running purchase prompt) in place; falls back to one fresh send only if editing is impossible. */
+async function editOrSend(bot, chatId, messageId, text, options = {}) {
+  if (messageId != null) {
+    try {
+      await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...options });
+      return;
+    } catch (error) {
+      // fall through to a fresh send
+    }
+  }
+  await bot.sendMessage(chatId, text, options);
+}
+
 const apiServicePurchase = async (bot, query, session) => {
   const chatId = query.message.chat.id;
   const messageId = query.message.message_id;
@@ -116,10 +129,9 @@ const handleApiGigInput = async (bot, msg, session) => {
   const messageId = session.messageId;
 
   if (!gigText || isNaN(gigText) || parseInt(gigText) <= 0) {
-    await bot.sendMessage(
-      chatId,
-      "❌ لطفاً یک عدد معتبر برای گیگ وارد کنید (مثال: 10)"
-    );
+    await editOrSend(bot, chatId, messageId, "❌ لطفاً یک عدد معتبر برای گیگ وارد کنید (مثال: 10)", {
+      reply_markup: { inline_keyboard: [[{ text: "❌ لغو", callback_data: "admin_cancel_api_purchase" }]] },
+    });
     return;
   }
 
@@ -165,7 +177,7 @@ const handleApiGigInput = async (bot, msg, session) => {
     await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
   } catch (error) {
     console.error("Error in handleApiGigInput:", error);
-    await bot.sendMessage(chatId, "❌ خطا در پردازش اطلاعات");
+    await editOrSend(bot, chatId, messageId, "❌ خطا در پردازش اطلاعات");
   }
 };
 
@@ -177,10 +189,9 @@ const handleApiDaysInput = async (bot, msg, session) => {
   const messageId = session.messageId;
 
   if (!daysText || isNaN(daysText) || parseInt(daysText) <= 0) {
-    await bot.sendMessage(
-      chatId,
-      "❌ لطفاً یک عدد معتبر برای روز وارد کنید (مثال: 30)"
-    );
+    await editOrSend(bot, chatId, messageId, "❌ لطفاً یک عدد معتبر برای روز وارد کنید (مثال: 30)", {
+      reply_markup: { inline_keyboard: [[{ text: "❌ لغو", callback_data: "admin_cancel_api_purchase" }]] },
+    });
     return;
   }
 
@@ -236,7 +247,7 @@ const handleApiDaysInput = async (bot, msg, session) => {
     await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
   } catch (error) {
     console.error("Error in handleApiDaysInput:", error);
-    await bot.sendMessage(chatId, "❌ خطا در پردازش اطلاعات");
+    await editOrSend(bot, chatId, messageId, "❌ خطا در پردازش اطلاعات");
   }
 };
 

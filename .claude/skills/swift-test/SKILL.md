@@ -43,6 +43,10 @@ TEST_MONGO_URL=mongodb://127.0.0.1:27100/swiftvpn_test REDIS_URL=redis://127.0.0
 non-empty Redis, then fails on any skip. Empty Redis between runs (`redis-cli -p 27200 flushall`). Stop only the
 processes you started, by PID or port; never stop a system MongoDB/Redis service.
 
+`scripts/run-tests.mjs` defaults `--test-concurrency` well above the CPU count (see `docs/testing.md` "Parallelism"),
+so many test files open connections to the disposable MongoDB/Redis at once; if a run against real servers is flaky,
+rerun with `TEST_CONCURRENCY=1` to isolate a concurrency-sensitive test from a genuinely broken one before reporting it.
+
 ## 4. Builds and browser suites
 
 - `npm run build` checks both Next apps. Its `.next` output is git-ignored and skipped by

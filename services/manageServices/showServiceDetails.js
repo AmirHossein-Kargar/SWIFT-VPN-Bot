@@ -23,7 +23,12 @@ function progressBar(percent) {
 const showServiceDetails = async (bot, chatId, username, messageId) => {
   try {
     if (typeof username !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(username)) {
-      await bot.sendMessage(chatId, "❌ شناسه سرویس نامعتبر است.");
+      await renderInterface(bot, {
+        chatId,
+        text: "❌ شناسه سرویس نامعتبر است.",
+        options: { reply_markup: { inline_keyboard: [HOME_BUTTON] } },
+        messageId,
+      });
       return;
     }
 
@@ -97,7 +102,12 @@ ${record.sub_link ? `🔗 لینک اتصال (Subscription):\n<code>${escapeHtm
     await sendDetailsMessage(bot, chatId, messageId, message, username, null);
   } catch (error) {
     console.error("showServiceDetails error:", error?.name || "Error");
-    await bot.sendMessage(chatId, "❌ خطایی رخ داد، لطفا دوباره تلاش کنید.");
+    await renderInterface(bot, {
+      chatId,
+      text: "❌ خطایی رخ داد، لطفا دوباره تلاش کنید.",
+      options: { reply_markup: { inline_keyboard: [HOME_BUTTON] } },
+      messageId,
+    });
   }
 };
 

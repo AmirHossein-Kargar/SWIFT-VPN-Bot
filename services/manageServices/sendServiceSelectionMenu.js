@@ -33,7 +33,12 @@ async function sendServiceSelectionMenu(bot, chatId, userId, { messageId, userMo
     });
   } catch (error) {
     console.error("Error sending service selection menu:", error);
-    await bot.sendMessage(chatId, "❌ خطایی رخ داد، لطفا دوباره تلاش کنید.");
+    await renderInterface(bot, {
+      chatId,
+      text: "❌ خطایی رخ داد، لطفا دوباره تلاش کنید.",
+      options: { reply_markup: { inline_keyboard: [[{ text: "🏠 منوی اصلی", callback_data: "menu:home" }]] } },
+      messageId,
+    });
   }
 }
 

@@ -176,6 +176,16 @@ describe("menu callbacks", () => {
     assert.ok(bot.sent.some((e) => e.kind === "edit"));
     assert.equal(bot.sent.filter((e) => e.kind === "message").length, 0);
   });
+
+  test("back_to_home closes an orphaned support screen (opened from a different message) by editing it, never deleting it", async () => {
+    await sessionStore.setSession(1001, { supportMessageId: 7 });
+    const bot = makeBotStub();
+    await handleCallbackQuery(bot, query("back_to_home", { messageId: 77 }));
+    assert.equal(bot.sent.filter((e) => e.kind === "message").length, 0, "no new message");
+    const edits = bot.sent.filter((e) => e.kind === "edit");
+    assert.ok(edits.some((e) => e.opts.message_id === 7), "the orphaned support screen is edited, not deleted");
+    assert.ok(edits.some((e) => e.opts.message_id === 77), "the clicked screen is edited into the main menu");
+  });
 });
 
 describe("callback acknowledgement and repeats", () => {

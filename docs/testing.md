@@ -7,6 +7,19 @@ npm run test:e2e         # admin dashboard browser suite (needs Chrome)
 npm run test:e2e:store   # public storefront browser suite (needs Chrome and the storefront build)
 ```
 
+## Parallelism
+
+`scripts/run-tests.mjs` runs every test file as a `node --test` worker and defaults
+`--test-concurrency` to `max(8, availableParallelism() * 4)`: almost all wall time in this suite is
+spent waiting on I/O (MongoDB/Redis round trips, loopback HTTP, mongoose connect retries when no
+database is configured), not CPU, so running well beyond the CPU count overlaps that waiting instead
+of leaving it serialized. Each test file already gets its own throwaway database (`tests/helpers/db.js`)
+and binds servers to port `0`, so concurrent files cannot collide.
+
+Override with `TEST_CONCURRENCY=<n> npm test`, or pass `--test-concurrency=<n>` directly (`npm test --
+--test-concurrency=1` for a serial run while debugging); either one takes precedence over the computed
+default.
+
 ## MongoDB-backed suites
 
 Many integration suites exercise real money paths against a real MongoDB. Point

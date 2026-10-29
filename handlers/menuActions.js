@@ -64,7 +64,7 @@ export async function runMenuAction(bot, { action, chatId, userId, chat, from, m
       await showPaymentMethods(bot, chatId, { messageId });
       break;
     case "test":
-      await createTestService(bot, { chat: chat || { id: chatId, type: "private" }, from: from || { id: userId } });
+      await createTestService(bot, { chat: chat || { id: chatId, type: "private" }, from: from || { id: userId } }, { messageId });
       break;
     case "profile":
       await handleProfile(bot, chatId, userId, { messageId });

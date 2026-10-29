@@ -510,8 +510,15 @@ const handleCallbackQueryInner = async (bot, query) => {
     case "back_to_home":
       if (isActiveForeignAdminPrompt({ session, chatId, userId })) break;
       await clearSession(chatId);
+      // An orphaned support screen (opened from a different message than the
+      // one just tapped) is closed out in place — never deleted — so it never
+      // sits there with working buttons on a session that has moved on.
       if (session?.supportMessageId && session.supportMessageId !== messageId) {
-        try { await bot.deleteMessage(chatId, session.supportMessageId); } catch (_) {}
+        await bot.editMessageText("⌛️ این گفتگو به پایان رسید.", {
+          chat_id: chatId,
+          message_id: session.supportMessageId,
+          reply_markup: { inline_keyboard: [[{ text: "🏠 منوی اصلی", callback_data: "back_to_home" }]] },
+        }).catch(() => {});
       }
       // Edit the current screen into the main menu (one message, no clutter).
       await showMainMenu(bot, { chatId, userId, chatType: query.message?.chat?.type, messageId });

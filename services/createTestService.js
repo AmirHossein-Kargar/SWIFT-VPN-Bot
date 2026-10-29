@@ -13,6 +13,36 @@ function log(level, message, meta = {}) {
   );
 }
 
+const BACK_HOME_KEYBOARD = { inline_keyboard: [[{ text: "🏠 بازگشت به منوی اصلی", callback_data: "back_to_home" }]] };
+
+/**
+ * Edit `messageId` (the main-menu screen the customer tapped "🎁 سرویس تست"
+ * from) into `text` in place; falls back to sending one fresh message when
+ * there is nothing to edit yet, or editing fails (deleted/too old message).
+ * Never sends a throwaway placeholder and never deletes a message — every
+ * call here replaces the one standing screen, exactly like every other menu
+ * action.
+ * @returns {Promise<number|null>} the message id now holding `text`, so the
+ *   next call in the same request can keep editing it.
+ */
+async function editOrSend(bot, chatId, messageId, text, keyboard = BACK_HOME_KEYBOARD) {
+  const options = { parse_mode: "HTML", reply_markup: keyboard };
+  if (messageId != null) {
+    try {
+      await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...options });
+      return messageId;
+    } catch (error) {
+      // Edit failed (deleted, too old, or not a text message) — fall through to a fresh send.
+    }
+  }
+  try {
+    const sent = await bot.sendMessage(chatId, text, options);
+    return sent?.message_id ?? null;
+  } catch {
+    return messageId ?? null;
+  }
+}
+
 async function notifyTestServiceOnce(user, bot, userModel = User) {
   if (!user?.testServiceNotificationPending || !bot?.sendPhoto) return false;
   const now = new Date();
@@ -96,16 +126,22 @@ async function alertAdmin(user, bot, reason) {
 
 /**
  * `deps` is an injection seam for the isolated mock-test harness (in-memory
- * user model and a fake panel adapter); Telegram callers pass nothing.
+ * user model and a fake panel adapter) and, for real Telegram callers, the
+ * main-menu screen's message id to edit in place throughout (`messageId`).
  */
-const createTestService = async (bot, msg, { userModel = User, createApi = createTestServiceApi } = {}) => {
+const createTestService = async (bot, msg, { userModel = User, createApi = createTestServiceApi, messageId } = {}) => {
   const chatId = msg.chat.id;
   const userId = String(msg.from.id);
+  // The screen this whole request edits in place, from "⏳ building…" through
+  // to the final status — reassigned as editOrSend resolves to whichever
+  // message id actually ended up holding the text (the given one, or a fresh
+  // send if editing it was never possible).
+  let screenId = messageId;
   try {
     await userModel.updateOne({ telegramId: userId }, { $setOnInsert: { telegramId: userId } }, { upsert: true });
   } catch (error) {
     log("error", "Could not load test-service account", { errorType: error?.name || "DatabaseError" });
-    await bot.sendMessage(chatId, "❌ خطا در ارتباط با پایگاه داده. لطفاً بعداً تلاش کنید.");
+    await editOrSend(bot, chatId, screenId, "❌ خطا در ارتباط با پایگاه داده. لطفاً بعداً تلاش کنید.");
     return;
   }
 
@@ -137,26 +173,25 @@ const createTestService = async (bot, msg, { userModel = User, createApi = creat
     );
   } catch (error) {
     log("error", "Could not claim test-service attempt", { errorType: error?.name || "DatabaseError" });
-    await bot.sendMessage(chatId, "❌ درخواست در حال حاضر ثبت نشد. لطفاً بعداً تلاش کنید.");
+    await editOrSend(bot, chatId, screenId, "❌ درخواست در حال حاضر ثبت نشد. لطفاً بعداً تلاش کنید.");
     return;
   }
 
   if (!user) {
     const existing = await userModel.findOne({ telegramId: userId }).select("hasReceivedTest testServiceStatus").lean();
     if (existing?.hasReceivedTest || existing?.testServiceStatus === "completed") {
-      await bot.sendMessage(chatId, "⚠️ شما قبلاً این سرویس را دریافت کرده‌اید.");
+      await editOrSend(bot, chatId, screenId, "⚠️ شما قبلاً این سرویس را دریافت کرده‌اید.");
     } else if (["provisioning", "manual_review"].includes(existing?.testServiceStatus)) {
-      await bot.sendMessage(chatId, "⏳ درخواست قبلی شما هنوز در حال بررسی است؛ لطفاً برای جلوگیری از ساخت تکراری با پشتیبانی تماس بگیرید.");
+      await editOrSend(bot, chatId, screenId, "⏳ درخواست قبلی شما هنوز در حال بررسی است؛ لطفاً برای جلوگیری از ساخت تکراری با پشتیبانی تماس بگیرید.");
     } else {
-      await bot.sendMessage(chatId, "❌ درخواست در حال حاضر ثبت نشد. لطفاً دوباره تلاش کنید.");
+      await editOrSend(bot, chatId, screenId, "❌ درخواست در حال حاضر ثبت نشد. لطفاً دوباره تلاش کنید.");
     }
     return;
   }
 
-  let loadingMsg;
   let panelResponseReceived = false;
   try {
-    loadingMsg = await bot.sendMessage(chatId, "⏳ در حال ساخت سرویس ...");
+    screenId = await editOrSend(bot, chatId, screenId, "⏳ در حال ساخت سرویس ...", { inline_keyboard: [] });
     const data = await createApi();
     panelResponseReceived = true;
     const result = data.result;
@@ -184,13 +219,11 @@ const createTestService = async (bot, msg, { userModel = User, createApi = creat
     );
     if (!updated) throw new Error("Test-service result could not be committed to the owner account");
 
-    if (loadingMsg?.message_id) bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
     const delivered = await notifyTestServiceOnce(updated, bot, userModel);
-    if (!delivered) {
-      await bot.sendMessage(chatId, "✅ سرویس ساخته و به حساب شما اضافه شد، اما ارسال لینک با تأخیر روبه‌رو شد. کمی بعد دوباره بررسی کنید.").catch(() => {});
-    }
+    await editOrSend(bot, chatId, screenId, delivered
+      ? "✅ سرویس تست شما ساخته شد. لینک اتصال در پیام بعدی ارسال شد."
+      : "✅ سرویس ساخته و به حساب شما اضافه شد، اما ارسال لینک با تأخیر روبه‌رو شد. کمی بعد دوباره بررسی کنید.");
   } catch (error) {
-    if (loadingMsg?.message_id) bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
     const current = await userModel.findOne({ telegramId: userId, testServiceAttemptId: attemptId }).lean().catch(() => null);
 
     if (error?.ambiguous || (panelResponseReceived && current?.testServiceStatus !== "completed")) {
@@ -205,12 +238,12 @@ const createTestService = async (bot, msg, { userModel = User, createApi = creat
         code: error?.code || "UNKNOWN",
       });
       if (uncertain) await alertAdmin(uncertain, bot, error.code || "PANEL_RESULT_UNKNOWN");
-      await bot.sendMessage(chatId, "⏳ وضعیت ساخت سرویس تست از پنل مشخص نیست. برای جلوگیری از ساخت تکراری، درخواست شما تا بررسی پشتیبانی متوقف شده است.");
+      await editOrSend(bot, chatId, screenId, "⏳ وضعیت ساخت سرویس تست از پنل مشخص نیست. برای جلوگیری از ساخت تکراری، درخواست شما تا بررسی پشتیبانی متوقف شده است.");
     } else if (current?.testServiceStatus === "completed") {
       const delivered = await notifyTestServiceOnce(current, bot, userModel).catch(() => false);
-      if (!delivered) {
-        await bot.sendMessage(chatId, "✅ سرویس تست ساخته و به حساب شما اضافه شد؛ ارسال لینک در حال بازیابی است.").catch(() => {});
-      }
+      await editOrSend(bot, chatId, screenId, delivered
+        ? "✅ سرویس تست شما ساخته شد. لینک اتصال در پیام بعدی ارسال شد."
+        : "✅ سرویس تست ساخته و به حساب شما اضافه شد؛ ارسال لینک در حال بازیابی است.");
     } else if (current?.testServiceStatus === "provisioning") {
       await userModel.updateOne(
         { telegramId: userId, testServiceAttemptId: attemptId, testServiceStatus: "provisioning" },
@@ -221,14 +254,14 @@ const createTestService = async (bot, msg, { userModel = User, createApi = creat
         errorType: error?.name || "PanelError",
         code: error?.code || "TEST_SERVICE_FAILED",
       });
-      await bot.sendMessage(chatId, "❌ ساخت سرویس تست انجام نشد. لطفاً بعداً دوباره تلاش کنید.");
+      await editOrSend(bot, chatId, screenId, "❌ ساخت سرویس تست انجام نشد. لطفاً بعداً دوباره تلاش کنید.");
     } else {
       log("error", "Test service attempt state could not be recovered", {
         attemptId,
         errorType: error?.name || "RecoveryError",
       });
       if (current) await alertAdmin(current, bot, "TEST_SERVICE_STATE_UNAVAILABLE");
-      await bot.sendMessage(chatId, "⏳ وضعیت درخواست سرویس تست در حال بررسی است؛ لطفاً دوباره درخواست ساخت نفرستید.");
+      await editOrSend(bot, chatId, screenId, "⏳ وضعیت درخواست سرویس تست در حال بررسی است؛ لطفاً دوباره درخواست ساخت نفرستید.");
     }
   }
 };

@@ -169,7 +169,11 @@ const handleProfile = async (bot, chatId, userId, dependencies = {}) => {
   try {
     const user = await userModel.findOne({ telegramId: String(userId) });
     if (!user) {
-      await bot.sendMessage(chatId, "❌ اطلاعات حساب شما هنوز ثبت نشده است. لطفاً دستور /start را ارسال کنید.");
+      await renderInterface(bot, {
+        chatId,
+        text: "❌ اطلاعات حساب شما هنوز ثبت نشده است. لطفاً دستور /start را ارسال کنید.",
+        messageId: dependencies.messageId,
+      });
       return;
     }
 
@@ -211,7 +215,11 @@ const handleProfile = async (bot, chatId, userId, dependencies = {}) => {
     });
   } catch (err) {
     console.error("profile error:", err?.name || "Error");
-    await bot.sendMessage(chatId, "❌ خطایی رخ داده است. لطفاً دوباره تلاش کنید.");
+    await renderInterface(bot, {
+      chatId,
+      text: "❌ خطایی رخ داده است. لطفاً دوباره تلاش کنید.",
+      messageId: dependencies.messageId,
+    });
   }
 };
 
