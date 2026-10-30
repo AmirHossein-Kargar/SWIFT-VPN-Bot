@@ -11,6 +11,8 @@ import {
   setActiveMessage,
   setActiveMessageIfUnchanged,
   clearActiveMessage,
+  setActiveMessageClientForTests,
+  clearActiveMessageClientForTests,
 } from "../../services/messaging/activeMessageStore.js";
 
 // A tiny in-memory stand-in for the `redis` client, implementing only the
@@ -125,6 +127,21 @@ describe("messageManager.renderInterface", () => {
     assert.equal(result.edited, true);
     assert.equal(result.unchanged, true);
     assert.equal(bot.sends.length, 0);
+  });
+
+  test("'message is not modified' on a merely tracked message still answers the user with a send", async () => {
+    // Without an explicit messageId the target may be far out of view, so no edit means no visible response.
+    setActiveMessageClientForTests(fakeRedis());
+    try {
+      await setActiveMessage(1, 50);
+      const bot = botStub({ editFails: true, editError: new Error("ETELEGRAM: 400 Bad Request: message is not modified") });
+      const result = await renderInterface(bot, { chatId: 1, text: "same" });
+      assert.equal(result.sent, true);
+      assert.equal(bot.sends.length, 1);
+      assert.equal(await getActiveMessage(1), 999, "the pointer follows the message the user can see");
+    } finally {
+      clearActiveMessageClientForTests();
+    }
   });
 
   test("isNotModifiedError recognizes the Telegram error text", () => {

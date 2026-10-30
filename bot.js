@@ -18,6 +18,7 @@ import supportMessageHandler from "./handlers/supportMessageHandler.js";
 import { getSession, clearSession } from "./config/sessionStore.js";
 import hideKeyboard from "./utils/hideKeyboard.js";
 import { getUnsupportedMediaMessage, getSupportDirectButton } from "./messages/supportContact.js";
+import { GENERIC_ERROR_MESSAGE } from "./messages/staticMessages.js";
 
 /** Edit the standing support notice with the unsupported-media message. */
 async function showUnsupportedMediaNotice(bot, chatId, session) {
@@ -78,18 +79,6 @@ try {
 // * 🏠 Initialize Group Manager
 import { handleGroupMessage } from "./handlers/admin/groupManager.js";
 
-// TEMP DIAGNOSTIC (remove once the /start-and-buttons investigation is closed): the earliest
-// possible hook, before the library even looks at message/callback_query specifics. If this
-// never fires while the user interacts with the bot, updates are not reaching this process at
-// all (wrong BOT_TOKEN / another poller winning the long-poll / Telegram-side issue) — the bug
-// is not in any handler below. Logs only the update shape, never message content or user ids.
-bot.on("message", (msg) => {
-  console.log(`[diag] raw message update: chatType=${msg?.chat?.type} hasText=${typeof msg?.text === "string"} isCommand=${typeof msg?.text === "string" && msg.text.startsWith("/")}`);
-});
-bot.on("callback_query", (query) => {
-  console.log(`[diag] raw callback_query update: data=${typeof query?.data === "string" ? query.data : "<none>"}`);
-});
-
 // * 📨 Message Handler
 // Every inbound update is contained: a failure in one handler must never take
 // down the bot or leave the user without feedback.
@@ -134,9 +123,8 @@ bot.on("message", async (msg) => {
       case "/start": {
         // /start is an explicit reset: abandon any half-finished text input.
         if (session?.step) await clearSession(chatId);
-        // Edits the chat's single standing screen in place (sends one fresh
-        // message only when there is none yet); never a separate loading
-        // placeholder, never a deleted message.
+        // Always a new message at the bottom of the chat, never an edit of an
+        // older one; buttons pressed on it then edit it in place.
         await renderWelcome(bot, { chatId, userId, chatType: msg.chat?.type });
         break;
       }
@@ -202,10 +190,7 @@ bot.on("message", async (msg) => {
       })
     );
     try {
-      await bot.sendMessage(
-        msg.chat.id,
-        "❌ خطایی رخ داد. لطفاً دوباره تلاش کنید."
-      );
+      await bot.sendMessage(msg.chat.id, GENERIC_ERROR_MESSAGE);
     } catch { /* chat unreachable — nothing more we can do */ }
   }
 });
@@ -216,7 +201,19 @@ bot.on("callback_query", async (query) => {
     if (await refuseIfBlocked({ bot, userId: query?.from?.id, chatType: query?.message?.chat?.type, query })) return;
     await handleCallbackQuery(bot, query);
   } catch (err) {
-    console.error("❌ Error in bot.on('callback_query'):", err);
+    // Type/code only: a Telegram client error holds the raw HTTP exchange, whose
+    // request URL contains the bot token.
+    console.error(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        service: "bot",
+        level: "error",
+        message: "Unhandled error in callback handler",
+        errorType: err?.name || "Error",
+        code: typeof err?.code === "string" ? err.code : undefined,
+        status: Number.isInteger(err?.response?.statusCode) ? err.response.statusCode : undefined,
+      })
+    );
   }
 });
 
@@ -290,3 +287,8 @@ function registerUnsupportedMedia(event, label) {
 registerUnsupportedMedia("voice", "voice");
 registerUnsupportedMedia("video_note", "video_note");
 registerUnsupportedMedia("document", "document");
+
+// * 📡 Start receiving updates
+// Last on purpose: the library drops an update nobody is listening for, so polling
+// before the handlers above exist loses every /start queued during a restart.
+void bot.startPolling();

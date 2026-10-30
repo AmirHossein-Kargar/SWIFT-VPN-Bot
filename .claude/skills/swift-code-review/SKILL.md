@@ -28,7 +28,7 @@ For every impacted area, read the listed `.claude/rules/*.md` and docs. Review a
 - **Admin and webhooks** (`.claude/rules/security-privacy.md`): new routes use the existing auth/CSRF/same-origin/audit
   middleware; webhook handlers fail closed; inputs validated (`services/admin/validation.js`); no secrets or payloads
   in logs or responses.
-- **Startup/runtime**: startup order (HTTP, MongoDB, Redis, polling, crons) and single-replica assumptions intact;
+- **Startup/runtime**: startup order (HTTP, MongoDB, Redis, crons, update handlers, polling) and single-replica assumptions intact;
   shutdown stops what startup starts.
 - **Frontend** (`.claude/rules/frontend.md`): no inline scripts in the storefront, `/panel` headers intact, Persian RTL
   text for customers, English for the admin panel.

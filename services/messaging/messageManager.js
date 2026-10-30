@@ -36,7 +36,9 @@ export function isNotModifiedError(error) {
  * deleted, is too old, or (critically) is not a text message (e.g. a photo,
  * such as a QR code) cannot be turned into arbitrary text, so any edit
  * failure other than "not modified" falls back to a normal send instead of
- * throwing.
+ * throwing. "Not modified" only counts as success for an explicit messageId,
+ * the message the user just tapped: a tracked message may be out of view, so
+ * leaving it unchanged would answer the user with nothing.
  *
  * @param {import('node-telegram-bot-api')} bot
  * @param {object} params
@@ -71,8 +73,8 @@ export async function renderInterface(bot, { chatId, text, options = {}, message
       if (explicitMessageId != null) await setActiveMessage(chatId, explicitMessageId);
       return { messageId: targetMessageId, edited: true, sent: false };
     } catch (error) {
-      if (isNotModifiedError(error)) {
-        if (explicitMessageId != null) await setActiveMessage(chatId, explicitMessageId);
+      if (explicitMessageId != null && isNotModifiedError(error)) {
+        await setActiveMessage(chatId, explicitMessageId);
         return { messageId: targetMessageId, edited: true, sent: false, unchanged: true };
       }
       console.warn(`[messageManager] editMessageText failed (${error?.name || "TelegramError"}); sending a new message instead`);
