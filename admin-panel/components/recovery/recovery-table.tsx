@@ -13,6 +13,9 @@ import { adminMutate, newOperationId } from "@/lib/adminApi.client";
 import { AdminApiError } from "@/lib/types";
 import type { RecoveryItem } from "@/lib/types";
 import { formatDateTime, formatToman } from "@/lib/utils";
+import { EmptyState } from "@/components/shared/empty-state";
+import { ShieldCheck } from "lucide-react";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 
 const PROVIDER_LABEL: Record<RecoveryItem["provider"], string> = {
   hooshpay: "HooshPay",
@@ -26,7 +29,7 @@ export function RecoveryTable({ items }: { items: RecoveryItem[] }) {
   const { csrfToken } = useAdminSession();
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [retrying, setRetrying] = useState(false);
+  const [confirming, setConfirming] = useState<string[] | "all" | null>(null);
 
   const safeItems = items.filter((item) => item.retrySafe);
 
@@ -40,7 +43,6 @@ export function RecoveryTable({ items }: { items: RecoveryItem[] }) {
   }
 
   async function retry(keys?: string[]) {
-    setRetrying(true);
     try {
       const result = await adminMutate<{ attempted: number; succeeded: number; failed: { key: string; code: string }[] }>(
         "/recovery/retry-safe",
@@ -59,13 +61,11 @@ export function RecoveryTable({ items }: { items: RecoveryItem[] }) {
       router.refresh();
     } catch (error) {
       toast.error(error instanceof AdminApiError ? error.message : "Retry failed.");
-    } finally {
-      setRetrying(false);
     }
   }
 
   if (items.length === 0) {
-    return <p className="py-10 text-center text-sm text-muted-foreground">Nothing needs attention right now.</p>;
+    return <EmptyState title="Nothing needs attention right now." hint="Stuck payments and orders appear here." icon={ShieldCheck} />;
   }
 
   return (
@@ -75,15 +75,10 @@ export function RecoveryTable({ items }: { items: RecoveryItem[] }) {
           {safeItems.length} of {items.length} on this page can be retried automatically.
         </p>
         <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={retrying || selected.size === 0}
-            onClick={() => retry([...selected])}
-          >
+          <Button variant="outline" size="sm" disabled={selected.size === 0} onClick={() => setConfirming([...selected])}>
             Retry selected ({selected.size})
           </Button>
-          <Button size="sm" disabled={retrying || safeItems.length === 0} onClick={() => retry()}>
+          <Button size="sm" disabled={safeItems.length === 0} onClick={() => setConfirming("all")}>
             Retry all safe items
           </Button>
         </div>
@@ -120,6 +115,15 @@ export function RecoveryTable({ items }: { items: RecoveryItem[] }) {
           ))}
         </TableBody>
       </Table>
+      <ConfirmDialog
+        open={confirming !== null}
+        onOpenChange={(open) => { if (!open) setConfirming(null); }}
+        title={confirming === "all" ? "Retry all safe items?" : `Retry ${confirming?.length ?? 0} selected item${confirming?.length === 1 ? "" : "s"}?`}
+        description="Only items the server marks as safe are retried, and each runs through the normal idempotent payment path. The result is reported per item."
+        confirmLabel="Retry"
+        pendingLabel="Retrying…"
+        onConfirm={() => retry(confirming === "all" || confirming === null ? undefined : confirming)}
+      />
     </>
   );
 }

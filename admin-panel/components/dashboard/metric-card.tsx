@@ -17,7 +17,7 @@ export function MetricCard({
   tone?: "default" | "warning" | "destructive" | "success";
 }) {
   return (
-    <Card>
+    <Card className="metric-card">
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
         <CardTitle>{label}</CardTitle>
         <Icon

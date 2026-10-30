@@ -11,6 +11,7 @@ function Toaster(props: ToasterProps) {
     <Sonner
       theme={resolvedTheme === "dark" ? "dark" : "light"}
       className="toaster group"
+      closeButton
       toastOptions={{
         classNames: {
           toast: "group toast group-[.toaster]:bg-popover group-[.toaster]:text-popover-foreground group-[.toaster]:border-border group-[.toaster]:shadow-lg",

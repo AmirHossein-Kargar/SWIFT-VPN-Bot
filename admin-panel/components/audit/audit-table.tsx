@@ -7,12 +7,13 @@ import { Badge } from "@/components/ui/badge";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import type { AuditLogEntry } from "@/lib/types";
 import { formatDateTime } from "@/lib/utils";
+import { EmptyState } from "@/components/shared/empty-state";
 
 export function AuditTable({ items }: { items: AuditLogEntry[] }) {
   const [viewing, setViewing] = useState<AuditLogEntry | null>(null);
 
   if (items.length === 0) {
-    return <p className="py-10 text-center text-sm text-muted-foreground">No audit entries match these filters.</p>;
+    return <EmptyState title="No audit entries match these filters." />;
   }
 
   return (

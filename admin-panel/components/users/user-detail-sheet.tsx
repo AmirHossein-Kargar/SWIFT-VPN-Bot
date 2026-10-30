@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PaymentStatusBadge } from "@/components/payments/status-badge";
+import { ChangeFlash } from "@/components/shared/change-flash";
 import { BalanceDialog } from "@/components/users/balance-dialog";
 import { BlockDialog } from "@/components/users/block-dialog";
 import { MessageDialog } from "@/components/users/message-dialog";
@@ -108,11 +109,11 @@ export function UserDetailSheet({ telegramId, open, onOpenChange, onCloseAutoFoc
               </div>
 
               <div className="grid grid-cols-2 gap-4 rounded-md border border-border p-4">
-                <Field label="Wallet balance"><span className="text-base">{formatToman(user.balance)}</span></Field>
+                <Field label="Wallet balance"><ChangeFlash value={user.balance} className="text-base">{formatToman(user.balance)}</ChangeFlash></Field>
                 <Field label="Total spent">{formatToman(detail.totalSpent)}</Field>
                 <Field label="Successful payments">{user.successfulPayments}</Field>
                 <Field label="Active / expired VPNs">{detail.activeVpns} / {detail.expiredVpns}</Field>
-                <Field label="Status">{user.isBanned ? <Badge variant="destructive">Blocked</Badge> : <Badge variant="success">Active</Badge>}</Field>
+                <Field label="Status"><ChangeFlash value={user.isBanned}>{user.isBanned ? <Badge variant="destructive">Blocked</Badge> : <Badge variant="success">Active</Badge>}</ChangeFlash></Field>
                 <Field label="Test service">{testServiceLabel(detail.testService)}</Field>
                 <Field label="Registered">{formatDateTime(user.createdAt)}</Field>
                 <Field label="Last active">{formatDateTime(user.lastActivityAt)}</Field>

@@ -6,6 +6,8 @@ export const chartTheme = {
   series2: "hsl(var(--chart-2))",
   grid: "hsl(var(--border))",
   axisTick: { fill: "hsl(var(--muted-foreground))", fontSize: 11 },
+  cursor: { stroke: "hsl(var(--muted-foreground))", strokeWidth: 1, strokeDasharray: "3 3" },
+  label: { fill: "hsl(var(--foreground))", fontSize: 11, fontWeight: 600 },
   tooltip: {
     contentStyle: {
       background: "hsl(var(--popover))",

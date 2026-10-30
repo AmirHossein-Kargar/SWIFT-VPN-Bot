@@ -54,9 +54,13 @@ rerun with `TEST_CONCURRENCY=1` to isolate a concurrency-sensitive test from a g
 - `npm run test:e2e` (admin, fixture backend) and `npm run test:e2e:store` (storefront under the real CSP) need Chrome
   (`CHROME_PATH`); the storefront suite needs a storefront build and exits 0 with `SKIP` without one. axe checks run only
   when `axe-core` resolves (`AXE_PATH`).
-- Browser runs and `tsc` can rewrite untracked artefacts in the tree (screenshots such as `store-*.png`,
-  `admin-panel/tsconfig.tsbuildinfo`). Check `git status` before and after, and restore anything you changed that the
-  owner did not ask for.
+- `node tests/e2e/nextPanel.e2e.mjs` is the `/panel` suite (needs `npx next build admin-panel`; not an npm script): real
+  session and CSRF middleware, delayed and failing API answers, and the navigation-hang regressions. `E2E_ONLY=<regex>`
+  runs matching steps. A navigation bug here passed one-file runs and failed with a warm server, so repeat a flaky
+  sequence and capture state on failure; do not add a sleep.
+- Set `SHOTS` to a scratch folder for the storefront suite: without it, it overwrites the tracked `store-*.png` in the
+  repo root. `tsc` can rewrite the untracked `admin-panel/tsconfig.tsbuildinfo`. Check `git status` before and after,
+  and restore anything you changed that the owner did not ask for.
 
 ## 5. Report
 

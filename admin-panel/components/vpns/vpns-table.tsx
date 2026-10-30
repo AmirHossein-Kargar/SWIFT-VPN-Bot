@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { VpnDetailSheet } from "@/components/vpns/vpn-detail-sheet";
 import type { AdminVpn } from "@/lib/types";
 import { formatDateTime, formatNumber } from "@/lib/utils";
+import { EmptyState } from "@/components/shared/empty-state";
 
 const STATUS_VARIANT: Record<AdminVpn["status"], "success" | "warning" | "destructive" | "muted" | "outline"> = {
   active: "success",
@@ -21,7 +22,7 @@ export function VpnsTable({ items }: { items: AdminVpn[] }) {
   const [open, setOpen] = useState(false);
 
   if (items.length === 0) {
-    return <p className="py-10 text-center text-sm text-muted-foreground">No VPN services match these filters.</p>;
+    return <EmptyState title="No VPN services match these filters." />;
   }
 
   return (

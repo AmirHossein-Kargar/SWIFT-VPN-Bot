@@ -20,5 +20,8 @@ Details: `docs/storefront.md` (storefront) and `docs/admin.md` (dashboard).
   `frame-ancestors 'none'` without `script-src` (Next and next-themes need inline bootstrap scripts).
 - The legacy vanilla-JS dashboard files in `web/public/` are still served at `/index.html`; removing them is an owner
   decision.
+- **`/panel` has no route loading file under `app/(app)`.** It hung filter navigation and streamed failed pages as 200; see
+  `docs/admin.md`. Waiting states live in `admin-panel/components/shared/navigation-pending.tsx`. Success motion and
+  toasts follow a server response, never a click.
 - Node tests must never request `/panel` on the real app: outside `NODE_ENV=production`, `web/nextAdminMiddleware.js`
   starts a Next.js dev server inside the test process.

@@ -13,6 +13,7 @@ import { PaymentDeleteDialog } from "@/components/payments/payment-delete-dialog
 import type { AdminPayment } from "@/lib/types";
 import { formatDateTime, formatToman } from "@/lib/utils";
 import { deletionReason } from "@/lib/paymentDeletion";
+import { EmptyState } from "@/components/shared/empty-state";
 
 export function PaymentsTable({ items }: { items: AdminPayment[] }) {
   const router = useRouter();
@@ -35,7 +36,7 @@ export function PaymentsTable({ items }: { items: AdminPayment[] }) {
   }
 
   if (items.length === 0) {
-    return <p className="py-10 text-center text-sm text-muted-foreground">No payments match these filters.</p>;
+    return <EmptyState title="No payments match these filters." hint="Try a different status or provider." />;
   }
 
   return (

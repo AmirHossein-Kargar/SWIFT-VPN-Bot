@@ -17,6 +17,7 @@ import { NAV_SECTIONS } from "@/components/layout/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Logo } from "@/components/brand/logo";
 import { cn } from "@/lib/utils";
+import { useOpenSection } from "@/components/shared/navigation-pending";
 
 function pageTitle(pathname: string): string {
   for (const section of NAV_SECTIONS) {
@@ -31,6 +32,7 @@ export function Topbar() {
   const router = useRouter();
   const pathname = stripBasePath(usePathname());
   const title = pageTitle(pathname);
+  const openSection = useOpenSection();
   const [signingOut, setSigningOut] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
@@ -119,9 +121,9 @@ export function Topbar() {
                       <li key={item.href}>
                         <Link
                           href={item.href}
-                          onClick={() => setMobileNavOpen(false)}
+                          onClick={(event) => { setMobileNavOpen(false); openSection(event, item.href); }}
                           className={cn(
-                            "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                            "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-[color,background-color,transform] duration-150 active:scale-[0.98]",
                             active
                               ? "bg-primary text-primary-foreground"
                               : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"

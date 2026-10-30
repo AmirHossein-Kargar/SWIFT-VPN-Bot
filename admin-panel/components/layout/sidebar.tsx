@@ -24,6 +24,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Logo } from "@/components/brand/logo";
 import { stripBasePath } from "@/lib/basePath";
+import { useOpenSection } from "@/components/shared/navigation-pending";
 
 type NavItem = { href: string; label: string; icon: typeof LayoutDashboard };
 type NavSection = { label: string; items: NavItem[] };
@@ -69,6 +70,7 @@ const NAV_SECTIONS: NavSection[] = [
 
 export function Sidebar() {
   const pathname = stripBasePath(usePathname());
+  const openSection = useOpenSection();
 
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-card lg:flex">
@@ -91,8 +93,9 @@ export function Sidebar() {
                     <Link
                       href={item.href}
                       aria-current={active ? "page" : undefined}
+                      onClick={(event) => openSection(event, item.href)}
                       className={cn(
-                        "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                        "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-[color,background-color,transform] duration-150 active:scale-[0.98]",
                         active
                           ? "bg-primary text-primary-foreground"
                           : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"

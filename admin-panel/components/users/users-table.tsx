@@ -15,6 +15,8 @@ import { ResetEligibilityDialog } from "@/components/users/reset-eligibility-dia
 import { UserDetailSheet } from "@/components/users/user-detail-sheet";
 import type { AdminUser } from "@/lib/types";
 import { formatDateTime, formatNumber, formatToman } from "@/lib/utils";
+import { EmptyState } from "@/components/shared/empty-state";
+import { ChangeFlash } from "@/components/shared/change-flash";
 
 type RowAction = { kind: "credit" | "debit" | "message" | "block" | "eligibility"; user: AdminUser } | null;
 
@@ -25,7 +27,7 @@ export function UsersTable({ items }: { items: AdminUser[] }) {
   const [detailOpen, setDetailOpen] = useState(false);
 
   if (items.length === 0) {
-    return <p className="py-10 text-center text-sm text-muted-foreground">No users match these filters.</p>;
+    return <EmptyState title="No users match these filters." hint="Try a broader search or fewer filters." />;
   }
 
   const close = (next: boolean) => { if (!next) setAction(null); };
@@ -56,13 +58,13 @@ export function UsersTable({ items }: { items: AdminUser[] }) {
                   <p className="text-xs text-muted-foreground">{user.telegramId}</p>
                 </button>
               </TableCell>
-              <TableCell>{formatToman(user.balance)}</TableCell>
+              <TableCell><ChangeFlash value={user.balance}>{formatToman(user.balance)}</ChangeFlash></TableCell>
               <TableCell className="hidden sm:table-cell">{formatNumber(user.successfulPayments)}</TableCell>
               <TableCell className="hidden sm:table-cell">{formatNumber(user.serviceCount)}</TableCell>
               <TableCell className="hidden text-muted-foreground md:table-cell">{formatDateTime(user.createdAt)}</TableCell>
               <TableCell className="hidden text-muted-foreground lg:table-cell">{formatDateTime(user.lastActivityAt)}</TableCell>
               <TableCell>
-                {user.isBanned ? <Badge variant="destructive">Blocked</Badge> : <Badge variant="success">Active</Badge>}
+                <ChangeFlash value={user.isBanned}>{user.isBanned ? <Badge variant="destructive">Blocked</Badge> : <Badge variant="success">Active</Badge>}</ChangeFlash>
               </TableCell>
               <TableCell>
                 <DropdownMenu>

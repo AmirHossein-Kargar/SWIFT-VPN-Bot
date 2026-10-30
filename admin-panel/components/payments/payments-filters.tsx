@@ -1,12 +1,13 @@
 "use client";
 
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { useSearchParams, usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Search } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { stripBasePath } from "@/lib/basePath";
+import { useNavigate } from "@/components/shared/navigation-pending";
 
 const STATUSES = ["all", "pending", "paid", "fulfilled", "failed", "cancelled", "refunded", "recovery-required"];
 const PROVIDERS = ["all", "hooshpay", "nowpayments", "bank", "trx", "wallet"];
@@ -28,7 +29,7 @@ export function PaymentsFilters({
   status: string;
   provider: string;
 }) {
-  const router = useRouter();
+  const navigate = useNavigate();
   const pathname = stripBasePath(usePathname());
   const searchParams = useSearchParams();
   const [search, setSearch] = useState(defaultSearch);
@@ -43,7 +44,7 @@ export function PaymentsFilters({
       else next.set(key, value);
     }
     next.delete("page");
-    router.push(`${pathname}?${next.toString()}`);
+    navigate(`${pathname}?${next.toString()}`);
   }
 
   function onSearchChange(value: string) {

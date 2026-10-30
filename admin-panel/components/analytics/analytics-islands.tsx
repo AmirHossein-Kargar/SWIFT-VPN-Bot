@@ -1,13 +1,14 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useRouter, usePathname } from "next/navigation";
+import { usePathname } from "next/navigation";
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { stripBasePath } from "@/lib/basePath";
 import type { AnalyticsReport } from "@/lib/types";
+import { useNavigate } from "@/components/shared/navigation-pending";
 
 export const ANALYTICS_RANGES = [
   { value: "today", label: "Today" },
@@ -23,10 +24,10 @@ export const AnalyticsChartLazy = dynamic(() => import("@/components/analytics/a
 });
 
 export function RangeSelect({ range }: { range: string }) {
-  const router = useRouter();
+  const navigate = useNavigate();
   const pathname = stripBasePath(usePathname());
   return (
-    <Select value={range} onValueChange={(value) => router.push(`${pathname}?range=${value}`)}>
+    <Select value={range} onValueChange={(value) => navigate(`${pathname}?range=${value}`)}>
       <SelectTrigger className="w-44" aria-label="Date range">
         <SelectValue />
       </SelectTrigger>
