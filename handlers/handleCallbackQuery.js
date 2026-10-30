@@ -27,7 +27,9 @@ import {
 } from "../config/sessionStore.js";
 import keyboard, { MENU_PREFIX } from "../keyboards/mainKeyboard.js";
 import { runMenuAction, showMainMenu } from "./menuActions.js";
-import { claimCallback, withSingleAck } from "../utils/callbackGuard.js";
+import { claimCallback, isSensitiveCallback, withSingleAck } from "../utils/callbackGuard.js";
+import { isNotModifiedError } from "../services/messaging/messageManager.js";
+import { GENERIC_ERROR_MESSAGE } from "../messages/staticMessages.js";
 import promptForReceipt from "../paymentHandlers/promptForReceipt.js";
 import { getActiveProducts, getSellablePlans, getSellablePlanById } from "../services/plans.js";
 import handleBuyService, { buildDurationPlansMessage } from "../services/buyService/buyService.js";
@@ -1144,15 +1146,34 @@ const handleCallbackQueryInner = async (bot, query) => {
 };
 
 /**
+ * Tell the user a tap failed, so a failed edit never ends in silence. Money and
+ * provisioning callbacks are left out: they report their own outcomes, and a
+ * generic "try again" after an unknown result could prompt a duplicate purchase.
+ */
+async function notifyCallbackFailure(bot, query) {
+  const chatId = query?.message?.chat?.id ?? query?.from?.id;
+  if (chatId == null || isSensitiveCallback(query?.data)) return;
+  try {
+    await bot.sendMessage(chatId, GENERIC_ERROR_MESSAGE);
+  } catch { /* chat unreachable — nothing more we can do */ }
+}
+
+/**
  * Public entry point. Guarantees every callback query is acknowledged exactly
  * once: handlers may answer with their own text/alert (first answer wins, later
  * ones are dropped), and a query nobody answered is acknowledged at the end so
- * the client spinner always stops.
+ * the client spinner always stops, whether or not the handler failed.
  */
 const handleCallbackQuery = async (bot, query) => {
   const { bot: ackBot, ensureAnswered } = withSingleAck(bot, query?.id);
   try {
     await handleCallbackQueryInner(ackBot, query);
+  } catch (err) {
+    // The tapped message already shows this content: there is nothing to report.
+    if (isNotModifiedError(err)) return;
+    await ensureAnswered();
+    await notifyCallbackFailure(bot, query);
+    throw err;
   } finally {
     await ensureAnswered();
   }

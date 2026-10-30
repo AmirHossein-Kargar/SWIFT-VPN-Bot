@@ -10,6 +10,8 @@ export const WELCOME_MESSAGE = `🤖 به ربات سویفت خوش آمدید!
 
 export const CHOOSE_OPTION_MESSAGE = `🔻لطفا یکی از گزینه های موجود را انتخاب کنید :`;
 
+export const GENERIC_ERROR_MESSAGE = "❌ خطایی رخ داد. لطفاً دوباره تلاش کنید.";
+
 export function getTestServiceMessage({
   maxUser,
   maxUsageMB,

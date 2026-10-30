@@ -46,9 +46,9 @@ flowchart LR
 ```
 
 One Node.js process runs everything. Express starts first so the health probes respond, then MongoDB
-and Redis connect, then Telegram polling, the TRX scanner and the recovery crons start. MongoDB is
-mandatory and must be ready (indexes included) before polling starts; Redis is never authoritative for
-money. Because the bot uses long polling, **run exactly one replica**.
+and Redis connect, then the TRX scanner and the recovery crons start, and Telegram polling starts last,
+once every update handler is registered. MongoDB is mandatory and must be ready (indexes included)
+before polling starts; Redis is never authoritative for money. Because the bot uses long polling, **run exactly one replica**.
 
 ## How it works
 

@@ -499,10 +499,22 @@ describe("startup ordering", () => {
     const source = readFileSync(fileURLToPath(new URL("../../startBot.js", import.meta.url)), "utf8");
     const dbIndex = source.indexOf("await bootstrapCriticalDependencies()");
     const botIndex = source.indexOf("new TelegramBot(");
-    const pollingIndex = source.indexOf("polling: true");
+    const pollingIndex = source.indexOf("polling: { autoStart: false }");
 
     assert.ok(dbIndex > -1, "startBot must await the critical dependencies");
     assert.ok(botIndex > dbIndex, "the Telegram bot must be created after MongoDB is ready");
     assert.ok(pollingIndex > botIndex, "Telegram polling must not start before the bot exists");
+  });
+
+  test("bot.js starts polling only after every update handler is registered", () => {
+    // The library drops an update with no listener, so polling any earlier loses whatever was queued during a restart.
+    const source = readFileSync(fileURLToPath(new URL("../../bot.js", import.meta.url)), "utf8");
+    const startPolling = source.indexOf("bot.startPolling()");
+
+    assert.ok(startPolling > -1, "bot.js must start polling itself: startBot.js creates the bot with autoStart off");
+    for (const handler of ['bot.on("message"', 'bot.on("callback_query"', 'bot.on("photo"', 'bot.on("video"', 'registerUnsupportedMedia("document"']) {
+      const last = source.lastIndexOf(handler);
+      assert.ok(last > -1 && last < startPolling, `${handler} must be registered before polling starts`);
+    }
   });
 });

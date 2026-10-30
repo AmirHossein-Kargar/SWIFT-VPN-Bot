@@ -16,6 +16,11 @@ import defaultRedisClient, { isRedisReady } from "../../config/redisClient.js";
 
 const prefix = "ui_msg:";
 
+// Test seam: unit tests inject an in-memory client (same shape as sessionStore.js).
+let injected = null;
+export function setActiveMessageClientForTests(fake) { injected = fake; }
+export function clearActiveMessageClientForTests() { injected = null; }
+
 // A stale pointer only costs one extra sent message on the next navigation,
 // so this can be much shorter than the 7-day session TTL.
 const ACTIVE_MESSAGE_TTL_SECONDS = 24 * 60 * 60;
@@ -42,7 +47,7 @@ function isReady(redis) {
  * @param {number|string} chatId
  * @returns {Promise<number|null>}
  */
-export async function getActiveMessage(chatId, { redis = defaultRedisClient } = {}) {
+export async function getActiveMessage(chatId, { redis = injected ?? defaultRedisClient } = {}) {
   if (!isReady(redis)) return null;
   try {
     const raw = await redis.get(prefix + chatId);
@@ -62,7 +67,7 @@ export async function getActiveMessage(chatId, { redis = defaultRedisClient } = 
  * actually on screen — that is more authoritative than anything a concurrent
  * request could race against.
  */
-export async function setActiveMessage(chatId, messageId, { redis = defaultRedisClient } = {}) {
+export async function setActiveMessage(chatId, messageId, { redis = injected ?? defaultRedisClient } = {}) {
   if (!isReady(redis) || !Number.isSafeInteger(messageId)) return false;
   try {
     await redis.set(prefix + chatId, String(messageId), { EX: ACTIVE_MESSAGE_TTL_SECONDS });
@@ -78,7 +83,7 @@ export async function setActiveMessage(chatId, messageId, { redis = defaultRedis
  * value still matches `expectedPrevious` (the value this caller originally
  * read before doing its work). See SET_IF_MATCH_LUA for why.
  */
-export async function setActiveMessageIfUnchanged(chatId, messageId, expectedPrevious, { redis = defaultRedisClient } = {}) {
+export async function setActiveMessageIfUnchanged(chatId, messageId, expectedPrevious, { redis = injected ?? defaultRedisClient } = {}) {
   if (!isReady(redis) || !Number.isSafeInteger(messageId)) return false;
   try {
     const result = await redis.eval(SET_IF_MATCH_LUA, {
@@ -99,7 +104,7 @@ export async function setActiveMessageIfUnchanged(chatId, messageId, expectedPre
 /**
  * @param {number|string} chatId
  */
-export async function clearActiveMessage(chatId, { redis = defaultRedisClient } = {}) {
+export async function clearActiveMessage(chatId, { redis = injected ?? defaultRedisClient } = {}) {
   if (!isReady(redis)) return;
   try {
     await redis.del(prefix + chatId);

@@ -54,6 +54,12 @@ describe(`installed node-telegram-bot-api ${version}`, () => {
     assert.equal(typeof bot.getMe, "function");
   });
 
+  test("polling.autoStart:false leaves polling off until startPolling(), so handlers can register first", () => {
+    const bot = new TelegramBot("123456789:AATestTokenNeverUsedForNetworkAccess_0123456", { polling: { autoStart: false } });
+    assert.equal(bot.isPolling(), false, `${CONTRACT} autoStart:false no longer defers polling; bot.js relies on it`);
+    assert.equal(typeof bot.startPolling, "function", `${CONTRACT} TelegramBot#startPolling is gone`);
+  });
+
   test("a SUCCESSFUL getUpdates round (even an empty one) stamps _lastUpdate", async () => {
     polling = new TelegramBotPolling(stubBot({ getUpdates: async () => [] }));
     const before = Date.now();

@@ -47,7 +47,7 @@ tests before deciding which one is wrong; do not assume the current code is the 
 
 ## Invariants that apply everywhere
 
-- Run exactly one replica (Telegram long polling). Startup order is HTTP → MongoDB (indexes) → Redis → polling → crons.
+- Run exactly one replica (Telegram long polling). Startup order is HTTP → MongoDB (indexes) → Redis → crons → update handlers → polling.
 - MongoDB is the only authority for money; Redis holds locks, sessions and leases and is never trusted for balances.
 - The admin service catalog (`AdminProduct`, read through `services/plans.js`) is the source of truth for checkout.
 - Customer bot and storefront text is Persian (RTL); the `/panel` dashboard is English.

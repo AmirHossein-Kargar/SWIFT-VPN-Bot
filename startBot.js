@@ -157,11 +157,12 @@ export default async function startBot() {
     console.warn("⚠️  Support ticket status migration skipped:", error?.name || "DatabaseError");
   }
 
-  // Create Telegram bot (polling mode)
+  // Create Telegram bot. Long polling is started by bot.js once every update
+  // handler is registered, so no update can arrive before something listens for it.
   if (!process.env.BOT_TOKEN) {
     throw new Error("BOT_TOKEN is not set; Telegram bot cannot start");
   }
-  const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
+  const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: { autoStart: false } });
 
   // Telegram transports errors via events. Without listeners an emitted 'error'
   // is re-thrown by EventEmitter and crashes the process.
@@ -195,10 +196,6 @@ export default async function startBot() {
       }),
     ]);
     setBotIdentity(me);
-    // TEMP DIAGNOSTIC (remove once /start-and-buttons investigation is closed): confirms which
-    // bot account this process is actually authenticated as — a mismatched BOT_TOKEN (wrong/
-    // staging bot) looks identical to "the bot doesn't respond" from the customer's side.
-    console.log(`[diag] Telegram identity confirmed: @${me.username} (bot id ${me.id})`);
     setTelegramReadinessProbe(() => {
       const evidence = getPollingEvidence(bot);
       return !evidence.failing && !evidence.stalled;
