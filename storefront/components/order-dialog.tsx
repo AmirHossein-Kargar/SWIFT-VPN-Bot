@@ -72,20 +72,23 @@ export function OrderDialog({ plan, catalog, onClose, onGone }: { plan: StorePla
         ) : null}
         <DialogDescription className="px-5 pt-3.5">مبلغ نهایی هنگام تأیید سفارش در ربات دوباره روی سرور محاسبه و از کیف پول شما کسر می‌شود.</DialogDescription>
         <div className="grid gap-2.5 p-5">
-          {check.kind === "checking" ? (
-            <Button size="lg" className="w-full" disabled aria-disabled="true"><LoaderCircle className="animate-spin" aria-hidden="true" />در حال بررسی موجودی پلن…</Button>
-          ) : null}
-          {check.kind === "ready" ? (
-            <a className={buttonVariants({ size: "lg", className: "w-full" })} href={check.url} target="_blank" rel="noopener"><Send aria-hidden="true" />ادامه خرید در تلگرام</a>
-          ) : null}
-          {check.kind === "unavailable" ? <p role="alert" className="text-center text-sm text-destructive">ربات تلگرام در حال حاضر در دسترس نیست؛ لطفاً چند دقیقه بعد دوباره تلاش کنید.</p> : null}
-          {check.kind === "gone" ? <p role="alert" className="text-center text-sm text-destructive">این پلن دیگر برای فروش فعال نیست. فهرست پلن‌ها به‌روزرسانی شد.</p> : null}
-          {check.kind === "error" ? (
-            <>
-              <p role="alert" className="text-center text-sm text-destructive">بررسی پلن ممکن نشد. اتصال را بررسی کنید و دوباره تلاش کنید.</p>
-              <Button size="lg" className="w-full" onClick={() => setAttempt((n) => n + 1)}><RefreshCw aria-hidden="true" />تلاش دوباره</Button>
-            </>
-          ) : null}
+          {/* Keyed by outcome so each result fades in, and the row keeps its height so the dialog does not jump. */}
+          <div key={check.kind} className="animate-rise grid min-h-[52px] gap-2.5">
+            {check.kind === "checking" ? (
+              <Button size="lg" className="w-full" disabled aria-disabled="true"><LoaderCircle className="animate-spin" aria-hidden="true" />در حال بررسی موجودی پلن…</Button>
+            ) : null}
+            {check.kind === "ready" ? (
+              <a className={buttonVariants({ size: "lg", className: "w-full" })} href={check.url} target="_blank" rel="noopener"><Send aria-hidden="true" />ادامه خرید در تلگرام</a>
+            ) : null}
+            {check.kind === "unavailable" ? <p role="alert" className="text-center text-sm text-destructive">ربات تلگرام در حال حاضر در دسترس نیست؛ لطفاً چند دقیقه بعد دوباره تلاش کنید.</p> : null}
+            {check.kind === "gone" ? <p role="alert" className="text-center text-sm text-destructive">این پلن دیگر برای فروش فعال نیست. فهرست پلن‌ها به‌روزرسانی شد.</p> : null}
+            {check.kind === "error" ? (
+              <>
+                <p role="alert" className="text-center text-sm text-destructive">بررسی پلن ممکن نشد. اتصال را بررسی کنید و دوباره تلاش کنید.</p>
+                <Button size="lg" className="w-full" onClick={() => setAttempt((n) => n + 1)}><RefreshCw aria-hidden="true" />تلاش دوباره</Button>
+              </>
+            ) : null}
+          </div>
           <Button variant="outline" className="w-full" onClick={onClose}>بازگشت به پلن‌ها</Button>
         </div>
       </DialogContent>

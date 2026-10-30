@@ -75,6 +75,20 @@ HooshPay invoice lookup/forced re-fulfillment, API service purchase and messagin
 - **Restore test eligibility** clears the "already received a test" state only when no test is
   in flight or awaiting delivery. It never provisions a service.
 
+## Interaction rules
+
+- **Nothing looks successful before the server has answered.** There is no optimistic UI: a success toast follows the
+  response, `ChangeFlash` highlights a status or balance only when refreshed server data differs, and
+  `ConfirmDialog` stays open with a spinner until the request finishes, keeping a failure inline. Financially sensitive
+  actions (bank receipt confirmation, recovery retries, wallet credit and debit) always ask first, and a retry reuses
+  its `operationId`.
+- **No route loading file under `app/(app)`.** A route loading boundary left filter changes stuck in a transition that never
+  committed (about 1 in 16 on Users, 10 in 32 on the catalog) and streamed pages, turning a failed API into HTTP 200.
+  `components/shared/navigation-pending.tsx` provides the waiting states instead; `tests/e2e/nextPanel.e2e.mjs` guards
+  both. `app/(app)/error.tsx` shows a failed page.
+- Charts keep the greyscale tokens, so a second series is also dashed and legend-keyed; Recharts' own animation follows
+  `prefers-reduced-motion` through `lib/use-reduced-motion.ts`.
+
 ## Money safety in admin actions
 
 - **Balance changes** use the idempotency ledger above; a replayed request or button cannot

@@ -17,6 +17,7 @@ import { adminGet, adminMutate, newOperationId } from "@/lib/adminApi.client";
 import { AdminApiError } from "@/lib/types";
 import type { CreationLockReleaseResult, PaymentDetail } from "@/lib/types";
 import { formatDateTime, formatToman } from "@/lib/utils";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 
 const STEP_ICON: Record<string, typeof CheckCircle2> = {
   success: CheckCircle2,
@@ -47,8 +48,8 @@ function ReasonAction({ label, variant = "default", minLength = 5, maxLength = 2
 
   return (
     <div className="space-y-2 rounded-md border border-border p-3">
-      <Textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder={`Reason (${minLength}-${maxLength} characters)`} />
-      {error ? <p className="text-xs text-destructive">{error}</p> : null}
+      <Textarea aria-label={`Reason for ${label}`} value={reason} onChange={(event) => setReason(event.target.value)} placeholder={`Reason (${minLength}-${maxLength} characters)`} />
+      {error ? <p className="text-xs text-destructive" role="alert">{error}</p> : null}
       <div className="flex justify-end gap-2">
         <Button variant="outline" size="sm" onClick={() => { setOpen(false); setReason(""); setError(null); }} disabled={submitting}>
           Cancel
@@ -56,7 +57,7 @@ function ReasonAction({ label, variant = "default", minLength = 5, maxLength = 2
         <Button
           variant={variant}
           size="sm"
-          disabled={submitting}
+          loading={submitting}
           onClick={async () => {
             const trimmed = reason.trim();
             if (trimmed.length < minLength || trimmed.length > maxLength) {
@@ -205,6 +206,9 @@ export function PaymentDetailSheet({ paymentKey, open, onOpenChange }: { payment
   const [detail, setDetail] = useState<PaymentDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [bankConfirmOpen, setBankConfirmOpen] = useState(false);
+  // Kept across a failed attempt so retrying the same confirmation cannot apply it twice.
+  const bankOperationId = useRef(newOperationId());
 
   function load() {
     if (!paymentKey) return;
@@ -280,7 +284,7 @@ export function PaymentDetailSheet({ paymentKey, open, onOpenChange }: { payment
 
             <div className="flex flex-wrap gap-2">
               {(detail.actions.retryVerification || detail.actions.retryFulfillment || detail.actions.checkProvider) && (
-                <Button size="sm" onClick={handleRetry} disabled={retrying}>
+                <Button size="sm" onClick={handleRetry} loading={retrying}>
                   {detail.actions.checkProvider ? "Check provider (read-only)" : "Retry"}
                 </Button>
               )}
@@ -307,20 +311,21 @@ export function PaymentDetailSheet({ paymentKey, open, onOpenChange }: { payment
               )}
               {bankPending && (
                 <>
-                  <Button
-                    size="sm"
-                    onClick={async () => {
-                      try {
-                        await adminMutate(`/payments/bank/${bankPaymentId}/confirm`, "POST", csrfToken, { operationId: newOperationId() });
-                        toast.success("Bank payment confirmed.");
-                        await refresh();
-                      } catch (error) {
-                        toast.error(error instanceof AdminApiError ? error.message : "Confirmation failed.");
-                      }
+                  <Button size="sm" onClick={() => setBankConfirmOpen(true)}>Confirm receipt</Button>
+                  <ConfirmDialog
+                    open={bankConfirmOpen}
+                    onOpenChange={setBankConfirmOpen}
+                    title="Confirm this bank receipt?"
+                    description={`This credits ${formatToman(detail.amount)} to user ${detail.userId}'s wallet. Check the receipt first; a credit cannot be undone from here.`}
+                    confirmLabel={`Credit ${formatToman(detail.amount)}`}
+                    pendingLabel="Confirming…"
+                    onConfirm={async () => {
+                      await adminMutate(`/payments/bank/${bankPaymentId}/confirm`, "POST", csrfToken, { operationId: bankOperationId.current });
+                      bankOperationId.current = newOperationId();
+                      toast.success("Bank payment confirmed.");
+                      await refresh();
                     }}
-                  >
-                    Confirm receipt
-                  </Button>
+                  />
                   <ReasonAction
                     label="Reject receipt"
                     variant="destructive"

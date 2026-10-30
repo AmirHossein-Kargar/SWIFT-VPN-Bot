@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 // No Radix Slot/asChild: links are styled by calling buttonVariants() directly,
 // which keeps this primitive free of extra client JavaScript.
 export const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-transparent font-bold transition-colors disabled:pointer-events-none disabled:opacity-55 aria-disabled:pointer-events-none aria-disabled:opacity-55 [&_svg]:size-[18px] [&_svg]:shrink-0",
+  "press inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-transparent font-bold disabled:pointer-events-none disabled:opacity-55 aria-disabled:pointer-events-none aria-disabled:opacity-55 [&_svg]:size-[18px] [&_svg]:shrink-0",
   {
     variants: {
       variant: {

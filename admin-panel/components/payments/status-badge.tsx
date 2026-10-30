@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/badge";
+import { ChangeFlash } from "@/components/shared/change-flash";
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "success" | "warning" | "destructive" | "muted"> = {
   pending: "warning",
@@ -21,5 +22,5 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export function PaymentStatusBadge({ status }: { status: string }) {
-  return <Badge variant={STATUS_VARIANT[status] ?? "outline"}>{STATUS_LABEL[status] ?? status}</Badge>;
+  return <ChangeFlash value={status}><Badge variant={STATUS_VARIANT[status] ?? "outline"}>{STATUS_LABEL[status] ?? status}</Badge></ChangeFlash>;
 }

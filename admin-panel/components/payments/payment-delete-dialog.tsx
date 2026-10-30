@@ -99,7 +99,7 @@ export function PaymentDeleteDialog({ keys, open, onOpenChange, onDone }: { keys
         {error && !blocked.length ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
         <DialogFooter className="gap-2 sm:gap-0">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>Cancel</Button>
-          <Button variant="destructive" disabled={!canDelete || submitting} onClick={submit}>
+          <Button variant="destructive" disabled={!canDelete} loading={submitting} onClick={submit}>
             {submitting ? "Deleting…" : `Delete ${keys.length} record${keys.length === 1 ? "" : "s"}`}
           </Button>
         </DialogFooter>

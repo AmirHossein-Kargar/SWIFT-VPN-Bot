@@ -95,7 +95,7 @@ export function ResetEligibilityDialog({
         {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>Cancel</Button>
-          <Button onClick={handleSubmit} disabled={submitting}>{submitting ? "Saving…" : "Restore eligibility"}</Button>
+          <Button onClick={handleSubmit} loading={submitting}>{submitting ? "Saving…" : "Restore eligibility"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

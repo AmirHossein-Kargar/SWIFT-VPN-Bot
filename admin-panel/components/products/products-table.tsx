@@ -19,6 +19,7 @@ import { stripBasePath } from "@/lib/basePath";
 import { AdminApiError } from "@/lib/types";
 import type { AdminProduct } from "@/lib/types";
 import { formatDate, formatNumber, formatToman } from "@/lib/utils";
+import { useNavigate } from "@/components/shared/navigation-pending";
 
 type Confirmation = { kind: "archive" | "delete"; product: AdminProduct };
 
@@ -52,6 +53,7 @@ export function ProductsTable({
 }) {
   const { csrfToken } = useAdminSession();
   const router = useRouter();
+  const navigate = useNavigate();
   const pathname = stripBasePath(usePathname());
   const searchParams = useSearchParams();
   const [editing, setEditing] = useState<AdminProduct | null | undefined>(undefined);
@@ -117,7 +119,7 @@ export function ProductsTable({
     next.set("sort", key);
     next.set("order", descending ? "desc" : "asc");
     next.delete("page");
-    router.push(`${pathname}?${next.toString()}`);
+    navigate(`${pathname}?${next.toString()}`);
   }
 
   function SortHead({ column }: { column: { key: string; label: string } }) {

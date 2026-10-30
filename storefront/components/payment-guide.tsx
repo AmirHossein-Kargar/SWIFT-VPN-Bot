@@ -1,137 +1,145 @@
-import { useState } from "react";
-import { BadgeCheck, CircleAlert, Coins, CreditCard, FileSearch, Hourglass, Network, Receipt, Send, Wallet } from "lucide-react";
+import dynamic from "next/dynamic";
+import { useEffect, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, CircleAlert, Coins, CreditCard, FileSearch, Maximize2, Send } from "lucide-react";
 
-import { BotMock, type MockButton, type MockLine } from "@/components/bot-mock";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Container, SectionHeading } from "@/components/site-chrome";
 import { fa } from "@/lib/format";
+import guide from "@/lib/topup-guide.json";
 import { cn } from "@/lib/utils";
 
 /**
- * Everything on this page describes what the bot does today
- * (paymentHandlers/payHoosh.js for card-to-card, paymentHandlers/payNowPayments.js
- * for crypto). Mockups use placeholder values only: no real card, address or amount.
+ * Everything here describes what the bot does today (paymentHandlers/payHoosh.js for card-to-card,
+ * paymentHandlers/payNowPayments.js for crypto). The steps and images come from lib/topup-guide.json, which
+ * tests/unit/topupGuide.test.js pins to the bot's source. Images are labelled illustrations with placeholder values.
  */
-interface Step { title: string; text: string; mock: { title: string; lines?: MockLine[]; rows?: MockButton[][] } }
-interface FlowNode { label: string; icon: typeof Send }
+export interface GuideStep { id: string; label: string; kind: string; title: string; text: string; caption: string; alt: string }
 
-const MENU_ROWS: MockButton[][] = [[{ label: "🛒 خرید سرویس" }], [{ label: "📦 سرویس‌های من" }, { label: "💰 افزایش موجودی", hot: true }]];
+// Radix Dialog is only needed once an image is enlarged, so the lightbox is its own chunk (shared with the order dialog).
+const loadLightbox = () => import("@/components/guide-lightbox").then((module) => module.GuideLightbox);
+const GuideLightbox = dynamic(loadLightbox, { ssr: false });
 
-const CARD_FLOW: FlowNode[] = [
-  { label: "ربات تلگرام", icon: Send },
-  { label: "انتخاب کارت‌به‌کارت", icon: CreditCard },
-  { label: "پرداخت طبق فاکتور", icon: Receipt },
-  { label: "بررسی درگاه", icon: Hourglass },
-  { label: "شارژ کیف پول", icon: Wallet },
-];
+export const guideImage = (step: GuideStep) => `/store/guide/${step.id}.webp`;
 
-const CARD_STEPS: Step[] = [
-  {
-    title: "ورود به افزایش موجودی",
-    text: "ربات سویفت را باز کنید و از منوی اصلی «💰 افزایش موجودی» را بزنید.",
-    mock: { title: "منوی اصلی", rows: MENU_ROWS },
-  },
-  {
-    title: "انتخاب کارت‌به‌کارت",
-    text: "از میان روش‌های پرداخت، «💳 پرداخت آنلاین کارت به کارت» را انتخاب کنید.",
-    mock: { title: "💰 افزایش موجودی کیف پول", lines: [{ text: "لطفاً روش پرداخت را انتخاب کنید.", muted: true }], rows: [[{ label: "💳 پرداخت آنلاین کارت به کارت", hot: true }], [{ label: "🪙 پرداخت با کریپتو" }]] },
-  },
-  {
-    title: "مبلغ را وارد کنید",
-    text: `مبلغ شارژ را به تومان و با کاما بنویسید، مثلاً 50,000. حداقل ${fa(10000)} و حداکثر ${fa(50000000)} تومان.`,
-    mock: { title: "💳 پرداخت آنلاین کارت به کارت", lines: [{ text: "مبلغ را به تومان وارد کنید", muted: true }, { text: "مثال: 50,000", strong: true }, { text: `حداقل: ${fa(10000)} تومان`, muted: true }] },
-  },
-  {
-    title: "فاکتور را بررسی و پرداخت کنید",
-    text: "ربات فاکتور می‌سازد: مبلغ درخواستی، کارمزد درگاه (در صورت وجود)، مبلغ قابل پرداخت و مشخصات کارت مقصد. دقیقاً همان مبلغ قابل پرداخت را با «پرداخت اکنون» یا به کارت مقصد واریز کنید. فاکتور مهلت محدودی دارد.",
-    mock: { title: "✅ فاکتور پرداخت ایجاد شد", lines: [{ text: "مبلغ قابل پرداخت: ••• تومان" }, { text: "کارت مقصد: •••• •••• •••• ••••" }, { text: "مهلت پرداخت محدود است", muted: true }], rows: [[{ label: "💳 پرداخت اکنون", hot: true }], [{ label: "✅ پرداخت کردم" }]] },
-  },
-  {
-    title: "«پرداخت کردم» و تأیید درگاه",
-    text: "بعد از پرداخت، «✅ پرداخت کردم» را بزنید تا ربات وضعیت را از درگاه بپرسد. ارسال رسید لازم نیست. اگر پرداخت هنوز تأیید نشده، کمی بعد دوباره بزنید؛ موجودی فقط پس از تأیید درگاه به کیف پول اضافه می‌شود.",
-    mock: { title: "⏳ در حال بررسی وضعیت پرداخت…", lines: [{ text: "پس از تأیید درگاه، موجودی کیف پول شما اضافه می‌شود.", muted: true }], rows: [[{ label: "✅ پرداخت کردم", hot: true }]] },
-  },
-];
+function StepFlow({ steps, label }: { steps: GuideStep[]; label: string }) {
+  const [current, setCurrent] = useState(0);
+  const [direction, setDirection] = useState<"next" | "back" | null>(null);
+  const [enlarged, setEnlarged] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const navRef = useRef<HTMLOListElement>(null);
 
-const CRYPTO_FLOW: FlowNode[] = [
-  { label: "انتخاب رمزارز", icon: Coins },
-  { label: "انتخاب شبکه", icon: Network },
-  { label: "ساخت فاکتور", icon: Receipt },
-  { label: "ارسال پرداخت", icon: Send },
-  { label: "تأیید تراکنش", icon: BadgeCheck },
-];
+  const go = (index: number) => {
+    setDirection(index >= current ? "next" : "back");
+    setCurrent(index);
+  };
 
-const CRYPTO_STEPS: Step[] = [
-  {
-    title: "ورود به افزایش موجودی",
-    text: "در ربات «💰 افزایش موجودی» را بزنید و «🪙 پرداخت با کریپتو» را انتخاب کنید.",
-    mock: { title: "💰 افزایش موجودی کیف پول", lines: [{ text: "لطفاً روش پرداخت را انتخاب کنید.", muted: true }], rows: [[{ label: "💳 پرداخت آنلاین کارت به کارت" }], [{ label: "🪙 پرداخت با کریپتو", hot: true }]] },
-  },
-  {
-    title: "رمزارز را انتخاب کنید",
-    text: "ربات فهرست رمزارزهای فعال را نشان می‌دهد؛ همان را انتخاب کنید که در کیف پول مبدأ شما موجود است.",
-    mock: { title: "🪙 ارز دیجیتال موردنظر را انتخاب کنید", lines: [{ text: "شبکهٔ انتقال را در مرحلهٔ بعد انتخاب می‌کنید.", muted: true }], rows: [[{ label: "USDT", hot: true }, { label: "TRX" }], [{ label: "TON" }, { label: "BTC" }]] },
-  },
-  {
-    title: "شبکه را انتخاب کنید",
-    text: "اگر رمزارز در چند شبکه فعال باشد، شبکه‌ای را بزنید که کیف پول مبدأ شما پشتیبانی می‌کند. ارسال از شبکهٔ اشتباه ممکن است به از دست رفتن وجه منجر شود.",
-    mock: { title: "🌐 شبکه انتقال USDT را انتخاب کنید", lines: [{ text: "⚠️ ارسال از شبکه اشتباه باعث از دست رفتن وجه می‌شود.", muted: true }], rows: [[{ label: "TRC20", hot: true }, { label: "BEP20" }]] },
-  },
-  {
-    title: "مبلغ را وارد و تأیید کنید",
-    text: "مبلغ شارژ را به تومان بنویسید؛ حداقل و حداکثر مجاز در همان مرحله در ربات نوشته می‌شود و هر رمزارز ممکن است حداقل مبلغ خودش را هم داشته باشد. ربات برآورد مبلغ رمزارز را نشان می‌دهد؛ این عدد تقریبی است.",
-    mock: { title: "🪙 تأیید افزایش موجودی", lines: [{ text: "مبلغ شارژ: ••• تومان" }, { text: "برآورد پرداخت: ≈ ••• USDT" }, { text: "مبلغ تقریبی است و ممکن است کمی تفاوت داشته باشد", muted: true }], rows: [[{ label: "✅ تأیید و ایجاد فاکتور پرداخت", hot: true }]] },
-  },
-  {
-    title: "فاکتور را پرداخت کنید",
-    text: "با «🔗 پرداخت فاکتور» صفحهٔ پرداخت درگاه باز می‌شود. مبلغ قابل پرداخت و مشخصات انتقال را همان‌جا و در پیام ربات بررسی و دقیقاً همان رمزارز را روی همان شبکه ارسال کنید.",
-    mock: { title: "✅ فاکتور پرداخت ایجاد شد", lines: [{ text: "مبلغ قابل پرداخت: ••• USDT (TRC20)" }, { text: "آدرس در صفحهٔ پرداخت درگاه نمایش داده می‌شود", muted: true }], rows: [[{ label: "🔗 پرداخت فاکتور", hot: true }], [{ label: "🔍 بررسی وضعیت پرداخت" }]] },
-  },
-  {
-    title: "تأیید تراکنش و شارژ کیف پول",
-    text: "با «🔍 بررسی وضعیت پرداخت» وضعیت را ببینید: منتظر پرداخت، در انتظار تأیید شبکه یا تأییدشده. موجودی فقط پس از تأیید معتبر پرداخت اضافه می‌شود؛ زمان تأیید ثابت نیست و به شبکه بستگی دارد.",
-    mock: { title: "🔍 وضعیت پرداخت", lines: [{ text: "🔄 پرداخت دریافت شد و در انتظار تأیید شبکه است." }, { text: "✅ پس از تأیید، کیف پول شارژ می‌شود", muted: true }], rows: [[{ label: "🔍 بررسی وضعیت پرداخت", hot: true }]] },
-  },
-];
+  useEffect(() => {
+    // Centre the active step in the phone-width strip. A delta, because scrollLeft is negative in RTL, and never
+    // scrollIntoView, which would also move the page.
+    const nav = navRef.current;
+    const active = nav?.querySelector<HTMLElement>('[aria-current="step"]');
+    if (!nav || !active) return;
+    const from = nav.getBoundingClientRect();
+    const to = active.getBoundingClientRect();
+    nav.scrollBy({ left: to.left + to.width / 2 - (from.left + from.width / 2) });
+    // The next image is usually wanted right away; hidden lazy images would otherwise only start loading on arrival.
+    const next = steps[current + 1];
+    if (next) new Image().src = guideImage(next);
+  }, [current, steps]);
 
-function FlowStrip({ nodes, label }: { nodes: FlowNode[]; label: string }) {
+  const closeLightbox = () => {
+    setEnlarged(false);
+    requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>("[data-guide-step]:not([hidden]) [data-enlarge]")?.focus());
+  };
+
+  const moveFocusBy = (event: React.KeyboardEvent, index: number) => {
+    // Arrow keys follow the reading direction, like the tabs above.
+    const delta = event.key === "ArrowLeft" ? 1 : event.key === "ArrowRight" ? -1 : 0;
+    const target = index + delta;
+    if (delta === 0 || target < 0 || target >= steps.length) return;
+    event.preventDefault();
+    go(target);
+    navRef.current?.querySelectorAll("button")[target]?.focus();
+  };
+
+  const progress = (current + 1) / steps.length;
   return (
-    <ol aria-label={label} className="relative mx-auto mb-8 grid max-w-[720px] list-none grid-cols-5 gap-1 p-0">
-      <span aria-hidden="true" className="absolute inset-x-[10%] top-[21px] h-px bg-gradient-to-l from-brand/60 via-brand/30 to-border" />
-      {nodes.map((node, index) => (
-        <li key={node.label} className="group relative grid justify-items-center gap-2 text-center">
-          <span className="relative grid size-[42px] place-items-center rounded-full border border-brand/40 bg-card text-brand shadow-[var(--shadow-card)] transition-transform duration-300 group-hover:scale-110 [&_svg]:size-[19px]">
-            <node.icon aria-hidden="true" />
-            <span className="absolute -end-1 -top-1 grid size-[18px] place-items-center rounded-full bg-primary text-[10.5px] font-extrabold text-primary-foreground">{fa(index + 1)}</span>
-          </span>
-          <span className="text-[11.5px] font-bold leading-tight text-muted-foreground sm:text-[13px]">{node.label}</span>
-        </li>
-      ))}
-    </ol>
-  );
-}
+    <div ref={rootRef}>
+      <div className="mb-3 flex items-center justify-between gap-3 text-[13.5px] font-bold">
+        <p aria-live="polite">مرحلهٔ {fa(current + 1)} از {fa(steps.length)}<span className="text-muted-foreground">: {steps[current]?.title}</span></p>
+      </div>
+      <div aria-hidden="true" className="mb-4 h-1.5 overflow-hidden rounded-full bg-secondary">
+        <span className="guide-progress block h-full rounded-full bg-brand" style={{ transform: `scaleX(${progress})` }} />
+      </div>
 
-function StepGrid({ steps }: { steps: Step[] }) {
-  return (
-    <ol className="grid list-none gap-4 p-0 sm:grid-cols-2 lg:grid-cols-3">
+      <ol ref={navRef} aria-label={label} className="guide-nav mb-6 flex list-none gap-2 overflow-x-auto p-1">
+        {steps.map((step, index) => {
+          const active = index === current;
+          return (
+            <li key={step.id} className="flex-none sm:flex-1">
+              <button
+                type="button"
+                aria-current={active ? "step" : undefined}
+                data-done={index < current ? "true" : undefined}
+                onClick={() => go(index)}
+                onKeyDown={(event) => moveFocusBy(event, index)}
+                className="press guide-step-button flex min-h-11 w-full items-center gap-2 whitespace-nowrap rounded-xl border bg-card px-3 text-[13.5px] font-bold text-muted-foreground hover:border-brand/50 hover:text-foreground"
+              >
+                <span className="guide-step-number inline-grid size-6 flex-none place-items-center rounded-full bg-secondary text-[12px] font-extrabold"><span className="sr-only">مرحلهٔ </span>{fa(index + 1)}</span>
+                {step.label}
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+
       {steps.map((step, index) => (
-        <li key={step.title} className="lift flex flex-col gap-3 rounded-lg border bg-card p-4">
-          <div className="flex items-center gap-3">
-            <span className="inline-grid size-9 flex-none place-items-center rounded-xl bg-brand/10 text-[15px] font-extrabold text-brand"><span className="sr-only">مرحلهٔ </span>{fa(index + 1)}</span>
-            <h3 className="text-[16px] font-extrabold leading-snug">{step.title}</h3>
+        // `hidden` keeps every step in the static HTML; the layout lives on an inner element because a display utility would override it.
+        <div key={step.id} data-guide-step hidden={index !== current}>
+          <div className={cn("grid items-start gap-5 md:grid-cols-[minmax(0,320px)_minmax(0,1fr)] md:gap-8", index === current && direction && `guide-in-${direction}`)}>
+            <figure className="m-0 min-w-0">
+              <button
+                type="button"
+                data-enlarge
+                onPointerEnter={() => void loadLightbox()}
+                onFocus={() => void loadLightbox()}
+                onClick={() => setEnlarged(true)}
+                className="press group relative block aspect-[4/5] w-full max-w-[360px] overflow-hidden rounded-2xl border border-border-strong bg-secondary max-md:mx-auto"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={guideImage(step)} alt={step.alt} width={400} height={500} loading="lazy" decoding="async" className="size-full object-cover" />
+                <span className="glass absolute bottom-2.5 end-2.5 inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[12px] font-bold text-foreground transition-transform group-hover:scale-105">
+                  <Maximize2 className="size-3.5" aria-hidden="true" />بزرگ‌نمایی تصویر
+                </span>
+              </button>
+              <figcaption className="mx-auto mt-2 max-w-[360px] text-[12.5px] leading-relaxed text-faint">{step.caption}</figcaption>
+            </figure>
+            <div className="min-w-0">
+              <p className="mb-1 text-[13px] font-extrabold text-brand">مرحلهٔ {fa(index + 1)}</p>
+              <h3 className="text-[19px] font-extrabold leading-snug">{step.title}</h3>
+              <p className="mt-2 text-[15px] text-muted-foreground">{step.text}</p>
+              <div className="mt-5 flex flex-wrap gap-2.5">
+                {index > 0 ? (
+                  <Button variant="outline" onClick={() => go(index - 1)}><ChevronRight aria-hidden="true" />مرحلهٔ قبل</Button>
+                ) : null}
+                {index < steps.length - 1 ? (
+                  <Button onClick={() => go(index + 1)}>مرحلهٔ بعد<ChevronLeft aria-hidden="true" /></Button>
+                ) : null}
+              </div>
+            </div>
           </div>
-          <p className="text-[14px] text-muted-foreground">{step.text}</p>
-          <BotMock className="mt-auto" title={step.mock.title} lines={step.mock.lines} rows={step.mock.rows} />
-        </li>
+        </div>
       ))}
-    </ol>
+
+      {enlarged ? <GuideLightbox steps={steps} index={current} onIndex={go} onClose={closeLightbox} /> : null}
+    </div>
   );
 }
 
 function Callout({ tone, title, children }: { tone: "warn" | "info"; title: string; children: React.ReactNode }) {
   return (
-    <div className={cn("mt-6 flex gap-3 rounded-lg border p-4", tone === "warn" ? "border-destructive/40 bg-destructive/10" : "border-border-strong bg-card")}>
+    <div className={cn("mt-8 flex gap-3 rounded-lg border p-4", tone === "warn" ? "border-destructive/40 bg-destructive/10" : "border-border-strong bg-card")}>
       {tone === "warn" ? <CircleAlert className="mt-0.5 size-5 shrink-0 text-destructive" aria-hidden="true" /> : <FileSearch className="mt-0.5 size-5 shrink-0 text-brand" aria-hidden="true" />}
       <div>
         <p className="mb-1.5 font-extrabold">{title}</p>
@@ -144,21 +152,22 @@ function Callout({ tone, title, children }: { tone: "warn" | "info"; title: stri
 export function PaymentGuide({ botUrl }: { botUrl: string | null }) {
   const [method, setMethod] = useState("card");
   return (
-    <section id="payment" aria-labelledby="payment-title" className="scroll-mt-[72px] py-[52px] sm:py-[72px]">
+    <section id="payment" aria-labelledby="payment-title" className="aurora relative isolate scroll-mt-[72px] overflow-clip py-[52px] sm:py-[72px]">
       <Container>
         <SectionHeading id="payment-title" eyebrow="راهنمای تصویری" title="شارژ کیف پول: کارت‌به‌کارت یا ارز دیجیتال">
           پرداخت‌ها داخل ربات تلگرام انجام می‌شود، نه روی این صفحه. قبل از شروع ببینید هر روش دقیقاً چه مراحلی دارد. روش‌هایی که در لحظهٔ خرید در ربات فعال باشند قابل انتخاب‌اند.
         </SectionHeading>
         <div data-reveal>
+          {/* Without JavaScript the stepper cannot switch, so every step and both methods stay readable. */}
+          <noscript><style>{"[data-guide-step][hidden], #payment [role=tabpanel][hidden] { display: block; margin-bottom: 24px; }"}</style></noscript>
           <Tabs value={method} onValueChange={setMethod} dir="rtl">
             <TabsList aria-label="روش پرداخت" className="mb-8 grid w-full max-w-[460px] grid-cols-2">
               <TabsTrigger value="card" className="gap-2 px-3 max-sm:flex-col max-sm:gap-1 max-sm:py-2 max-sm:leading-snug max-sm:text-balance"><CreditCard className="size-[18px]" aria-hidden="true" />پرداخت کارت به کارت</TabsTrigger>
               <TabsTrigger value="crypto" className="gap-2 px-3 max-sm:flex-col max-sm:gap-1 max-sm:py-2 max-sm:leading-snug max-sm:text-balance"><Coins className="size-[18px]" aria-hidden="true" />پرداخت کریپتو</TabsTrigger>
             </TabsList>
 
-            <TabsContent value="card" forceMount>
-              <FlowStrip nodes={CARD_FLOW} label="مسیر پرداخت کارت‌به‌کارت" />
-              <StepGrid steps={CARD_STEPS} />
+            <TabsContent value="card" forceMount className="animate-rise">
+              <StepFlow steps={guide.card} label="مراحل پرداخت کارت‌به‌کارت" />
               <Callout tone="info" title="نکته‌هایی که پرسش پشتیبانی را کم می‌کند">
                 <ul className="grid list-disc gap-1 ps-5">
                   <li>همیشه مبلغ «قابل پرداخت» فاکتور را واریز کنید؛ ممکن است با مبلغ درخواستی شما فرق داشته باشد، چون کارمزد درگاه، اگر وجود داشته باشد، در فاکتور نوشته می‌شود.</li>
@@ -168,9 +177,8 @@ export function PaymentGuide({ botUrl }: { botUrl: string | null }) {
               </Callout>
             </TabsContent>
 
-            <TabsContent value="crypto" forceMount>
-              <FlowStrip nodes={CRYPTO_FLOW} label="مسیر پرداخت با ارز دیجیتال" />
-              <StepGrid steps={CRYPTO_STEPS} />
+            <TabsContent value="crypto" forceMount className="animate-rise">
+              <StepFlow steps={guide.crypto} label="مراحل پرداخت با ارز دیجیتال" />
               <Callout tone="warn" title="قبل از ارسال حتماً بررسی کنید">
                 <ul className="grid list-disc gap-1 ps-5">
                   <li>رمزارز و شبکه باید دقیقاً همان باشند که در فاکتور آمده است؛ ارسال از شبکهٔ دیگر ممکن است باعث از دست رفتن وجه شود.</li>
@@ -183,9 +191,9 @@ export function PaymentGuide({ botUrl }: { botUrl: string | null }) {
           </Tabs>
           <div className="mt-8 flex flex-col items-center gap-3">
             {botUrl ? (
-              <a href={botUrl} target="_blank" rel="noopener" className={cn(buttonVariants({ size: "lg" }), "press")}><Send aria-hidden="true" />باز کردن ربات و شارژ کیف پول</a>
+              <a href={botUrl} target="_blank" rel="noopener" className={buttonVariants({ size: "lg" })}><Send aria-hidden="true" />باز کردن ربات و شارژ کیف پول</a>
             ) : (
-              <a href="#plans" className={cn(buttonVariants({ size: "lg" }), "press")}>انتخاب پلن و ادامه در تلگرام</a>
+              <a href="#plans" className={buttonVariants({ size: "lg" })}>انتخاب پلن و ادامه در تلگرام</a>
             )}
             <p className="max-w-[560px] text-center text-[13px] text-faint">اگر هنوز پلنی انتخاب نکرده‌اید، می‌توانید اول پلن را از بخش پلن‌ها انتخاب کنید؛ ربات در صورت کمبود موجودی شما را به شارژ کیف پول هدایت می‌کند.</p>
           </div>

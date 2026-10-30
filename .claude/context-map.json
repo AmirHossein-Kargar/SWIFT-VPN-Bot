@@ -153,6 +153,7 @@
         "web/storeRouter.js",
         "web/spa.js",
         "scripts/build-storefront.mjs",
+        "scripts/build-guide-images.mjs",
         "web/public/store.html",
         "web/public/store/**"
       ],

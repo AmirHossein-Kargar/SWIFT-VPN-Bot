@@ -1,15 +1,16 @@
 "use client";
 
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { useSearchParams, usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Search } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { stripBasePath } from "@/lib/basePath";
+import { useNavigate } from "@/components/shared/navigation-pending";
 
 function useQueryUpdater() {
-  const router = useRouter();
+  const navigate = useNavigate();
   const pathname = stripBasePath(usePathname());
   const searchParams = useSearchParams();
 
@@ -20,7 +21,7 @@ function useQueryUpdater() {
       else next.set(key, value);
     }
     next.delete("page");
-    router.push(`${pathname}?${next.toString()}`);
+    navigate(`${pathname}?${next.toString()}`);
   };
 }
 

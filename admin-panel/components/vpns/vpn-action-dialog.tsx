@@ -111,7 +111,7 @@ export function VpnActionDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
             Cancel
           </Button>
-          <Button variant={copy.destructive ? "destructive" : "default"} onClick={submit} disabled={submitting}>
+          <Button variant={copy.destructive ? "destructive" : "default"} onClick={submit} loading={submitting}>
             {copy.confirmLabel}
           </Button>
         </DialogFooter>

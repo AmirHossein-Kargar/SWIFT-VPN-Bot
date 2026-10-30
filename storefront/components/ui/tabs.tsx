@@ -34,8 +34,33 @@ export function Tabs({ value, onValueChange, dir = "ltr", children }: { value: s
   );
 }
 
-export function TabsList({ className, onKeyDown, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  const { dir, select } = useTabs();
+export function TabsList({ className, onKeyDown, children, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  const { dir, select, value } = useTabs();
+  const listRef = React.useRef<HTMLDivElement>(null);
+  const pillRef = React.useRef<HTMLSpanElement>(null);
+
+  // A pill slides under the active tab. Until it is measured the active tab paints its own background, so the
+  // server-rendered and no-JavaScript states need nothing from this effect. Writes to the DOM, not state: a resize or
+  // tab change repositions it without re-rendering the tabs.
+  React.useEffect(() => {
+    const list = listRef.current;
+    const pill = pillRef.current;
+    if (!list || !pill) return;
+    const place = () => {
+      const active = list.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+      if (!active) return;
+      pill.style.width = `${active.offsetWidth}px`;
+      pill.style.height = `${active.offsetHeight}px`;
+      pill.style.transform = `translate(${active.offsetLeft}px, ${active.offsetTop}px)`;
+      list.dataset.pill = "ready";
+    };
+    place();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(place);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [value]);
+
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     onKeyDown?.(event);
     if (event.defaultPrevented) return;
@@ -57,11 +82,15 @@ export function TabsList({ className, onKeyDown, ...props }: React.HTMLAttribute
   };
   return (
     <div
+      ref={listRef}
       role="tablist"
-      className={cn("mx-auto flex flex-wrap justify-center gap-1 rounded-2xl border bg-secondary p-1", className)}
+      className={cn("tabs-list relative mx-auto flex flex-wrap justify-center gap-1 rounded-2xl border bg-secondary p-1", className)}
       onKeyDown={handleKeyDown}
       {...props}
-    />
+    >
+      <span ref={pillRef} aria-hidden="true" className="tabs-pill" />
+      {children}
+    </div>
   );
 }
 
@@ -80,7 +109,7 @@ export function TabsTrigger({ className, value, ...props }: Omit<React.ButtonHTM
       tabIndex={active ? 0 : -1}
       onClick={() => select(value)}
       className={cn(
-        "inline-flex min-h-11 items-center justify-center rounded-xl text-center font-bold text-muted-foreground transition-colors hover:text-foreground",
+        "relative z-[1] inline-flex min-h-11 items-center justify-center rounded-xl text-center font-bold text-muted-foreground transition-[color,transform] duration-200 hover:text-foreground active:scale-[0.97]",
         "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground",
         className
       )}

@@ -75,7 +75,7 @@ export function BlockDialog({ user, open, onOpenChange, onDone }: { user: AdminU
         {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>Cancel</Button>
-          <Button variant={blocking ? "destructive" : "default"} disabled={submitting} onClick={submit}>
+          <Button variant={blocking ? "destructive" : "default"} loading={submitting} onClick={submit}>
             {submitting ? "Saving…" : blocking ? "Block user" : "Unblock user"}
           </Button>
         </DialogFooter>

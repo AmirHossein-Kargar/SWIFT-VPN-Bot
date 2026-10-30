@@ -1,10 +1,11 @@
 "use client";
 
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { useSearchParams, usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { Input } from "@/components/ui/input";
 import { stripBasePath } from "@/lib/basePath";
+import { useNavigate } from "@/components/shared/navigation-pending";
 
 export function AuditFilters({
   defaultAction,
@@ -15,7 +16,7 @@ export function AuditFilters({
   defaultActor: string;
   defaultTarget: string;
 }) {
-  const router = useRouter();
+  const navigate = useNavigate();
   const pathname = stripBasePath(usePathname());
   const searchParams = useSearchParams();
   const [action, setAction] = useState(defaultAction);
@@ -34,7 +35,7 @@ export function AuditFilters({
       else next.set(key, value);
     }
     next.delete("page");
-    router.push(`${pathname}?${next.toString()}`);
+    navigate(`${pathname}?${next.toString()}`);
   }
 
   function debounced(patch: Record<string, string>) {

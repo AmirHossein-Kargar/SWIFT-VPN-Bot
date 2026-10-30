@@ -150,7 +150,7 @@ export function BalanceDialog({
           ) : (
             <>
               <Button variant="outline" onClick={() => setStep("form")} disabled={submitting}>Back</Button>
-              <Button variant={isCredit ? "default" : "destructive"} onClick={confirm} disabled={submitting}>
+              <Button variant={isCredit ? "default" : "destructive"} onClick={confirm} loading={submitting}>
                 {submitting ? "Applying…" : isCredit ? `Credit ${formatToman(amountValue)}` : `Debit ${formatToman(amountValue)}`}
               </Button>
             </>

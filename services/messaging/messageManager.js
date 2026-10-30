@@ -13,7 +13,7 @@
  * NEVER route payment instructions, invoices, receipts, or fulfillment
  * messages through renderInterface(): those must remain their own standalone
  * messages so a user always has a durable, un-edited record of them. This
- * module is for throwaway navigation UI only.
+ * module is for throwaway navigation UI and one-off status messages only.
  */
 import { getActiveMessage, setActiveMessage, setActiveMessageIfUnchanged } from "./activeMessageStore.js";
 
@@ -86,6 +86,50 @@ export async function renderInterface(bot, { chatId, text, options = {}, message
   const sentMessageId = sentMessage?.message_id ?? null;
   if (sentMessageId != null) await setActiveMessageIfUnchanged(chatId, sentMessageId, targetMessageId);
   return { messageId: sentMessageId, edited: false, sent: true };
+}
+
+/**
+ * Move one operation's status message forward ("⏳ processing" → its outcome).
+ * Unlike renderInterface this never touches the chat's tracked interface
+ * message and never throws: the caller's business result is already decided,
+ * so a Telegram failure must not turn it into an error. Durable records (the
+ * delivered links, invoices, receipts) stay standalone messages and do not go
+ * through here.
+ *
+ * Telegram's "not modified" counts as delivered: the message already shows
+ * `text`. Any other edit failure sends `text` as a new message unless
+ * `fallback` is false (a retry whose result was already reported once).
+ *
+ * @param {import('node-telegram-bot-api')} bot
+ * @param {object} params
+ * @param {number|string} params.chatId
+ * @param {string} params.text
+ * @param {number} [params.messageId] - the status message to edit, if any.
+ * @param {object} [params.options] - Telegram options such as parse_mode.
+ * @param {boolean} [params.fallback=true]
+ * @returns {Promise<{messageId: number|null, delivered: boolean, edited: boolean, sent: boolean}>}
+ *   `messageId` is the message now holding `text`, or the unchanged input when nothing was delivered.
+ */
+export async function updateStatusMessage(bot, { chatId, text, messageId, options = {}, fallback = true } = {}) {
+  const target = Number.isSafeInteger(messageId) ? messageId : null;
+  if (target != null && bot?.editMessageText) {
+    try {
+      await bot.editMessageText(text, { ...options, chat_id: chatId, message_id: target });
+      return { messageId: target, delivered: true, edited: true, sent: false };
+    } catch (error) {
+      if (isNotModifiedError(error)) return { messageId: target, delivered: true, edited: true, sent: false };
+      console.warn(`[messageManager] status edit failed (${error?.name || "TelegramError"}); fallback ${fallback ? "send" : "skipped"}`);
+    }
+  }
+  if (fallback && bot?.sendMessage) {
+    try {
+      const sent = await bot.sendMessage(chatId, text, options);
+      return { messageId: sent?.message_id ?? null, delivered: true, edited: false, sent: true };
+    } catch (error) {
+      console.warn(`[messageManager] status send failed (${error?.name || "TelegramError"})`);
+    }
+  }
+  return { messageId: target, delivered: false, edited: false, sent: false };
 }
 
 /**

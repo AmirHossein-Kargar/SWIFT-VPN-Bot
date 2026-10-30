@@ -35,6 +35,7 @@ tests before deciding which one is wrong; do not assume the current code is the 
 | `npm run check:context` | Validate the Claude context: documented paths, npm scripts, links, skills, impact map |
 | `node scripts/check-context.mjs --diff` | Map the current change set to the docs and rules that must be re-checked |
 | `npm run build` | Build `/panel` (admin-panel) and the storefront |
+| `npm run build:guide-images` | Redraw the top-up guide images from `storefront/lib/topup-guide.json` (needs Chrome; the images are committed) |
 | `npm run test:e2e` / `npm run test:e2e:store` | Browser suites (need Chrome; not part of `npm test`) |
 
 ## Test safety (non-negotiable)

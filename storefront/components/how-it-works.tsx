@@ -26,7 +26,7 @@ export function HowItWorks({ catalog }: { catalog: StoreCatalog | null }) {
           <span aria-hidden="true" data-reveal className="step-line absolute bottom-6 start-[23px] top-6 w-0.5 rounded bg-gradient-to-b from-brand/60 via-brand/30 to-border" />
           <ol className="relative grid list-none gap-4 p-0">
             {STEPS.map((step, index) => (
-              <li key={step.title} className="group relative flex gap-4">
+              <li key={step.title} data-reveal style={{ "--reveal-delay": `${index * 70}ms` } as React.CSSProperties} className="group relative flex gap-4">
                 <span className="relative z-10 inline-grid size-12 flex-none place-items-center rounded-2xl border border-brand/40 bg-card font-extrabold text-brand shadow-[var(--shadow-card)] transition-transform duration-300 group-hover:scale-105">
                   <span className="sr-only">مرحلهٔ </span>{fa(index + 1)}
                 </span>

@@ -3,7 +3,7 @@ import WalletPurchase from "../../models/WalletPurchase.js";
 import { getSuccessServiceMessage, guideButtons } from "../../messages/staticMessages.js";
 import escapeHtml from "../../utils/escapeHtml.js";
 import { scheduleUserSpendRecompute } from "../users/userSpend.js";
-import { retryPendingReservedAlerts } from "./reservedAlerts.js";
+import { retryPendingReservedAlerts, retryPendingReservedNotices } from "./reservedAlerts.js";
 
 const NOTIFICATION_CLAIM_MS = 5 * 60_000;
 const RECOVERY_STALE_MS = 5 * 60_000;
@@ -381,6 +381,9 @@ export async function recoverWalletPurchases(bot) {
   // Orders parked for provider funds are never auto-refunded or auto-created: only their admin alert is retried.
   await retryPendingReservedAlerts(bot).catch((error) => {
     log("error", "Reserved-order alert retry failed", { errorType: error?.name || "Error" });
+  });
+  await retryPendingReservedNotices(bot).catch((error) => {
+    log("error", "Reserved-order customer notice retry failed", { errorType: error?.name || "Error" });
   });
   const now = new Date();
   const staleAt = new Date(now.getTime() - RECOVERY_STALE_MS);

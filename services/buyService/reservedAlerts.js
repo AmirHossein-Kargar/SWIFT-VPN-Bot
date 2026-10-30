@@ -1,17 +1,20 @@
 import WalletPurchase from "../../models/WalletPurchase.js";
 import escapeHtml from "../../utils/escapeHtml.js";
 import { getDurationOptionByDays } from "../plans.js";
+import { updateStatusMessage } from "../messaging/messageManager.js";
 
 /**
- * Admin-group notifications for wallet purchases parked in `awaiting_provider`.
+ * Notifications for wallet purchases parked in `awaiting_provider`: the admin-group alert and the customer's notice.
  *
- * Reliability model: the order and its `adminAlertPending` flag are persisted by the same atomic update that parks
- * the order, so a lost Telegram message never loses the order. Delivery is claimed (stale-claim expiry), retried with
- * bounded exponential backoff by the existing wallet recovery cycle, and an admin can always find the order through the
- * recovery queue even after the attempts are exhausted.
+ * Reliability model: the order and its `adminAlertPending` / `customerNoticePending` flags are persisted by the same
+ * atomic update that parks the order, so a lost Telegram message never loses the order. Delivery is claimed (stale-claim
+ * expiry), retried with bounded exponential backoff by the existing wallet recovery cycle, and an admin can always find
+ * the order through the recovery queue even after the attempts are exhausted.
  */
 
 export const RESERVED_CALLBACK_PREFIX = "rsv:";
+
+export const RESERVED_ORDER_NOTICE = "✅ سفارش شما ثبت و مبلغ آن از کیف پولتان رزرو شد.\nسرویس در انتظار تأمین موجودی ارائه‌دهنده است و پس از آماده‌شدن، لینک اتصال برای شما ارسال می‌شود.\nنیازی به ثبت سفارش مجدد نیست.";
 
 const CLAIM_TTL_MS = 2 * 60_000;
 const MAX_ALERT_ATTEMPTS = 12;
@@ -203,6 +206,77 @@ export async function retryPendingReservedAlerts(bot, { purchaseModel = WalletPu
   for (const item of pending) {
     if (item.adminAlertNextAt && new Date(item.adminAlertNextAt) > now) continue;
     if (await notifyReservedOrder(bot, item.purchaseId, { purchaseModel })) delivered += 1;
+  }
+  return delivered;
+}
+
+/**
+ * Tell the customer their order is reserved, exactly once per order, by editing `messageId` when one is given. Only the
+ * claim holder may add a message; a caller that loses the claim (a retry of a delivered notice, or a concurrent worker)
+ * can only bring its own message up to date. Never throws; failures are persisted for retry.
+ */
+export async function deliverReservedNotice(bot, purchaseId, { chatId, messageId, purchaseModel = WalletPurchase } = {}) {
+  const now = new Date();
+  const claimed = await purchaseModel.findOneAndUpdate(
+    {
+      purchaseId,
+      status: "awaiting_provider",
+      customerNoticePending: true,
+      $or: [{ customerNoticeClaimedAt: null }, { customerNoticeClaimedAt: { $lt: new Date(now.getTime() - CLAIM_TTL_MS) } }],
+    },
+    { $set: { customerNoticeClaimedAt: now }, $inc: { customerNoticeAttempts: 1 } },
+    { new: true }
+  ).catch(() => null);
+  if (!claimed) {
+    await updateStatusMessage(bot, { chatId, messageId, text: RESERVED_ORDER_NOTICE, fallback: false });
+    return false;
+  }
+
+  const { delivered } = await updateStatusMessage(bot, {
+    chatId: chatId ?? claimed.telegramId,
+    messageId,
+    text: RESERVED_ORDER_NOTICE,
+  });
+  if (!delivered) {
+    const attempts = Number(claimed.customerNoticeAttempts) || 1;
+    await purchaseModel.updateOne(
+      { purchaseId, customerNoticeClaimedAt: now },
+      { $set: { customerNoticeNextAt: new Date(Date.now() + backoffMs(attempts)), customerNoticeClaimedAt: null } }
+    ).catch(() => {});
+    log("warn", "Reserved-order customer notice delivery failed", { purchaseId, attempts });
+    return false;
+  }
+
+  // If this write is lost the notice is retried later (a duplicate message at worst, never a duplicate order).
+  await purchaseModel.updateOne(
+    { purchaseId, customerNoticeClaimedAt: now },
+    {
+      $set: { customerNoticePending: false, customerNotifiedAt: new Date(), customerNoticeNextAt: null },
+      $unset: { customerNoticeClaimedAt: 1 },
+    }
+  ).catch((error) => log("error", "Reserved-order customer notice sent but its delivery state was not saved", {
+    purchaseId,
+    errorType: error?.name || "DatabaseError",
+  }));
+  return true;
+}
+
+/**
+ * Recovery-cycle sweep for notices that failed or were interrupted (bounded attempts, exponential backoff). The live
+ * flow gets one claim TTL to finish first, so a sweep cannot race a purchase that is still reporting its own outcome.
+ * The status message id is not persisted, so a recovered notice is always a new message to the customer.
+ */
+export async function retryPendingReservedNotices(bot, { purchaseModel = WalletPurchase, now = new Date() } = {}) {
+  const pending = await purchaseModel.find({
+    status: "awaiting_provider",
+    customerNoticePending: true,
+    customerNoticeAttempts: { $lt: MAX_ALERT_ATTEMPTS },
+    awaitingProviderSince: { $lt: new Date(now.getTime() - CLAIM_TTL_MS) },
+  }).limit(SWEEP_LIMIT).lean();
+  let delivered = 0;
+  for (const item of pending) {
+    if (item.customerNoticeNextAt && new Date(item.customerNoticeNextAt) > now) continue;
+    if (await deliverReservedNotice(bot, item.purchaseId, { purchaseModel })) delivered += 1;
   }
   return delivered;
 }

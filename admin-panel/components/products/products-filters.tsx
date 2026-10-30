@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { useSearchParams, usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Search } from "lucide-react";
 
@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { stripBasePath } from "@/lib/basePath";
 import { SUBSCRIPTION_DURATION_DAYS } from "@/lib/subscription-durations";
+import { useNavigate } from "@/components/shared/navigation-pending";
 
 const STATUS_LABELS: Record<string, string> = {
   current: "Current (not archived)",
@@ -19,7 +20,7 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 export function ProductsFilters({ search: defaultSearch, status, duration }: { search: string; status: string; duration: string }) {
-  const router = useRouter();
+  const navigate = useNavigate();
   const pathname = stripBasePath(usePathname());
   const searchParams = useSearchParams();
   const [search, setSearch] = useState(defaultSearch);
@@ -36,7 +37,7 @@ export function ProductsFilters({ search: defaultSearch, status, duration }: { s
     }
     next.delete("page");
     const query = next.toString();
-    router.push(query ? `${pathname}?${query}` : pathname);
+    navigate(query ? `${pathname}?${query}` : pathname);
   }
 
   function onSearchChange(value: string) {

@@ -967,14 +967,10 @@ const handleCallbackQueryInner = async (bot, query) => {
       }).catch(() => bot.sendMessage(chatId, "❌ این پلن در حال حاضر فعال نیست یا حذف شده است. لطفاً از منوی خرید دوباره انتخاب کنید.", keyboard));
       return;
     }
-    // Close out the confirmation screen in place (never delete it): the
-    // purchase outcome itself is intentionally sent as its own durable
-    // message by orderService, a protected money-path invariant.
-    await bot.editMessageText("⏳ <b>در حال ثبت سفارش شما...</b>", {
-      chat_id: chatId,
-      message_id: messageId,
-      parse_mode: "HTML",
-    }).catch(() => {});
+    // Acknowledge first: the provider call can outlast the query, and the ack
+    // must not depend on any edit below. orderService turns this confirmation
+    // screen into the order's status message and reports the outcome there.
+    await bot.answerCallbackQuery(query.id);
     await orderService(bot, chatId, userId, planId, { messageId });
     return;
   }

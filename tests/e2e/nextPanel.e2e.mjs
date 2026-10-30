@@ -13,7 +13,7 @@
  * Not part of `npm test`.
  */
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
@@ -195,7 +195,54 @@ app.use("/api/admin", (req, res, next) => (req.path.startsWith("/auth/") ? realA
 api.use(mw.requireAdminSession, mw.requireCsrfToken);
 const actor = (req) => req.adminActorId;
 
-api.get("/users", guard((req, res) => ok(res, { items: users, page: 1, pages: 1, pageSize: 25, total: users.length })));
+// Money and list scenarios: `delayMs` holds a response open and `failNext` fails one, so the UI can be observed before the server has answered.
+const stub = { delayMs: 0, failNext: false, balance: [], bank: [], recovery: [], usersDelayMs: 0, bankConfirmed: false };
+const settle = async () => {
+  if (stub.delayMs) await new Promise((resolve) => setTimeout(resolve, stub.delayMs));
+  if (stub.failNext) { stub.failNext = false; throw new (await_import_AdminServiceError())("The provider did not answer.", { status: 502, code: "provider_unavailable" }); }
+};
+const BANK_KEY = "bank:BANK-RECEIPT-0002";
+const bankDetail = () => {
+  const row = paymentRows().find((item) => item.key === BANK_KEY);
+  return { ...row, status: stub.bankConfirmed ? "fulfilled" : row.status, rawStatus: stub.bankConfirmed ? "confirmed" : row.rawStatus, timeline: [], fulfilled: stub.bankConfirmed, webhookEvents: [], purchase: null, actions: {} };
+};
+const recoveryItem = { key: "hooshpay:H-STUCK", provider: "hooshpay", userId: "51", amount: 120000, kind: "verification-pending", retrySafe: true, lastEventAt: NOW.toISOString(), retryCount: 0, lastRetryAt: null };
+const analyticsReport = {
+  generatedAt: NOW.toISOString(),
+  range: { key: "7d", from: new Date(NOW - 7 * 24 * H).toISOString(), to: NOW.toISOString(), days: 7, previous: { from: NOW.toISOString(), to: NOW.toISOString() } },
+  granularity: { bucketMs: 24 * H, label: "day" },
+  kpis: [],
+  series: [0, 1, 2, 3, 4, 5, 6].map((i) => ({ start: new Date(NOW - (6 - i) * 24 * H).toISOString(), topups: 100000 * (i + 1), sales: 50000 * (i + 1), orders: i, newUsers: i })),
+  distributions: { providers: [], crypto: [], plans: [] },
+  definitions: {},
+  unavailable: [],
+};
+api.get("/users", guard(async (req, res) => {
+  if (stub.usersDelayMs) await new Promise((resolve) => setTimeout(resolve, stub.usersDelayMs));
+  const search = String(req.query.search || "").toLowerCase();
+  const items = search ? users.filter((user) => user.name.toLowerCase().includes(search)) : users;
+  ok(res, { items, page: 1, pages: 1, pageSize: 25, total: items.length });
+}));
+api.post("/users/:id/balance", json, guard(async (req, res) => {
+  stub.balance.push(req.body);
+  await settle();
+  const user = users.find((entry) => entry.telegramId === req.params.id);
+  user.balance += req.body.amount;
+  ok(res, { balance: user.balance });
+}));
+api.post("/payments/bank/:paymentId/confirm", json, guard(async (req, res) => {
+  stub.bank.push(req.body);
+  await settle();
+  stub.bankConfirmed = true;
+  ok(res, { confirmed: true });
+}));
+api.get("/recovery", guard((req, res) => ok(res, { items: [recoveryItem], counts: { "verification-pending": 1 }, page: 1, pages: 1, pageSize: 25, total: 1 })));
+api.post("/recovery/retry-safe", json, guard(async (req, res) => {
+  stub.recovery.push(req.body);
+  await settle();
+  ok(res, { attempted: 1, succeeded: 1, failed: [] });
+}));
+api.get("/analytics/report", guard((req, res) => ok(res, analyticsReport)));
 api.get("/users/:id/photo", async (req, res, next) => {
   try {
     const photo = await photoSvc.getUserProfilePhoto({ actorId: actor(req), telegramId: req.params.id, bot: photoBot, userModel: photoUserModel });
@@ -209,6 +256,7 @@ api.get("/users/:id", guard((req, res) => ok(res, userDetail(req.params.id))));
 api.get("/payments", guard((req, res) => ok(res, { items: paymentRows(), page: 1, pages: 1, pageSize: 25, total: paymentRows().length })));
 api.get("/payments/:key", guard((req, res) => {
   if (unknownStub && req.params.key === UNKNOWN_KEY) return ok(res, unknownDetail());
+  if (req.params.key === BANK_KEY) return ok(res, bankDetail());
   throw new (await_import_AdminServiceError())("Payment not found.", { status: 404, code: "payment_not_found" });
 }));
 api.post("/payments/:key/retry", json, guard(async (req, res) => {
@@ -1373,6 +1421,215 @@ await step("broadcast form: message and button rules, 4-button limit, t.me-only 
   assert.equal(calls.broadcast[0].message, "Hello everyone");
   assert.equal(calls.broadcast[0].buttons.length, 3);
   await page.context().close();
+});
+
+// ── Interaction: nothing may look successful before the server has answered ─────
+const toasts = (page) => page.locator("[data-sonner-toast]");
+
+await step("wallet credit: no success before the server answers; a failure keeps the dialog and the operationId; the new balance flashes", async () => {
+  const page = await newPage();
+  await go(page, "/users");
+  // CSS, not roles: an open dialog marks the page behind it aria-hidden, and this reads the page behind it.
+  const balanceCell = page.locator("tbody tr", { hasText: users[0].telegramId }).locator("td").nth(1);
+  const before = await balanceCell.innerText();
+  await page.getByRole("button", { name: `Actions for ${users[0].telegramId}` }).click();
+  await page.getByRole("menuitem", { name: "Credit wallet" }).click();
+  await page.getByLabel("Amount to add (Toman)").fill("50000");
+  await page.getByLabel("Reason (kept in the audit log)").fill("Compensation for an outage");
+  await page.getByRole("button", { name: "Review" }).click();
+
+  stub.failNext = true;
+  await page.getByRole("button", { name: /^Credit / }).click();
+  await page.getByRole("dialog").getByRole("alert").waitFor();
+  assert.equal(await page.getByRole("dialog").isVisible(), true, "a failure leaves the dialog open");
+  assert.equal(await toasts(page).count(), 0, "no toast on failure");
+  assert.equal(await balanceCell.innerText(), before);
+
+  stub.delayMs = 700;
+  const confirm = page.getByRole("button", { name: /Applying|^Credit / });
+  await confirm.click();
+  await page.getByRole("button", { name: "Applying…" }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Applying…" }).isDisabled(), true, "the button cannot be pressed twice");
+  assert.equal(await page.getByRole("button", { name: "Applying…" }).getAttribute("aria-busy"), "true");
+  assert.equal(await toasts(page).count(), 0, "no success while the request is in flight");
+  assert.equal(await balanceCell.innerText(), before, "the balance does not move before the server answers");
+  await toasts(page).first().waitFor();
+  stub.delayMs = 0;
+  assert.match(await toasts(page).first().innerText(), /Credited/);
+  assert.equal(stub.balance.length, 2);
+  assert.equal(stub.balance[0].operationId, stub.balance[1].operationId, "a retry reuses the operationId");
+  await page.waitForFunction((value) => {
+    const cell = [...document.querySelectorAll("tbody tr")].find((tr) => tr.textContent.includes(value))?.querySelectorAll("td")[1];
+    return cell?.querySelector("[data-changed=true]");
+  }, users[0].telegramId);
+  assert.notEqual(await balanceCell.innerText(), before, "the confirmed balance is shown");
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
+await step("bank receipt: confirming needs a dialog, a double click sends one request, a retry keeps its operationId", async () => {
+  const page = await newPage();
+  await go(page, "/payments");
+  await page.getByRole("row").filter({ hasText: "BANK-RECEIPT-0002" }).getByRole("button", { name: "View" }).click();
+  await page.getByRole("button", { name: "Confirm receipt" }).click();
+  const dialog = page.getByRole("alertdialog");
+  await dialog.waitFor();
+  assert.match(await dialog.innerText(), /100,000/, "the dialog names the amount");
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await dialog.waitFor({ state: "detached" });
+  assert.equal(stub.bank.length, 0, "cancelling sends nothing");
+
+  await page.getByRole("button", { name: "Confirm receipt" }).click();
+  stub.failNext = true;
+  await dialog.getByRole("button", { name: /^Credit / }).click();
+  await dialog.getByRole("alert").waitFor();
+  assert.equal(await toasts(page).count(), 0);
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: join(shots, "bank-confirm-failed.png") });
+
+  stub.delayMs = 500;
+  await dialog.getByRole("button", { name: /^Credit / }).dblclick();
+  await dialog.getByRole("button", { name: "Confirming…" }).waitFor();
+  assert.equal(await toasts(page).count(), 0, "no success while the request is in flight");
+  await toasts(page).first().waitFor();
+  stub.delayMs = 0;
+  assert.equal(stub.bank.length, 2, "one failed attempt, one retry; the double click added nothing");
+  assert.equal(stub.bank[0].operationId, stub.bank[1].operationId);
+  await dialog.waitFor({ state: "detached" });
+  assert.equal(await page.getByRole("button", { name: "Confirm receipt" }).count(), 0, "the action disappears once the server says it is done");
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
+await step("recovery: retrying asks first, Escape cancels, and the result is reported from the server's answer", async () => {
+  const page = await newPage();
+  await go(page, "/recovery");
+  await page.getByRole("button", { name: "Retry all safe items" }).click();
+  const dialog = page.getByRole("alertdialog");
+  await dialog.waitFor();
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "detached" });
+  assert.equal(stub.recovery.length, 0);
+  await page.getByRole("button", { name: "Retry all safe items" }).click();
+  await dialog.getByRole("button", { name: "Retry" }).click();
+  await toasts(page).first().waitFor();
+  assert.match(await toasts(page).first().innerText(), /1\/1 retried/);
+  assert.equal(stub.recovery.length, 1);
+  await page.context().close();
+});
+
+await step("filters: the search box keeps focus and the list stays up while results load; an empty result offers Clear filters", async () => {
+  const page = await newPage();
+  await go(page, "/users");
+  stub.usersDelayMs = 700;
+  const search = page.getByRole("textbox").first();
+  await search.click();
+  await page.keyboard.type("nobody");
+  await page.locator(".nav-progress").waitFor({ timeout: 3000 });
+  assert.equal(await page.locator("main").getAttribute("aria-busy"), "true");
+  assert.equal(await page.getByRole("row").filter({ hasText: users[0].telegramId }).count(), 1, "the old list stays while waiting");
+  await page.getByText("No users match these filters.").waitFor();
+  stub.usersDelayMs = 0;
+  assert.equal(await search.evaluate((el) => el === document.activeElement), true, "typing is never interrupted");
+  assert.equal(await search.inputValue(), "nobody");
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await page.getByRole("row").filter({ hasText: users[0].telegramId }).waitFor();
+  await page.context().close();
+});
+
+await step("sections: changing section shows a skeleton, then the page; an empty unfiltered list offers no Clear filters", async () => {
+  const page = await newPage();
+  await go(page, "/users");
+  stub.usersDelayMs = 0;
+  await page.route("**/panel/vpns**", async (route) => { await new Promise((resolve) => setTimeout(resolve, 500)); await route.continue(); });
+  await page.getByRole("link", { name: "VPN services" }).first().click();
+  await page.locator(".skeleton").first().waitFor();
+  await page.getByText("No VPN services match these filters.").waitFor();
+  assert.equal(await page.getByRole("button", { name: "Clear filters" }).count(), 0);
+  await page.context().close();
+});
+
+await step("charts: the crosshair tooltip lists every series, series toggle and one always stays", async () => {
+  const page = await newPage();
+  await go(page, "/analytics");
+  const box = await page.locator(".recharts-surface").first().boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const tooltip = page.locator(".recharts-tooltip-wrapper");
+  await page.waitForFunction(() => /Top-ups/.test(document.querySelector(".recharts-tooltip-wrapper")?.textContent || ""));
+  const text = await tooltip.innerText();
+  assert.ok(/Top-ups/.test(text) && /Sales/.test(text) && /Toman/i.test(text), text);
+  const topups = page.getByRole("button", { name: /Top-ups/ });
+  const sales = page.getByRole("button", { name: /Sales/ });
+  await sales.click();
+  assert.equal(await sales.getAttribute("aria-pressed"), "false");
+  assert.equal(await page.locator(".recharts-area").count(), 1);
+  await topups.click();
+  assert.equal(await topups.getAttribute("aria-pressed"), "true", "the last visible series cannot be hidden");
+  await sales.click();
+  assert.equal(await page.locator(".recharts-area").count(), 2);
+  await page.mouse.move(box.x + box.width * 0.7, box.y + box.height / 2);
+  await page.waitForTimeout(700);
+  await page.screenshot({ path: join(shots, "analytics-chart.png") });
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
+await step("reduced motion: page entrance, skeletons and charts do not animate, and the panel still works", async () => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 860 }, colorScheme: "dark", reducedMotion: "reduce", baseURL: base });
+  await context.addCookies([cookieHeader("/api/admin"), cookieHeader("/panel")]);
+  const page = await context.newPage();
+  await go(page, "/analytics");
+  const duration = await page.locator(".page-enter").evaluate((el) => parseFloat(getComputedStyle(el).animationDuration));
+  assert.ok(duration < 0.01, `page entrance ${duration}s`);
+  assert.equal(await page.locator(".recharts-area-curve").first().evaluate((el) => el.getAttribute("stroke-dasharray")?.includes("px") ?? false), false, "the line is not drawn in");
+  await page.getByRole("button", { name: /Sales/ }).click();
+  assert.equal(await page.locator(".recharts-area").count(), 1);
+  await context.close();
+});
+
+await step("filters: filtering and clearing never leaves a navigation stuck (a route loading.tsx did, about one time in sixteen)", async () => {
+  const warm = await newPage();
+  await go(warm, "/users");
+  await warm.context().close();
+  for (const serverDelay of [700, 0]) {
+    for (const wait of [50, 150, 400]) {
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const page = await newPage();
+        await go(page, "/users");
+        stub.usersDelayMs = serverDelay;
+        await page.getByRole("textbox").first().click();
+        await page.keyboard.type("nobody");
+        await page.getByText("No users match these filters.").waitFor({ timeout: 5000 });
+        stub.usersDelayMs = 0;
+        await page.waitForTimeout(wait);
+        await page.getByRole("button", { name: "Clear filters" }).click();
+        await page.locator("tbody tr").first().waitFor({ timeout: 4000 });
+        assert.equal(await page.locator("main").getAttribute("aria-busy"), "false");
+        await page.context().close();
+      }
+    }
+  }
+});
+
+await step("filters: the catalog search, which had a route loading.tsx, also commits every time", async () => {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const page = await newPage();
+    await go(page, "/products");
+    const search = page.getByRole("textbox", { name: "Search services" });
+    await search.click();
+    await page.keyboard.type("nobody");
+    await page.waitForFunction(() => location.search.includes("search=nobody"), undefined, { timeout: 4000 });
+    await page.waitForTimeout([50, 150, 400][attempt % 3]);
+    await search.fill("");
+    await page.waitForFunction(() => !location.search.includes("search="), undefined, { timeout: 4000 });
+    await page.context().close();
+  }
+});
+
+await step("no route loading.tsx exists under the signed-in panel", async () => {
+  const { readdirSync } = await import("node:fs");
+  const found = readdirSync(join(root, "admin-panel/app/(app)"), { recursive: true }).filter((file) => basename(String(file)) === "loading.tsx");
+  assert.deepEqual(found, [], "see components/shared/navigation-pending.tsx");
 });
 
 // ── Performance snapshot (opt-in: E2E_PERF=1; numbers are from this machine, not a benchmark) ──

@@ -18,6 +18,7 @@
     "test:e2e:store": "node tests/e2e/storefront.e2e.mjs",
     "build": "next build admin-panel && node scripts/build-storefront.mjs",
     "build:storefront": "node scripts/build-storefront.mjs",
+    "build:guide-images": "node scripts/build-guide-images.mjs",
     "storefront:dev": "next dev storefront -p 3101",
     "admin:dev": "next dev admin-panel -p 3100"
   },

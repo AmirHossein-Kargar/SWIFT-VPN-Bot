@@ -24,9 +24,9 @@ export function Trust() {
         <SectionHeading id="features-title" eyebrow="چرا سویفت" title="آنچه از این سرویس انتظار دارید">
           بدون عدد و آمار ساختگی؛ فقط روندی که واقعاً در ربات اجرا می‌شود.
         </SectionHeading>
-        <ul data-reveal className="grid list-none gap-4 p-0 sm:grid-cols-2 lg:grid-cols-3">
-          {ITEMS.map((item) => (
-            <li key={item.title} className="lift rounded-lg border bg-card p-5">
+        <ul className="grid list-none gap-4 p-0 sm:grid-cols-2 lg:grid-cols-3">
+          {ITEMS.map((item, index) => (
+            <li key={item.title} data-reveal style={{ "--reveal-delay": `${index * 60}ms` } as React.CSSProperties} className="lift rounded-lg border bg-card p-5">
               <span className="mb-3.5 inline-grid size-11 place-items-center rounded-xl bg-brand/10 text-brand"><item.icon className="icon-pop size-5" aria-hidden="true" /></span>
               <h3 className="mb-1.5 text-[17px] font-extrabold">{item.title}</h3>
               <p className="text-[14.5px] text-muted-foreground">{item.text}</p>

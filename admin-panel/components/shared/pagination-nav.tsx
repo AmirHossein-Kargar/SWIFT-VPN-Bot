@@ -1,19 +1,20 @@
 "use client";
 
-import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 
 import { Pagination } from "@/components/ui/pagination";
 import { stripBasePath } from "@/lib/basePath";
+import { useNavigate } from "@/components/shared/navigation-pending";
 
 export function PaginationNav({ page, pages }: { page: number; pages: number }) {
-  const router = useRouter();
+  const navigate = useNavigate();
   const pathname = stripBasePath(usePathname());
   const searchParams = useSearchParams();
 
   function onPageChange(nextPage: number) {
     const next = new URLSearchParams(searchParams.toString());
     next.set("page", String(nextPage));
-    router.push(`${pathname}?${next.toString()}`);
+    navigate(`${pathname}?${next.toString()}`);
   }
 
   if (pages <= 1) return null;

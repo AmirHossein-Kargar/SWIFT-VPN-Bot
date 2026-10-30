@@ -142,6 +142,29 @@
   .ecg-sweep { stroke-dasharray: none; }
 }
 
+/* Section entrance. `backwards`, not `both`: a kept transform would trap fixed-position descendants once it has played. */
+.page-enter { animation: page-enter 0.22s ease-out backwards; }
+@keyframes page-enter { from { opacity: 0; transform: translateY(6px); } }
+
+/* Thin indeterminate bar for filter, sort and page changes (navigation-pending.tsx). */
+.nav-progress { position: fixed; inset: 0 0 auto; z-index: 60; height: 2px; overflow: hidden; background: hsl(var(--muted)); }
+.nav-progress::after { content: ""; position: absolute; inset: 0; width: 40%; background: hsl(var(--foreground)); animation: nav-progress 0.9s ease-in-out infinite; }
+@keyframes nav-progress { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
+main[data-pending] .page-enter { opacity: 0.6; transition: opacity 0.15s ease 0.1s; }
+.section-skeleton { animation: section-skeleton 0.15s ease 0.12s backwards; }
+@keyframes section-skeleton { from { opacity: 0; } }
+
+/* A value the server just changed (change-flash.tsx). Outline only, so nothing moves and the status colour stays readable. */
+.change-flash { animation: change-flash 1.4s ease-out; }
+@keyframes change-flash { from { box-shadow: 0 0 0 2px hsl(var(--foreground) / 0.65); } to { box-shadow: 0 0 0 2px transparent; } }
+
+/* Skeletons shimmer instead of pulsing in unison; reduced motion leaves a still block. */
+.skeleton { background: linear-gradient(90deg, hsl(var(--muted)), hsl(var(--accent)), hsl(var(--muted))); background-size: 200% 100%; animation: skeleton 1.4s linear infinite; }
+@keyframes skeleton { to { background-position: -200% 0; } }
+
+.metric-card { transition: border-color 0.2s ease, box-shadow 0.2s ease; }
+.metric-card:hover { border-color: hsl(var(--foreground) / 0.25); }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

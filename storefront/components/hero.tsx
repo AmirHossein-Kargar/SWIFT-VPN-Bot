@@ -55,7 +55,7 @@ export function Hero() {
     <section aria-labelledby="hero-title" className="relative overflow-hidden pb-10 pt-9 sm:pb-16 sm:pt-16">
       <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 -top-24 h-[520px] bg-[radial-gradient(640px_320px_at_18%_30%,hsl(var(--brand)/0.10),transparent_70%),radial-gradient(520px_300px_at_88%_8%,hsl(var(--brand)/0.08),transparent_70%)]" />
       <Container className="relative grid items-center gap-10 lg:grid-cols-[1.1fr_0.9fr] lg:gap-14">
-        <div>
+        <div className="hero-copy">
           <Badge className="mb-[18px]"><Zap className="size-[15px]" aria-hidden="true" />اشتراک اختصاصی VLESS</Badge>
           <h1 id="hero-title" className="text-[clamp(29px,4.8vw,50px)] font-extrabold leading-[1.35] tracking-tight">
             اینترنت آزاد، <span className="text-brand">سریع و پایدار</span> روی همه دستگاه‌ها
@@ -64,8 +64,8 @@ export function Hero() {
             پلن مناسب را انتخاب کنید، خرید را در ربات تلگرام سویفت تأیید کنید و لینک و QR اتصال را همان‌جا تحویل بگیرید. نیازی به ساخت حساب جداگانه در وب‌سایت نیست.
           </p>
           <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-            <a href="#plans" className={cn(buttonVariants({ size: "lg" }), "press shadow-[0_10px_30px_-10px_hsl(var(--brand)/0.7)] sm:min-w-[230px]")}>مشاهده پلن‌ها و قیمت‌ها</a>
-            <a href="#trial" className={cn(buttonVariants({ size: "lg", variant: "outline" }), "press")}><Gift aria-hidden="true" />سرویس تست رایگان</a>
+            <a href="#plans" className={cn(buttonVariants({ size: "lg" }), "shadow-[0_10px_30px_-10px_hsl(var(--brand)/0.7)] sm:min-w-[230px]")}>مشاهده پلن‌ها و قیمت‌ها</a>
+            <a href="#trial" className={buttonVariants({ size: "lg", variant: "outline" })}><Gift aria-hidden="true" />سرویس تست رایگان</a>
           </div>
           <ul aria-label="ویژگی‌ها" className="mt-8 grid list-none gap-x-6 gap-y-3 p-0 text-sm font-semibold text-muted-foreground sm:grid-cols-2">
             <li className="inline-flex items-center gap-2.5"><InfinityIcon className="size-[18px] shrink-0 text-brand" aria-hidden="true" />اتصال نامحدود کاربر در همه پلن‌ها</li>

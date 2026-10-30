@@ -5,6 +5,7 @@ import { adminSession } from "@/lib/adminApi.server";
 import { SessionProvider } from "@/components/session-provider";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
+import { NavigationPending, PendingMain } from "@/components/shared/navigation-pending";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await adminSession();
@@ -27,13 +28,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <SessionProvider value={{ actorTelegramId, csrfToken }}>
-      <div className="flex min-h-screen bg-background">
-        <Sidebar />
-        <div className="flex min-w-0 flex-1 flex-col">
-          <Topbar />
-          <main className="flex-1 overflow-y-auto p-6">{children}</main>
+      <NavigationPending>
+        <div className="flex min-h-screen bg-background">
+          <Sidebar />
+          <div className="flex min-w-0 flex-1 flex-col">
+            <Topbar />
+            <PendingMain>{children}</PendingMain>
+          </div>
         </div>
-      </div>
+      </NavigationPending>
     </SessionProvider>
   );
 }
