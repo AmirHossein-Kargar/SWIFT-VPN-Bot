@@ -154,8 +154,12 @@ function isProviderFundsShortage(error) {
 
 const EVENT_LIMIT = 50;
 
-/** provisioning -> awaiting_provider, persisting the admin-alert outbox flag in the same atomic update. */
-async function parkForProviderFunds(purchaseModel, purchaseId) {
+/**
+ * provisioning -> awaiting_provider, persisting the admin-alert outbox flag in the same atomic update. The customer
+ * notice is queued only for the first park: an admin approval that finds the provider still short changes nothing the
+ * customer was told, so it must not message them again.
+ */
+async function parkForProviderFunds(purchaseModel, purchaseId, { notifyCustomer }) {
   return purchaseModel.findOneAndUpdate(
     { purchaseId, status: "provisioning" },
     {
@@ -169,6 +173,7 @@ async function parkForProviderFunds(purchaseModel, purchaseId) {
         adminAlertNextAt: null,
         adminAlertClaimedAt: null,
         adminAlertAttempts: 0,
+        ...(notifyCustomer ? { customerNoticePending: true } : {}),
       },
       $unset: { recoveryClaimedAt: 1 },
       $push: { events: { $each: [{ at: new Date(), type: "provider_funds_short", from: "provisioning", to: "awaiting_provider" }], $slice: -EVENT_LIMIT } },
@@ -444,7 +449,9 @@ export async function runProviderCreation({ purchaseModel, userModel, createServ
     if (isProviderFundsShortage(error)) {
       // A proven, structured "provider wallet has insufficient funds" refusal means no service was created. The
       // customer's debit is kept as the reservation and the order waits for an admin to fund the provider wallet.
-      const parked = await parkForProviderFunds(purchaseModel, purchaseId).catch(() => null);
+      const parked = await parkForProviderFunds(purchaseModel, purchaseId, {
+        notifyCustomer: !provisioning.fulfillmentClaimedBy,
+      }).catch(() => null);
       if (parked) {
         log("warn", "WizardXray wallet is short of funds; purchase reserved for admin fulfillment", { purchaseId, userId: telegramId });
         return publicResult(parked, plan, { failure: "awaiting_provider_funds" });

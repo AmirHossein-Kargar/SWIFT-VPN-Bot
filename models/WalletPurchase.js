@@ -113,6 +113,12 @@ const walletPurchaseSchema = new mongoose.Schema({
   adminAlertNextAt: { type: Date, default: null },
   adminAlertAttempts: { type: Number, default: 0, min: 0 },
   adminAlertMessageId: { type: Number, default: null },
+  // Durable outbox for the customer's "order reserved" notice: one notice per order, across retries and restarts.
+  customerNoticePending: { type: Boolean, default: false },
+  customerNoticeClaimedAt: { type: Date, default: null },
+  customerNoticeNextAt: { type: Date, default: null },
+  customerNoticeAttempts: { type: Number, default: 0, min: 0 },
+  customerNotifiedAt: { type: Date, default: null },
   awaitingProviderSince: { type: Date, default: null },
   fulfillmentAttempts: { type: Number, default: 0, min: 0 },
   fulfillmentClaimedBy: { type: String, default: null, maxlength: 32 },

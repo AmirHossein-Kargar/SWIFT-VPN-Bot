@@ -5,6 +5,7 @@ import {
   answerCallback,
   safeDeleteUserMessage,
   isNotModifiedError,
+  updateStatusMessage,
 } from "../../services/messaging/messageManager.js";
 import {
   getActiveMessage,
@@ -221,5 +222,66 @@ describe("messageManager.safeDeleteUserMessage", () => {
     };
     const result = await safeDeleteUserMessage(bot, 1, 5, { allow: true });
     assert.equal(result, false);
+  });
+});
+
+describe("updateStatusMessage", () => {
+  const CANT_EDIT = "ETELEGRAM: 400 Bad Request: message can't be edited";
+  const NOT_MODIFIED = "ETELEGRAM: 400 Bad Request: message is not modified: specified new message content";
+
+  function statusBot({ editError, sendError } = {}) {
+    const calls = [];
+    return {
+      calls,
+      async editMessageText(text, options) {
+        calls.push({ kind: "edit", text, options });
+        if (editError) throw new Error(editError);
+      },
+      async sendMessage(chatId, text, options) {
+        calls.push({ kind: "send", chatId, text, options });
+        if (sendError) throw new Error(sendError);
+        return { message_id: 200 };
+      },
+    };
+  }
+
+  test("edits the given message and sends nothing", async () => {
+    const bot = statusBot();
+    const result = await updateStatusMessage(bot, { chatId: 1, messageId: 7, text: "done", options: { parse_mode: "HTML" } });
+    assert.deepEqual(result, { messageId: 7, delivered: true, edited: true, sent: false });
+    assert.deepEqual(bot.calls, [{ kind: "edit", text: "done", options: { parse_mode: "HTML", chat_id: 1, message_id: 7 } }]);
+  });
+
+  test("'not modified' is delivered, not a reason to send a copy", async () => {
+    const bot = statusBot({ editError: NOT_MODIFIED });
+    const result = await updateStatusMessage(bot, { chatId: 1, messageId: 7, text: "done" });
+    assert.equal(result.delivered, true);
+    assert.equal(bot.calls.filter((call) => call.kind === "send").length, 0);
+  });
+
+  test("a refused edit sends one new message and reports its id", async () => {
+    const bot = statusBot({ editError: CANT_EDIT });
+    const result = await updateStatusMessage(bot, { chatId: 1, messageId: 7, text: "done" });
+    assert.deepEqual(result, { messageId: 200, delivered: true, edited: false, sent: true });
+  });
+
+  test("with no message to edit it sends", async () => {
+    const bot = statusBot();
+    const result = await updateStatusMessage(bot, { chatId: 1, text: "done" });
+    assert.equal(result.sent, true);
+    assert.equal(bot.calls.length, 1);
+  });
+
+  test("fallback: false never adds a message", async () => {
+    const bot = statusBot({ editError: CANT_EDIT });
+    const result = await updateStatusMessage(bot, { chatId: 1, messageId: 7, text: "done", fallback: false });
+    assert.deepEqual(result, { messageId: 7, delivered: false, edited: false, sent: false });
+    assert.equal(bot.calls.filter((call) => call.kind === "send").length, 0);
+  });
+
+  test("never throws when Telegram refuses both the edit and the send", async () => {
+    const bot = statusBot({ editError: CANT_EDIT, sendError: "ETELEGRAM: 403 Forbidden: bot was blocked by the user" });
+    const result = await updateStatusMessage(bot, { chatId: 1, messageId: 7, text: "done" });
+    assert.deepEqual(result, { messageId: 7, delivered: false, edited: false, sent: false });
   });
 });

@@ -3,6 +3,7 @@ import User from "../models/User.js";
 import { getTestServiceMessage, guideButtons } from "../messages/staticMessages.js";
 import { createTestService as createTestServiceApi } from "../api/wizardApi.js";
 import escapeHtml from "../utils/escapeHtml.js";
+import { isNotModifiedError } from "./messaging/messageManager.js";
 
 const NOTIFICATION_CLAIM_MS = 5 * 60_000;
 const RECOVERY_STALE_MS = 5 * 60_000;
@@ -32,6 +33,8 @@ async function editOrSend(bot, chatId, messageId, text, keyboard = BACK_HOME_KEY
       await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...options });
       return messageId;
     } catch (error) {
+      // The screen already shows this text; a second copy would only be noise.
+      if (isNotModifiedError(error)) return messageId;
       // Edit failed (deleted, too old, or not a text message) — fall through to a fresh send.
     }
   }

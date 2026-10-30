@@ -136,6 +136,19 @@ describe("createTestService: single-message UX", () => {
     assert.equal(ds.users.peek({ telegramId: userId }).hasReceivedTest, false, "eligibility is restored after a definitive failure");
   });
 
+  test("Telegram's 'message is not modified' is not an edit failure: no duplicate message is sent", async () => {
+    const ds = createMockDataset();
+    const panel = createFakeWizard();
+    const bot = botStub();
+    bot.editMessageText = async () => { throw new Error("ETELEGRAM: 400 Bad Request: message is not modified: specified new message content"); };
+    const userId = "900010";
+    await ds.users.create({ telegramId: userId, hasReceivedTest: true });
+
+    await createTestService(bot, msgFor(userId), { userModel: ds.users, createApi: panel.createTest, messageId: 42 });
+
+    assert.equal(bot.calls.filter((c) => c.kind === "send").length, 0);
+  });
+
   test("editMessageText failing (e.g. a deleted/too-old message) falls back to one fresh send, never throws", async () => {
     const ds = createMockDataset();
     const panel = createFakeWizard();

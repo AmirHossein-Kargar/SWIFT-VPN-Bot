@@ -9,7 +9,12 @@ A customer with enough SWIFT VPN wallet balance can still hit an empty WizardXra
    `provisioning` before calling `create`.
 2. If WizardXray answers with an explicit, non-ambiguous refusal whose category is `provider_insufficient_balance`
    (`api/wizardApi.js`: HTTP 402, or a structured refusal body), the order moves `provisioning -> awaiting_provider` and
-   `adminAlertPending` is set **in the same atomic update**. The customer is told the order is reserved and must not be repeated.
+   `adminAlertPending` and `customerNoticePending` are set **in the same atomic update**. The customer is told the order is
+   reserved and must not be repeated: the confirmation message, which already shows the `⏳` processing text, is edited to
+   the notice (`deliverReservedNotice`, `services/buyService/reservedAlerts.js`). Only the outbox claim holder may send a new
+   message when that edit fails; a retry of a delivered notice adds nothing. A notice lost to a Telegram failure or a crash
+   is resent as a new message by the wallet recovery cycle (same backoff and cap as the admin alert), and an approval that
+   finds the provider still short does not notify the customer again.
 3. The admin group receives the order card (`services/buyService/reservedAlerts.js`) with
    `✅ تأیید و ایجاد سرویس`, `🔄 بررسی مجدد وضعیت`, `❌ لغو سفارش` (cancel asks for confirmation).
    Delivery is an outbox: claimed, retried by the existing wallet recovery cycle with exponential backoff (max 12 attempts).
