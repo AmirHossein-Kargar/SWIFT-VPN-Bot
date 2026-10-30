@@ -48,8 +48,19 @@ payment, devices and FAQ and has a mobile menu (`aria-expanded`, closes on Escap
   (coin, then network, then amount, estimate, invoice link, status check). Mockups use the
   real button labels but placeholder values; no card number, address or amount is real. The
   trial text (one day, once per Telegram account, via «🎁 سرویس تست») comes from
-  `services/createTestService.js`. When the bot's flow changes, update `payment-guide.tsx`,
+  `services/createTestService.js`. When the bot's flow changes, update `lib/topup-guide.json`,
   `trial.tsx` and `faq.tsx` with it.
+- **Wallet top-up guide.** `storefront/lib/topup-guide.json` is the single source for the steps. `payment-guide.tsx`
+  renders it as a stepper (progress bar, step list with arrow keys, previous/next, one step visible; every step stays
+  in the static HTML, and without JavaScript all of them show), and images enlarge in a lazy dialog
+  (`guide-lightbox.tsx`) that stays in step with the guide. `tests/unit/topupGuide.test.js` pins every button, title
+  and `verbatim` line to the bot's source, so a renamed button fails a test instead of leaving the guide wrong.
+- **Guide images are illustrations, not screenshots.** Telegram is not reachable from the build, so
+  `npm run build:guide-images` draws `web/public/store/guide/<id>.webp` (800×1000) from that JSON with the bot's real
+  labels and placeholder values, and each image carries a visible label saying so. Steps at the payment provider are
+  diagrams, never an imitation of its screen, and no image shows a successful payment. A real screenshot can replace
+  a file at the same path and 4:5 ratio; change that step's caption and its `kind` with it. Neither offered method
+  has a receipt step, and the guide says so.
 - **Deliberately absent:** testimonials, user counts, ratings, uptime or speed claims,
   discounts, countdowns, crossed-out prices, refund or response-time promises, and named client
   apps (their names and links cannot be verified from this repository; the guide links the
@@ -57,7 +68,8 @@ payment, devices and FAQ and has a mobile menu (`aria-expanded`, closes on Escap
 - **Plan highlight:** the only badge is «کمترین قیمت هر گیگ» (`lowestPerGbPlanId`), a computed
   fact that appears only when one plan is strictly cheapest per GB.
 - **Motion:** CSS only (transitions, a looping dash/packet animation in the hero art, the FAQ
-  open animation). Scroll reveal (`lib/use-reveal.ts`) hides only blocks that start below the
+  open animation, a sliding tab pill measured in `ui/tabs.tsx`, slow background light on the plans and
+  payment sections, direction-aware guide steps). The header marks the section in view (`aria-current`). Scroll reveal (`lib/use-reveal.ts`) hides only blocks that start below the
   fold after hydration, never plans, and is skipped under `prefers-reduced-motion`, which also
   switches the decorative loops off.
 

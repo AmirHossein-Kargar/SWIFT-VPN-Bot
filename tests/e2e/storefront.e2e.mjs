@@ -135,7 +135,7 @@ for (const scheme of ["light", "dark"]) {
       assert.deepEqual(small, [], "controls under 40px tall");
     });
     await step(`[${label}] only the active theme's logo is visible and it is not stretched`, async () => {
-      const logos = await page.evaluate(() => [...document.querySelectorAll("img")].filter((i) => i.offsetParent !== null).map((i) => ({ src: i.src.split("/brand/")[1], ratio: +(i.getBoundingClientRect().width / i.getBoundingClientRect().height).toFixed(2), natural: i.naturalWidth > 0 })));
+      const logos = await page.evaluate(() => [...document.querySelectorAll('img[src*="/brand/"]')].filter((i) => i.offsetParent !== null).map((i) => ({ src: i.src.split("/brand/")[1], ratio: +(i.getBoundingClientRect().width / i.getBoundingClientRect().height).toFixed(2), natural: i.naturalWidth > 0 })));
       assert.ok(logos.length >= 2, "header + footer logos visible");
       for (const logo of logos) {
         assert.equal(logo.src.includes("on-dark"), scheme === "dark", `variant ${logo.src}`);
@@ -395,15 +395,78 @@ await failurePath("failure: a hostile hand-off URL from the API is never rendere
     const tabs = page.locator("#payment").getByRole("tab");
     assert.equal(await tabs.count(), 2);
     assert.equal(await tabs.first().getAttribute("aria-selected"), "true");
-    assert.equal(await page.locator("#payment [role=tabpanel]:not([hidden]) h3").count(), 5, "five card-to-card steps");
+    assert.equal(await page.locator("#payment [role=tabpanel]:not([hidden]) h3").count(), 6, "six card-to-card steps, all in the DOM");
     assert.equal(await page.locator("#payment [role=tabpanel][hidden]").count(), 1, "the crypto guide is present but hidden");
     await tabs.nth(1).click();
-    assert.equal(await page.locator("#payment [role=tabpanel]:not([hidden]) h3").count(), 6, "six crypto steps");
+    assert.equal(await page.locator("#payment [role=tabpanel]:not([hidden]) h3").count(), 7, "seven crypto steps");
     const panel = await page.locator("#payment [role=tabpanel]:not([hidden])").innerText();
     assert.ok(panel.includes("شبکه") && panel.includes("قبل از ارسال حتماً بررسی کنید"), "network warning panel is shown");
     await tabs.first().focus();
     await page.keyboard.press("ArrowLeft");
     await page.waitForFunction(() => document.querySelector("#payment [role=tab][aria-selected=true]")?.textContent.includes("کریپتو"));
+    await tabs.first().click();
+  });
+  await step("payment guide: the stepper moves through the steps and shows one at a time", async () => {
+    const panel = page.locator("#payment [role=tabpanel]:not([hidden])");
+    const visibleTitle = () => panel.locator("[data-guide-step]:not([hidden]) h3").innerText();
+    assert.equal(await panel.locator("[data-guide-step]:not([hidden])").count(), 1);
+    assert.equal(await visibleTitle(), "ورود به افزایش موجودی");
+    assert.equal(await panel.locator('[aria-current="step"]').innerText().then((text) => text.includes("ورود")), true);
+    await panel.getByRole("button", { name: "مرحلهٔ بعد" }).click();
+    assert.equal(await visibleTitle(), "انتخاب کارت‌به‌کارت");
+    assert.ok((await panel.locator("[aria-live=polite]").first().innerText()).includes("مرحلهٔ ۲ از ۶"));
+    await panel.getByRole("button", { name: "مرحلهٔ قبل" }).click();
+    assert.equal(await visibleTitle(), "ورود به افزایش موجودی");
+    const steps = panel.getByRole("list", { name: "مراحل پرداخت کارت‌به‌کارت" }).getByRole("button");
+    assert.equal(await steps.count(), 6);
+    await steps.nth(5).click();
+    assert.equal(await visibleTitle(), "«پرداخت کردم» و تأیید درگاه");
+    assert.ok((await panel.locator("[data-guide-step]:not([hidden])").innerText()).includes("ارسال رسید لازم نیست"));
+    assert.equal(await panel.getByRole("button", { name: "مرحلهٔ بعد" }).count(), 0, "the last step has nowhere to go");
+    await steps.nth(0).focus();
+    await page.keyboard.press("ArrowLeft");
+    assert.equal(await visibleTitle(), "انتخاب کارت‌به‌کارت", "in RTL ArrowLeft moves forward");
+    assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-current")), "step", "focus follows the step");
+  });
+  await step("payment guide: images load, are labelled, and enlarge in an accessible dialog", async () => {
+    const panel = page.locator("#payment [role=tabpanel]:not([hidden])");
+    const image = panel.locator("[data-guide-step]:not([hidden]) img");
+    await image.scrollIntoViewIfNeeded();
+    await page.waitForFunction(() => {
+      const img = document.querySelector("#payment [role=tabpanel]:not([hidden]) [data-guide-step]:not([hidden]) img");
+      return img?.complete && img.naturalWidth === 800;
+    });
+    assert.ok((await image.getAttribute("alt")).length > 20);
+    assert.ok((await panel.locator("[data-guide-step]:not([hidden]) figcaption").innerText()).length > 10);
+    const opener = panel.locator("[data-guide-step]:not([hidden]) [data-enlarge]");
+    await opener.click();
+    const dialog = page.getByRole("dialog");
+    await dialog.waitFor();
+    assert.equal(await dialog.getByRole("heading").innerText(), "انتخاب کارت‌به‌کارت");
+    await page.waitForFunction(() => document.querySelector("[role=dialog] img")?.naturalWidth === 800);
+    assert.ok((await dialog.locator("img").evaluate((el) => el.getBoundingClientRect().width)) > (await opener.locator("img").evaluate((el) => el.getBoundingClientRect().width)), "the dialog image is larger");
+    await page.keyboard.press("ArrowLeft");
+    await dialog.getByText("مرحلهٔ ۳ از ۶").waitFor();
+    assert.equal(await dialog.getByRole("heading").innerText(), "مبلغ را وارد کنید");
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "detached" });
+    await page.waitForFunction(() => document.activeElement?.hasAttribute("data-enlarge"), undefined, { timeout: 2000 });
+    assert.equal(await panel.locator("[data-guide-step]:not([hidden]) h3").innerText(), "مبلغ را وارد کنید", "the guide stayed on the step reached in the dialog");
+  });
+  await step("tabs: the sliding pill sits exactly under the active tab", async () => {
+    const pill = page.locator("#payment .tabs-pill");
+    await page.waitForFunction(() => document.querySelector("#payment .tabs-list")?.dataset.pill === "ready");
+    const aligned = () => page.evaluate(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const a = document.querySelector("#payment .tabs-pill").getBoundingClientRect();
+      const b = document.querySelector("#payment [role=tab][aria-selected=true]").getBoundingClientRect();
+      return Math.abs(a.left - b.left) < 1.5 && Math.abs(a.width - b.width) < 1.5;
+    });
+    assert.equal(await aligned(), true);
+    await page.locator("#payment").getByRole("tab").nth(1).click();
+    assert.equal(await aligned(), true);
+    assert.equal(await pill.getAttribute("aria-hidden"), "true");
+    await page.locator("#payment").getByRole("tab").first().click();
   });
   await step("payment guide: mockups never contain a real-looking card number or address", async () => {
     const text = await page.locator("#payment").innerText();
@@ -488,7 +551,7 @@ await failurePath("failure: a hostile hand-off URL from the API is never rendere
     await page.evaluate(() => document.querySelectorAll("[data-reveal]").forEach((el) => el.classList.remove("reveal-hidden")));
     const report = await page.evaluate(() => ({
       overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-      wide: [...document.querySelectorAll("main *")].filter((el) => !el.closest(".pointer-events-none") && (el.getBoundingClientRect().right > innerWidth + 1 || el.getBoundingClientRect().left < -1)).slice(0, 5).map((el) => `${el.tagName}.${String(el.className).slice(0, 40)}`),
+      wide: [...document.querySelectorAll("main *")].filter((el) => !el.closest(".pointer-events-none, .guide-nav") && (el.getBoundingClientRect().right > innerWidth + 1 || el.getBoundingClientRect().left < -1)).slice(0, 5).map((el) => `${el.tagName}.${String(el.className).slice(0, 40)}`),
     }));
     assert.equal(report.overflow, 0);
     assert.deepEqual(report.wide, []);
@@ -504,6 +567,16 @@ await failurePath("failure: a hostile hand-off URL from the API is never rendere
   await step("prefers-reduced-motion: no element is hidden for reveal and the connection packets are off", async () => {
     assert.equal(await page.locator(".reveal-hidden").count(), 0);
     assert.equal(await page.locator(".flow-packet").first().evaluate((el) => getComputedStyle(el).display), "none");
+  });
+  await step("prefers-reduced-motion: the background stops, and the guide still works with no slide-in", async () => {
+    assert.equal(await page.locator("#plans").evaluate((el) => getComputedStyle(el, "::before").animationName), "none");
+    const panel = page.locator("#payment [role=tabpanel]:not([hidden])");
+    await panel.getByRole("button", { name: "مرحلهٔ بعد" }).click();
+    const inner = panel.locator("[data-guide-step]:not([hidden]) > div");
+    const animation = await inner.evaluate((el) => parseFloat(getComputedStyle(el).animationDuration));
+    assert.ok(animation < 0.01, "step change is effectively instant");
+    assert.equal(await panel.locator("[data-guide-step]:not([hidden]) h3").innerText(), "انتخاب کارت‌به‌کارت");
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), 0);
   });
   await context.close();
 }

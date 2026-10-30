@@ -44,7 +44,8 @@ function PlanCard({ plan, catalog, index, selected, bestValue, onSelect }: { pla
       data-selected={selected ? "true" : undefined}
       className={cn(
         "animate-rise lift relative flex max-w-[274px] flex-1 basis-[230px] flex-col overflow-hidden px-[22px] pb-[22px] pt-5 text-center focus-within:border-brand max-sm:max-w-none max-sm:basis-full",
-        selected && "border-brand ring-2 ring-brand/40"
+        selected && "border-brand ring-2 ring-brand/40",
+        bestValue && "plan-best"
       )}
       style={{ animationDelay: `${Math.min(index * 40, 240)}ms` }}
     >
@@ -62,7 +63,7 @@ function PlanCard({ plan, catalog, index, selected, bestValue, onSelect }: { pla
         <li className="flex items-center gap-2"><Send className="size-4 shrink-0 text-success" aria-hidden="true" />تحویل خودکار در تلگرام</li>
       </ul>
       <Button
-        className="press mt-auto w-full"
+        className="mt-auto w-full"
         aria-label={`انتخاب پلن ${fa(plan.gig)} گیگابایت ${title}`}
         onPointerEnter={() => void loadOrderDialog()}
         onFocus={() => void loadOrderDialog()}
@@ -89,7 +90,7 @@ export function PlansSection({ state, duration, onDuration, onReload, onRefresh 
   const bestValueId = lowestPerGbPlanId(plans);
 
   return (
-    <section id="plans" aria-labelledby="plans-title" className="scroll-mt-[72px] py-[52px] sm:py-[72px]">
+    <section id="plans" aria-labelledby="plans-title" className="aurora relative isolate scroll-mt-[72px] overflow-clip py-[52px] sm:py-[72px]">
       <Container>
         <SectionHeading id="plans-title" eyebrow="مرحلهٔ اول" title="پلن‌ها و قیمت‌ها">
           قیمت‌ها به تومان و مستقیماً از کاتالوگ فروش ربات خوانده می‌شوند؛ مبلغ نهایی هنگام ثبت سفارش دوباره روی سرور محاسبه می‌شود.

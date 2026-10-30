@@ -41,9 +41,32 @@ export const NAV_LINKS = [
   ["#faq", "سوالات متداول"],
 ] as const;
 
-const navLink = "rounded-[10px] px-3 py-2 text-[14.5px] font-semibold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground";
+const navLink = "nav-link rounded-[10px] px-3 py-2 text-[14.5px] font-semibold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground aria-[current=true]:text-foreground";
 
-function MobileNav({ botUrl }: { botUrl: string | null }) {
+/** The section at the middle of the screen, for the "you are here" mark in the header. */
+function useActiveSection() {
+  const [active, setActive] = useState<string | null>(null);
+  useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) setActive(`#${entry.target.id}`);
+          else setActive((current) => (current === `#${entry.target.id}` ? null : current));
+        }
+      },
+      { rootMargin: "-45% 0px -50% 0px" }
+    );
+    for (const [href] of NAV_LINKS) {
+      const section = document.querySelector(href);
+      if (section) observer.observe(section);
+    }
+    return () => observer.disconnect();
+  }, []);
+  return active;
+}
+
+function MobileNav({ botUrl, active }: { botUrl: string | null; active: string | null }) {
   const [open, setOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -78,16 +101,25 @@ function MobileNav({ botUrl }: { botUrl: string | null }) {
         onClick={() => setOpen((value) => !value)}
         className="press inline-grid size-11 place-items-center rounded-xl border border-border-strong bg-card text-foreground hover:border-faint"
       >
-        {open ? <X className="size-5" aria-hidden="true" /> : <Menu className="size-5" aria-hidden="true" />}
+        {open ? <X key="close" className="animate-rise size-5" aria-hidden="true" /> : <Menu key="open" className="animate-rise size-5" aria-hidden="true" />}
       </button>
       {open ? (
         <div ref={panelRef} id="mobile-nav" className="absolute inset-x-0 top-full border-b bg-background/95 shadow-lg backdrop-blur-md animate-rise">
           <nav aria-label="بخش‌های صفحه" className="mx-auto grid max-w-page gap-1 px-4 py-3">
-            {NAV_LINKS.map(([href, label]) => (
-              <a key={href} href={href} onClick={() => setOpen(false)} className="flex min-h-12 items-center rounded-xl px-3 text-base font-bold hover:bg-secondary">{label}</a>
+            {NAV_LINKS.map(([href, label], index) => (
+              <a
+                key={href}
+                href={href}
+                aria-current={active === href ? "true" : undefined}
+                onClick={() => setOpen(false)}
+                style={{ animationDelay: `${index * 35}ms` }}
+                className="animate-rise flex min-h-12 items-center rounded-xl px-3 text-base font-bold transition-[background-color,transform] duration-150 hover:bg-secondary active:scale-[0.98] active:bg-secondary aria-[current=true]:bg-secondary"
+              >
+                {label}
+              </a>
             ))}
             {botUrl ? (
-              <a href={botUrl} target="_blank" rel="noopener" className="mt-1 flex min-h-12 items-center gap-2 rounded-xl border border-border-strong px-3 text-base font-bold hover:bg-secondary">
+              <a href={botUrl} target="_blank" rel="noopener" className="mt-1 flex min-h-12 items-center gap-2 rounded-xl border border-border-strong px-3 text-base font-bold transition-[background-color,transform] duration-150 hover:bg-secondary active:scale-[0.98] active:bg-secondary">
                 <Send className="size-[18px] text-brand" aria-hidden="true" />باز کردن ربات تلگرام
               </a>
             ) : null}
@@ -99,6 +131,7 @@ function MobileNav({ botUrl }: { botUrl: string | null }) {
 }
 
 export function SiteHeader({ botUrl }: { botUrl: string | null }) {
+  const active = useActiveSection();
   return (
     <header id="top" className="sticky top-0 z-40 border-b bg-background/80 backdrop-blur-md">
       <Container className="relative flex min-h-[68px] items-center gap-3 sm:gap-4">
@@ -108,7 +141,7 @@ export function SiteHeader({ botUrl }: { botUrl: string | null }) {
         </a>
         <nav aria-label="بخش‌های صفحه" className="ms-2 hidden gap-0.5 lg:flex">
           {NAV_LINKS.map(([href, label]) => (
-            <a key={href} href={href} className={navLink}>{label}</a>
+            <a key={href} href={href} aria-current={active === href ? "true" : undefined} className={navLink}>{label}</a>
           ))}
         </nav>
         <div className="ms-auto flex items-center gap-2 sm:gap-2.5">
@@ -119,7 +152,7 @@ export function SiteHeader({ botUrl }: { botUrl: string | null }) {
           ) : null}
           <ThemeToggle />
           <a href="#plans" className={cn(buttonVariants({ size: "sm" }), "press")}>خرید اشتراک</a>
-          <MobileNav botUrl={botUrl} />
+          <MobileNav botUrl={botUrl} active={active} />
         </div>
       </Container>
     </header>

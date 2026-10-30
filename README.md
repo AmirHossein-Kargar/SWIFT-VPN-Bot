@@ -114,6 +114,7 @@ The full reference, with defaults and optional settings, is in
 | `npm run check:sensitive` | Scan tracked files for card numbers, tokens, emails and other sensitive values (never prints them) |
 | `npm run check:context` | Check that paths, scripts and links named in `CLAUDE.md`, `.claude/` and the docs still exist |
 | `npm run build` | Build `/panel` and the storefront |
+| `npm run build:guide-images` | Redraw the top-up guide images (needs Chrome; the images are committed) |
 | `npm run admin:dev` / `npm run storefront:dev` | Next.js dev servers (ports 3100 / 3101) |
 | `npm run test:e2e` / `npm run test:e2e:store` | Browser suites (need Chrome) |
 
