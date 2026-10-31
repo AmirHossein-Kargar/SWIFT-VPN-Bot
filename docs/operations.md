@@ -97,6 +97,14 @@ pm2 logs swift-vpn-bot | grep '"message":"PAYMENT_CREDITED'     # watch credits 
 grep '"level":"error"' logs/error.log | grep -c hooshpay          # errors today
 ```
 
+## Money Flow Sentinel
+
+The `/panel/sentinel` reconciliation job runs in this process. Its health is the status bar on those pages, not System Health. It logs
+under `"service":"money-flow-sentinel"`. A failing run changes no money: the panel shows reconciliation as delayed, then
+stale, with the last error type. The first pass after a deploy may list many informational findings for customers from
+before the wallet ledger; that is history, not a fault. `SENTINEL_ENABLED=off` stops the job. See
+[Money Flow Sentinel](sentinel.md).
+
 ## Shutdown and restarts
 
 `SIGTERM` / `SIGINT` stop Telegram polling, the TRX scanner and the crons, then close Express,

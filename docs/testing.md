@@ -34,7 +34,7 @@ helper refuses any other name.
 Suites that need MongoDB: `adminBankConfirm`, `adminRegistryMutations`, `adminServices`,
 `adminTelegramPanel` (data screens), `adminWeb` (data tests), `catalogShop`,
 `hooshpayFulfillment`, `hooshpayIndexMigration`, `purchaseFlow`, `orderStatusMessage.mongo`, `trxScanner` and
-`webhookHttp` under `tests/integration/`.
+`webhookHttp`, `sentinel.mongo` under `tests/integration/`.
 
 ## What is covered
 
@@ -46,6 +46,7 @@ Suites that need MongoDB: `adminBankConfirm`, `adminRegistryMutations`, `adminSe
 | Purchases and wallet | `tests/unit/purchaseService`, `customerPlans`, `plansCatalog`, `tests/integration/purchaseFlow.test.js`, `orderStatusMessage.mongo.test.js` | Reserve, commit, refund, ambiguous results (provider stubbed); the one order status message through the real callback handler: edit failures, retries, concurrency, recovery of the customer notice |
 | Admin services and panels | `tests/unit/admin*.test.js`, `tests/integration/admin*.test.js` | Audit idempotency, auth sessions, validation, registry, Telegram panel authorization, CSRF and session enforcement over HTTP |
 | Admin user actions | `adminUserMessaging`, `accessGate`, `adminSettings`, `adminTestEligibility`, `nextPanelHeaders` | Message delivery mapping, block enforcement, settings output never contains secret values, eligibility reset, anti-framing headers |
+| Money Flow Sentinel | `tests/unit/sentinelRules.test.js`, `sentinelLedger`, `sentinelReadOnly`, `sentinelPanel`, `tests/integration/sentinelHttp.test.js`, `sentinel.mongo.test.js`, `tests/e2e/sentinel.e2e.mjs` | Every detection rule; reconstruction and exposure without double counting; the read-only guarantee, statically and as byte-identical money collections; real money flows, injected damage, idempotence, races, leases, keyset paging; auth, CSRF and input validation over HTTP; feed merging and backoff |
 | Mock tests | `tests/unit/mockTests.test.js`, `mockTestsUi.test.js`, `tests/integration/adminTelegramMock.test.js` | Harness isolation and all scenarios against the real services; UI data contract |
 | Storefront | `tests/integration/storefrontAndPanel.test.js`, `storefrontBuild.test.js`, `tests/unit/storefrontLogic`, `storefrontApi`, `topupGuide`, `themeTokens` | Routing, CSP, canonical URL, caching and compression, hand-off URL safety, API client; the top-up guide against the bot's source; the shared palette (contrast, static-page copies, button scale) |
 | Configuration and startup | `envResolution`, `mongoStartup`, `moduleSmoke` | Environment aliases and validation, startup ordering, every production module imports cleanly |
@@ -61,6 +62,9 @@ Suites that need MongoDB: `adminBankConfirm`, `adminRegistryMutations`, `adminSe
   storefront. **Known broken (seen on `a8cd18b`, 2026-10-31):** it opens `/admin` and waits for the legacy `#app.ready`, but
   `/admin` now leads to the Next panel, so it stalls there and starts a Next dev server in the test process. Until it is
   ported, `nextPanel.e2e.mjs` is the working admin suite.
+- `node tests/e2e/sentinel.e2e.mjs` (needs `npx next build admin-panel` and a disposable `TEST_MONGO_URL`; `AXE_PATH` adds accessibility
+  checks, `E2E_ONLY=<regex>` runs matching steps, `E2E_SHOTS=<dir>` keeps screenshots) drives `/panel/sentinel` against the real app and
+  database: themes and widths, live updates, reconnection, reduced motion, keyboard use and the review rules.
 - `node tests/e2e/nextPanel.e2e.mjs` (after `npx next build admin-panel`) drives the real `/panel` with the real session,
   CSRF and origin middleware. It covers money actions under delayed and failing API answers (nothing looks successful
   early, a retry keeps its `operationId`, a double click sends one request), filter navigation, charts and reduced motion.

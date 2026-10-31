@@ -63,6 +63,11 @@ const invoiceSchema = new mongoose.Schema({
 invoiceSchema.index({ status: 1, createdAt: -1 }, { name: "idx_invoice_status_recent" });
 invoiceSchema.index({ recoveryStatus: 1, status: 1, createdAt: 1 }, { name: "idx_invoice_recovery" });
 invoiceSchema.index({ userId: 1, createdAt: -1 }, { name: "idx_invoice_user_recent" });
+// Credited-money feed of Money Flow Sentinel (docs/sentinel.md).
+invoiceSchema.index(
+  { balanceCreditedAt: 1 },
+  { name: "idx_sentinel_credited", partialFilterExpression: { balanceCreditedAt: { $gt: new Date(0) } } },
+);
 
 const invoice = mongoose.model("invoice", invoiceSchema);
 export default invoice;

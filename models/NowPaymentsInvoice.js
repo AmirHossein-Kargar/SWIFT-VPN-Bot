@@ -114,6 +114,12 @@ nowPaymentsInvoiceSchema.index(
   { name: "idx_nowpayments_user_recent" },
 );
 
+// Credited-money feed of Money Flow Sentinel (docs/sentinel.md).
+nowPaymentsInvoiceSchema.index(
+  { balanceCreditedAt: 1 },
+  { name: "idx_sentinel_credited", partialFilterExpression: { balanceCreditedAt: { $gt: new Date(0) } } },
+);
+
 // First-entry timestamp for `failed`, used by the 24h invoice cleanup.
 applyTerminalStatusStamp(nowPaymentsInvoiceSchema, ["failed"]);
 

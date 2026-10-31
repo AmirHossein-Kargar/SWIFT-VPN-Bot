@@ -59,6 +59,8 @@ rerun with `TEST_CONCURRENCY=1` to isolate a concurrency-sensitive test from a g
   session and CSRF middleware, delayed and failing API answers, and the navigation-hang regressions. `E2E_ONLY=<regex>`
   runs matching steps. A navigation bug here passed one-file runs and failed with a warm server, so repeat a flaky
   sequence and capture state on failure; do not add a sleep.
+- `node tests/e2e/sentinel.e2e.mjs` is the `/panel/sentinel` suite: real app and a disposable `TEST_MONGO_URL`, needs
+  `npx next build admin-panel`. Set `AXE_PATH` to the axe-core script or its accessibility step reports itself as skipped.
 - Set `SHOTS` to a scratch folder for the storefront suite: without it, it overwrites the tracked `store-*.png` in the
   repo root. `tsc` can rewrite the untracked `admin-panel/tsconfig.tsbuildinfo`. Check `git status` before and after,
   and restore anything you changed that the owner did not ask for.

@@ -53,6 +53,13 @@ const MESSAGES: Record<string, string> = {
   wizard_action_unavailable: "The VPN panel does not support this action.",
   invalid_gig: "Traffic must be at least 0.5 GB (up to two decimals).",
   product_not_found: "Plan not found.",
+  finding_still_reproduces: "The records still show this problem, so it cannot be marked resolved yet.",
+  finding_no_longer_reproduces: "The records no longer show this problem. Reload the page.",
+  review_conflict: "Another admin changed this finding first. Reload and try again.",
+  review_transition_refused: "This finding cannot move to that status.",
+  invalid_option: "Choose one of the offered options.",
+  sentinel_disabled: "Sentinel is switched off on this server.",
+  sentinel_run_failed: "The check could not finish. Nothing was changed; try again shortly.",
   timeout: "The request timed out. It may still complete on the server; refresh before retrying.",
   network_error: "Network error. Check your connection and try again.",
 };

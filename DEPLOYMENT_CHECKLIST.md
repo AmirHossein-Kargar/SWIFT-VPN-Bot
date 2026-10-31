@@ -283,7 +283,7 @@ migration.
 | Audit | Every sensitive action is stored in `AdminAuditLog` with actor, target, reason and IP (web) |
 | Plans | The `AdminProduct` catalog (create, edit, reorder, enable) drives panel analytics only. Customers are always charged from the fixed plan list in `services/plans.js` (see [docs/payments.md](docs/payments.md)) |
 | Broadcasts | Sent in batches of 25 with a pause between batches, cancellable |
-| Backups | Include the new collections (`AdminAuditLog`, `AdminAccount`, `AdminProduct`, `AdminBroadcast`, `SystemHealth`, `MockTestRun`, `PaymentTombstone`) |
+| Backups | Include the new collections (`AdminAuditLog`, `AdminAccount`, `AdminProduct`, `AdminBroadcast`, `SystemHealth`, `MockTestRun`, `PaymentTombstone`, `SentinelFinding`) |
 
 ## Final go / no-go
 

@@ -21,7 +21,7 @@ import { useOpenSection } from "@/components/shared/navigation-pending";
 
 function pageTitle(pathname: string): string {
   for (const section of NAV_SECTIONS) {
-    const match = section.items.find((item) => item.href === pathname);
+    const match = section.items.find((item) => item.href === pathname || (item.href !== "/" && pathname.startsWith(`${item.href}/`)));
     if (match) return match.label;
   }
   return "Swift VPN Admin";

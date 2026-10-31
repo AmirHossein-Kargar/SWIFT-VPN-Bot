@@ -34,6 +34,7 @@ import { listAdmins, addAdmin, removeAdmin } from "../services/admin/adminRegist
 import { getUserProfilePhoto } from "../services/admin/userPhoto.js";
 import { sendUserMessage } from "../services/admin/userMessaging.js";
 import { getSettingsOverview } from "../services/admin/settings.js";
+import { getSentinelFinding, getSentinelFlow, getSentinelLive, getSentinelOverview, getSentinelSync, getSentinelTransaction, listSentinelFindings, listSentinelTransactions, runSentinelReconciliation, updateSentinelFindingReview } from "../services/admin/sentinel.js";
 import { listSupportTickets, getSupportTicket, getSupportTicketUpdates, getSupportTicketHistory, replyToSupportTicket, setSupportTicketStatus, deleteSupportTickets, clearSupportHistory } from "../services/admin/tickets.js";
 import { getMessageAttachment, toAdminError } from "../services/support/tickets.js";
 import { streamAttachment } from "../services/support/attachments.js";
@@ -848,6 +849,69 @@ router.get("/system/health", async (req, res, next) => {
 router.get("/settings/overview", (req, res, next) => {
   try { res.json({ ok: true, data: getSettingsOverview({ actorId: req.adminActorId }) }); }
   catch (error) { next(error); }
+});
+
+// Money Flow Sentinel: read-only over money records. The two POSTs write findings and audit rows, never money.
+router.get("/sentinel/overview", async (req, res, next) => {
+  try { res.json({ ok: true, data: await getSentinelOverview({ actorId: req.adminActorId, query: req.query }) }); }
+  catch (error) { next(error); }
+});
+
+router.get("/sentinel/sync", async (req, res, next) => {
+  try { res.json({ ok: true, data: await getSentinelSync({ actorId: req.adminActorId }) }); }
+  catch (error) { next(error); }
+});
+
+router.get("/sentinel/flow", async (req, res, next) => {
+  try { res.json({ ok: true, data: await getSentinelFlow({ actorId: req.adminActorId, query: req.query }) }); }
+  catch (error) { next(error); }
+});
+
+router.get("/sentinel/live", rateLimitMiddleware({ limit: 60 }), async (req, res, next) => {
+  try { res.json({ ok: true, data: await getSentinelLive({ actorId: req.adminActorId, query: req.query }) }); }
+  catch (error) { next(error); }
+});
+
+router.get("/sentinel/transactions", async (req, res, next) => {
+  try { res.json({ ok: true, data: await listSentinelTransactions({ actorId: req.adminActorId, query: req.query }) }); }
+  catch (error) { next(error); }
+});
+
+router.get("/sentinel/transactions/:key", async (req, res, next) => {
+  try { res.json({ ok: true, data: await getSentinelTransaction({ actorId: req.adminActorId, key: req.params.key }) }); }
+  catch (error) { next(error); }
+});
+
+router.get("/sentinel/findings", async (req, res, next) => {
+  try { res.json({ ok: true, data: await listSentinelFindings({ actorId: req.adminActorId, query: req.query }) }); }
+  catch (error) { next(error); }
+});
+
+router.get("/sentinel/findings/:id", async (req, res, next) => {
+  try { res.json({ ok: true, data: await getSentinelFinding({ actorId: req.adminActorId, id: req.params.id }) }); }
+  catch (error) { next(error); }
+});
+
+router.post("/sentinel/findings/:id/review", rateLimitMiddleware({ limit: 30 }), requireBody(), async (req, res, next) => {
+  try {
+    const result = await updateSentinelFindingReview({
+      actorId: req.adminActorId,
+      operationId: parseOperationId(req.body),
+      id: req.params.id,
+      review: req.body.review,
+      reason: req.body.reason,
+      optionId: req.body.optionId,
+      ipAddress: clientIp(req),
+    });
+    res.json({ ok: true, data: result });
+  } catch (error) { next(error); }
+});
+
+router.post("/sentinel/reconcile", rateLimitMiddleware({ limit: 6 }), requireBody(), async (req, res, next) => {
+  try {
+    const result = await runSentinelReconciliation({ actorId: req.adminActorId, operationId: parseOperationId(req.body), userId: req.body?.userId, ipAddress: clientIp(req) });
+    res.json({ ok: true, data: result });
+  } catch (error) { next(error); }
 });
 
 // Convenience endpoint used by the frontend to mint fresh idempotency keys.

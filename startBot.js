@@ -10,6 +10,7 @@ import { startHooshpayRecoveryCron, stopHooshpayRecoveryCron } from "./services/
 import { startNowPaymentsRecoveryCron, stopNowPaymentsRecoveryCron } from "./services/nowpayments/recovery.js";
 import { startInvoiceCleanupCron, stopInvoiceCleanupCron } from "./services/payments/invoiceCleanup.js";
 import { startUserSpendSweeper, stopUserSpendSweeper } from "./services/users/userSpendSweeper.js";
+import { startSentinelCron, stopSentinelCron } from "./services/sentinel/reconciler.js";
 import mongoose from "mongoose";
 import { connectRedis, closeRedis } from "./config/redisClient.js";
 import { seedDefaultProducts } from "./services/plans.js";
@@ -242,6 +243,14 @@ export default async function startBot() {
     console.error("\x1b[31m%s\x1b[0m", "❌ Failed to start User Spend Sweeper:", error?.name || "Error");
   }
 
+  // 6c. Money Flow Sentinel: read-only reconciliation in this process. Its own try block for the same reason as above.
+  // Disable with SENTINEL_ENABLED=off.
+  try {
+    if (startSentinelCron()) console.log("\x1b[32m%s\x1b[0m", "✔ Money Flow Sentinel Started");
+  } catch (error) {
+    console.error("\x1b[31m%s\x1b[0m", "❌ Failed to start Money Flow Sentinel:", error?.name || "Error");
+  }
+
   // 7. Graceful shutdown — SIGTERM (Railway) + SIGINT (Ctrl-C)
   let shuttingDown = false;
 
@@ -281,6 +290,12 @@ export default async function startBot() {
       stopUserSpendSweeper();
     } catch (e) {
       console.error("⚠️  User spend sweeper stop error:", e?.name || "Error");
+    }
+
+    try {
+      stopSentinelCron();
+    } catch (e) {
+      console.error("⚠️  Sentinel stop error:", e?.name || "Error");
     }
 
     // 7d. Close Express HTTP server

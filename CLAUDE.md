@@ -12,6 +12,7 @@ Architecture, features and the repository layout are in `README.md`; do not repe
 | Product overview, architecture diagram, layout, endpoints | `README.md` |
 | Environment variables, aliases, secret handling | `docs/configuration.md`, `.env.example` |
 | Money paths and their guarantees | `docs/payments.md`, `docs/reserved-orders.md` |
+| Financial monitoring and reconciliation | `docs/sentinel.md` |
 | Admin surfaces and `/api/admin` | `docs/admin.md` |
 | Support tickets | `docs/support.md` |
 | Storefront build, routes, CSP | `docs/storefront.md` |

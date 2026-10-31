@@ -1,7 +1,7 @@
 # Payments and money safety
 
 This page describes what happens on every money path and which guarantees the code and the
-test suite provide. MongoDB is the only authoritative store for money; Redis is used for
+test suite provide. [Money Flow Sentinel](sentinel.md) checks these guarantees against the stored records. MongoDB is the only authoritative store for money; Redis is used for
 locks and sessions and is never trusted for balances.
 
 - [Wallet top-up methods](#wallet-top-up-methods)

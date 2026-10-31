@@ -60,6 +60,13 @@ malformed.
 | `ADMIN_CACHE_TTL_SECONDS` | `60` | How long the admin allowlist (environment + database admins) is cached |
 | `USER_SPEND_SORT` | `aggregate` | `persisted` ranks the admin "Top spending" list from `User.totalSpent`, but only after `scripts/user-spend-backfill.mjs --verify` ran clean; see [Persisted user spend](user-spend.md) |
 | `USER_SPEND_HOOK` / `USER_SPEND_SWEEPER` | on | `off` disables the post-completion counter recompute / the background sweeper that repairs the counters; see [Persisted user spend](user-spend.md) |
+| `SENTINEL_ENABLED` | on | `off` stops the [Money Flow Sentinel](sentinel.md) reconciliation job; the panel then shows it as off |
+| `SENTINEL_INTERVAL_SECONDS` | `120` (30–3600) | How often reconciliation runs |
+| `SENTINEL_USERS_PER_TICK` | `100` (10–2000) | Wallets reconciled per run by the rolling pass |
+| `SENTINEL_GRACE_MINUTES` | `15` (1–1440) | How long a writer may sit between its two steps before it counts as a finding |
+| `SENTINEL_STUCK_MINUTES` | `30` (5–10080) | When an intermediate payment or order state counts as stuck |
+| `SENTINEL_AWAITING_PROVIDER_HOURS` | `24` (1–720) | When waiting on the provider is reported |
+| `SENTINEL_LEDGER_EPOCH` | `2026-10-05T00:00:00.000Z` | Records older than this may predate the wallet ledger, so they can never produce a confirmed balance finding. An out-of-range `SENTINEL_*` value falls back to its default |
 | `ADMIN_PENDING_DELETE_MIN_HOURS` | `72` (minimum `24`) | Minimum age before the admin panel may delete a still-pending or expired top-up record; see [Deleting payment records](admin.md#deleting-payment-records-admin-panel) |
 | `SUPPORT_CONTACT` | empty | Support contact shown to users (`@username` or numeric ID). If empty, the direct-support buttons are hidden |
 | `SUPPORT_TERMS_URL` | empty | https URL of the terms page, shown as a button before a support ticket is created. Ignored unless https |

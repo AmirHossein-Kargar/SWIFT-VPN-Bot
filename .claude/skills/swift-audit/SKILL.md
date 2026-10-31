@@ -16,6 +16,7 @@ is the audit procedure and the inventory it checks against.
 | HooshPay webhook | `POST /api/hooshpay/webhook` (`server.js`) | HMAC verified before any state change; amount and invoice matched; idempotent |
 | NOWPayments IPN | `POST /api/nowpayments/ipn` (`server.js`) | Signature verified; only `finished` credits; idempotent |
 | Admin web API and dashboard | `/api/admin` (`web/adminRouter.js`), `/panel` | Allow-list + one-time code, session, CSRF, same-origin, rate limits, audit before mutation |
+| Money Flow Sentinel | `/api/admin/sentinel/*`, `services/sentinel/` | Read-only over money collections (`readOnly.js`); writes only `SentinelFinding` and its checkpoint; no provider or money module imported; mutations audited; "resolved" refused while a problem reproduces |
 | Customer support portal | `/api/support` (`web/supportRouter.js`), `/panel/support` | Customer session scoped to own tickets and attachments |
 | Public storefront API | `/api/store` (`web/storeRouter.js`): `/catalog`, `/plans/:planId` | Read-only, no customer data, strict CSP on the page |
 | Outbound providers | `api/wizardApi.js`, `services/hooshpay/`, `services/nowpayments/`, `services/pricing/` | Timeouts; ambiguous results never replayed; no secrets in logs |

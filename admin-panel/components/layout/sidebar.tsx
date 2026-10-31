@@ -19,6 +19,7 @@ import {
   Settings,
   LifeBuoy,
   Gift,
+  Radar,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -45,6 +46,7 @@ const NAV_SECTIONS: NavSection[] = [
     label: "Catalog & finance",
     items: [
       { href: "/products", label: "Service catalog", icon: Package },
+      { href: "/sentinel", label: "Money Flow Sentinel", icon: Radar },
       { href: "/custody", label: "Custody", icon: Coins },
     ],
   },

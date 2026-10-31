@@ -38,5 +38,11 @@ paymentTombstoneSchema.index({ provider: 1, orderId: 1 }, { unique: true, name: 
 paymentTombstoneSchema.index({ provider: 1, uid: 1 }, { name: "idx_tombstone_uid", sparse: true });
 paymentTombstoneSchema.index({ provider: 1, paymentId: 1 }, { name: "idx_tombstone_payment", sparse: true });
 paymentTombstoneSchema.index({ provider: 1, invoiceId: 1 }, { name: "idx_tombstone_invoice", sparse: true });
+// Money Flow Sentinel (docs/sentinel.md): one customer's removed invoices, and payments reported after removal.
+paymentTombstoneSchema.index({ userId: 1 }, { name: "idx_sentinel_tombstone_user", sparse: true });
+paymentTombstoneSchema.index(
+  { lateEventCount: 1 },
+  { name: "idx_sentinel_tombstone_late", partialFilterExpression: { lateEventCount: { $gt: 0 } } },
+);
 
 export default mongoose.models.PaymentTombstone || mongoose.model("PaymentTombstone", paymentTombstoneSchema);

@@ -72,6 +72,11 @@ cryptoInvoiceSchema.index(
 );
 cryptoInvoiceSchema.index({ userId: 1, createdAt: -1 }, { name: "idx_crypto_user_recent" });
 cryptoInvoiceSchema.index({ recoveryStatus: 1, status: 1, createdAt: 1 }, { name: "idx_crypto_recovery_queue" });
+// Credited-money feed of Money Flow Sentinel (docs/sentinel.md).
+cryptoInvoiceSchema.index(
+  { balanceCreditedAt: 1 },
+  { name: "idx_sentinel_credited", partialFilterExpression: { balanceCreditedAt: { $gt: new Date(0) } } },
+);
 
 const CryptoInvoice = mongoose.model("CryptoInvoice", cryptoInvoiceSchema);
 export default CryptoInvoice;

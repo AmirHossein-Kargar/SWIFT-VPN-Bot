@@ -49,7 +49,8 @@
         "docs/reserved-orders.md",
         ".claude/rules/money-paths.md",
         ".claude/skills/swift-audit/SKILL.md",
-        ".claude/skills/swift-test/SKILL.md"
+        ".claude/skills/swift-test/SKILL.md",
+        "docs/sentinel.md"
       ]
     },
     {
@@ -69,7 +70,27 @@
         "docs/payments.md",
         "docs/operations.md",
         ".claude/rules/money-paths.md",
-        "CLAUDE.md"
+        "CLAUDE.md",
+        "docs/sentinel.md"
+      ]
+    },
+    {
+      "id": "sentinel",
+      "impact": "high",
+      "summary": "Money Flow Sentinel: read-only reconciliation, findings, review rules and its panel section",
+      "globs": [
+        "services/sentinel/**",
+        "services/admin/sentinel.js",
+        "models/SentinelFinding.js",
+        "admin-panel/app/(app)/sentinel/**",
+        "admin-panel/components/sentinel/**",
+        "admin-panel/lib/sentinel.ts"
+      ],
+      "review": [
+        "docs/sentinel.md",
+        "docs/admin.md",
+        ".claude/rules/money-paths.md",
+        ".claude/skills/swift-audit/SKILL.md"
       ]
     },
     {

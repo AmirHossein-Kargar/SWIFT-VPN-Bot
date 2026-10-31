@@ -65,6 +65,7 @@ Redis connected (configuration: …)
 🚀 TRX Wallet Scanner Started
 ✔ HooshPay Recovery Cron Started
 ✔ NOWPayments Recovery Cron Started
+✔ Money Flow Sentinel Started
 ```
 
 Then:

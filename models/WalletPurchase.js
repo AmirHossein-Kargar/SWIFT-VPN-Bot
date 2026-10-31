@@ -156,5 +156,10 @@ walletPurchaseSchema.index({ telegramId: 1, createdAt: -1 }, { name: "idx_wallet
 walletPurchaseSchema.index({ recoveryStatus: 1, status: 1, createdAt: 1 }, { name: "idx_wallet_purchase_recovery_queue" });
 // Read-only lookup of recent completions for the user-spend sweeper (services/users/userSpendSweeper.js).
 walletPurchaseSchema.index({ status: 1, completedAt: 1, _id: 1 }, { name: "idx_wallet_purchase_completed_at" });
+// Refund feed of Money Flow Sentinel (docs/sentinel.md); only refunded orders are indexed.
+walletPurchaseSchema.index(
+  { refundedAt: 1 },
+  { name: "idx_sentinel_refunded", partialFilterExpression: { refundedAt: { $gt: new Date(0) } } },
+);
 
 export default mongoose.models.WalletPurchase || mongoose.model("WalletPurchase", walletPurchaseSchema);

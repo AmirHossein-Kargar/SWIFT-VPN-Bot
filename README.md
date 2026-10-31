@@ -16,6 +16,7 @@ over to the bot.
 | **Payments** | **HooshPay** online card-to-card, **NOWPayments** hosted TRON invoices. Every credit is signature-verified, idempotent and crash-safe ([details](docs/payments.md)) |
 | **Provisioning** | WizardXray API v1: create, status, change link, extend time/data, delete. Ambiguous results are never replayed; definitive failures refund exactly once |
 | **Admin** | Telegram panel and two web dashboards over one audited service layer: users, wallet credit/debit, block, per-user messages, VPN services, payments and recovery, plans, broadcasts, analytics, audit log ([details](docs/admin.md)) |
+| **Money Flow Sentinel** | Traces money from payment to service, reconciles every wallet against its ledger and explains each inconsistency. It never changes money ([details](docs/sentinel.md)) |
 | **Storefront** | Public Persian page with live plans, light/dark theme and an order review that continues in Telegram. There is no web checkout ([details](docs/storefront.md)) |
 | **Operations** | Health probes, structured logs, recovery crons, preflight script, opt-in mock-test harness |
 
@@ -161,7 +162,7 @@ are in [docs/operations.md](docs/operations.md).
 |---|---|
 | `bot.js`, `startBot.js`, `server.js` | Bot handlers, startup sequence, Express app |
 | `handlers/`, `keyboards/`, `messages/` | Telegram message and callback handling, menus, texts |
-| `paymentHandlers/`, `services/` | Payment flows and domain logic (`services/admin`, `hooshpay`, `nowpayments`, `buyService`, …) |
+| `paymentHandlers/`, `services/` | Payment flows and domain logic (`services/admin`, `hooshpay`, `nowpayments`, `buyService`, `sentinel`, …) |
 | `models/`, `config/`, `utils/`, `api/` | Mongoose models, environment and Redis setup, helpers, provider clients |
 | `web/` | Admin router, middleware, static dashboard, storefront assets and serving |
 | `admin-panel/` | Next.js admin dashboard served at `/panel` |
@@ -176,6 +177,7 @@ are in [docs/operations.md](docs/operations.md).
 | [docs/configuration.md](docs/configuration.md) | Every environment variable, aliases, secret handling |
 | [docs/payments.md](docs/payments.md) | Top-up methods, purchase flow, money-safety guarantees |
 | [docs/admin.md](docs/admin.md) | Admin surfaces, user actions, API reference, mock tests |
+| [docs/sentinel.md](docs/sentinel.md) | Money Flow Sentinel: data sources, reconciliation rules, anomaly catalog, safety controls, limits |
 | [docs/storefront.md](docs/storefront.md) | Routes, storefront build and serving, CSP, performance |
 | [docs/deployment.md](docs/deployment.md) | Railway, webhooks, health, scaling, troubleshooting |
 | [docs/operations.md](docs/operations.md) | Production checklist, alerts, recovery |

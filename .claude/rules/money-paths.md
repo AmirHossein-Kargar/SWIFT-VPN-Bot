@@ -32,6 +32,9 @@ change must never break. If a change needs to break one, stop and ask the owner.
 - **Catalog.** Checkout, storefront and quotes read plans from `AdminProduct` through `services/plans.js`.
 - **Indexes.** Unique indexes are part of the money guarantees. Changing a schema or index needs a migration path in
   `config/mongoIndexMigration.js` (or a documented reason it is safe) and Mongo-backed tests.
+- **Sentinel stays read-only and complete.** `services/sentinel` writes only `SentinelFinding` and its checkpoint, and reaches
+  money collections only through `readOnly.js`. A new balance writer or ledger key must be taught to `services/sentinel/ledger.js`
+  and `bundle.js` in the same change, or every affected wallet reports as drift. See `docs/sentinel.md`.
 - **Logging.** Log `errorType`/`code`/status only; never provider payloads, tokens, card numbers or full ids.
 
 Tests for these paths are Mongo-backed and skip without a disposable MongoDB; see
