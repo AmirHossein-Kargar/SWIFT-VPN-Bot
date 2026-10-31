@@ -7,6 +7,7 @@ import { StatusApi } from "../../api/wizardApi.js";
 import { createHooshPayClient } from "../hooshpay/hooshpayClient.js";
 import { readNowPaymentsConfig } from "../nowpayments/money.js";
 import { assertAdminUser } from "./authorization.js";
+import { observeJob, observePollingError } from "../reliability/telemetry.js";
 
 const CHECK_TIMEOUT_MS = 8_000;
 const CACHE_TTL_MS = 30_000;
@@ -125,6 +126,7 @@ const WEBHOOK_BACKLOG_DEGRADED = 100;
 let lastPollingError = null;
 
 export function recordPollingError({ status, code } = {}) {
+  observePollingError({ status: Number.isInteger(status) ? status : null });
   lastPollingError = {
     at: nowMs(),
     status: Number.isInteger(status) ? status : null,
@@ -229,8 +231,8 @@ async function checkTelegram() {
 // A wallet purchase moves through reserving -> reserved -> provisioning -> provisioned -> completed in seconds
 // (docs/reserved-orders.md), so a state only counts as a problem once it has outlived that normal window. Each time field
 // is paired with `createdAt` so an order with a null/missing marker is still caught instead of silently never matching.
-const STALE_ORDER_MS = 10 * 60_000;
-const SETTLE_MS = 2 * 60_000; // grace for delivery/alert/refund that normally finish within seconds
+export const ORDER_STALE_MS = 10 * 60_000;
+export const ORDER_SETTLE_MS = 2 * 60_000; // grace for delivery/alert/refund that normally finish within seconds
 
 /**
  * Wallet-purchase fulfilment backlog. Counts only, no customer data. A backlog is "degraded" (an admin has something to do)
@@ -243,8 +245,8 @@ async function checkOrderFulfillment() {
   const started = nowMs();
   try {
     if (mongoose.connection?.readyState !== 1) throw new Error("not connected");
-    const staleBefore = new Date(Date.now() - STALE_ORDER_MS);
-    const settledBefore = new Date(Date.now() - SETTLE_MS);
+    const staleBefore = new Date(Date.now() - ORDER_STALE_MS);
+    const settledBefore = new Date(Date.now() - ORDER_SETTLE_MS);
     const olderThan = (field, before) => ({ $or: [{ [field]: { $lt: before } }, { [field]: null, createdAt: { $lt: before } }] });
     const count = (filter) => withTimeout(WalletPurchase.countDocuments(filter), CHECK_TIMEOUT_MS, "order count");
     const [awaitingProvider, needsReview, refundPending, stalledProvisioning, ledgerStalled, deliveryPending, alertPending, oldest] = await Promise.all([
@@ -430,6 +432,7 @@ function webhookHealth() {
 let jobStats = {};
 
 export function recordJobRun(job, { ok, meta = {} } = {}) {
+  observeJob(job, { ok, skipped: meta?.skipped ?? null });
   jobStats[job] = {
     lastRunAt: new Date().toISOString(),
     ok: Boolean(ok),

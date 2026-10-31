@@ -94,6 +94,29 @@
       ]
     },
     {
+      "id": "reliability",
+      "impact": "high",
+      "summary": "Service Reliability Center: telemetry, health derivation, incidents, the event stream and its panel section",
+      "globs": [
+        "services/reliability/**",
+        "services/admin/reliability.js",
+        "models/ReliabilityEvent.js",
+        "models/ReliabilityIncident.js",
+        "models/ReliabilityRollup.js",
+        "admin-panel/app/(app)/reliability/**",
+        "admin-panel/components/reliability/**",
+        "admin-panel/components/shared/scene-motion.tsx",
+        "admin-panel/lib/reliability.ts"
+      ],
+      "review": [
+        "docs/reliability.md",
+        "docs/admin.md",
+        "docs/operations.md",
+        ".claude/rules/money-paths.md",
+        ".claude/skills/swift-audit/SKILL.md"
+      ]
+    },
+    {
       "id": "catalog",
       "impact": "high",
       "summary": "AdminProduct catalog that drives checkout, storefront and quotes",

@@ -10,7 +10,7 @@
 import SentinelFinding, { FINDING_CLASSIFICATIONS, FINDING_REVIEWS, FINDING_SEVERITIES } from "../../models/SentinelFinding.js";
 import { AdminServiceError, assertAdminUser } from "./authorization.js";
 import { runAuditedAction } from "./audit.js";
-import { parsePagination, requireReason, requireTelegramId } from "./validation.js";
+import { filterDate as date, filterMatching as matching, filterOneOf as oneOf, filterText as text, invalidFilter as invalid, parsePagination, requireReason, requireTelegramId } from "./validation.js";
 import { FINDING_CATALOG, readSentinelConfig } from "../sentinel/constants.js";
 import { explainFinding } from "../sentinel/explain.js";
 import { REVIEW_TRANSITIONS, recordReview } from "../sentinel/findingsStore.js";
@@ -27,44 +27,11 @@ const OBJECT_ID = /^[0-9a-f]{24}$/i;
 const PAY_CURRENCY = /^[a-z0-9]{2,16}$/;
 const MAX_AMOUNT = 100_000_000_000;
 
-function invalid(code, message = "One of the filters is not valid.") {
-  return new AdminServiceError(message, { status: 400, code });
-}
-
-/** Repeated or nested query parameters arrive as arrays or objects; only a plain string is a value. */
-function text(value, code) {
-  if (value == null || value === "") return null;
-  if (typeof value !== "string") throw invalid(code);
-  return value.trim() || null;
-}
-
-function oneOf(value, allowed, code, fallback = null) {
-  const parsed = text(value, code);
-  if (parsed == null) return fallback;
-  if (!allowed.includes(parsed)) throw invalid(code);
-  return parsed;
-}
-
 function amount(value, code) {
   const parsed = text(value, code);
   if (parsed == null) return null;
   if (!/^\d{1,12}$/.test(parsed) || Number(parsed) > MAX_AMOUNT) throw invalid(code);
   return Number(parsed);
-}
-
-function matching(value, pattern, code) {
-  const parsed = text(value, code);
-  if (parsed == null) return null;
-  if (!pattern.test(parsed)) throw invalid(code);
-  return parsed;
-}
-
-function date(value, code) {
-  const parsed = text(value, code);
-  if (parsed == null) return null;
-  const when = new Date(parsed);
-  if (parsed.length > 40 || Number.isNaN(when.getTime())) throw invalid(code);
-  return when;
 }
 
 function userFilter(value) {

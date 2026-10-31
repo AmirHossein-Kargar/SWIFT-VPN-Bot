@@ -1,4 +1,5 @@
 import HooshPayInvoice from "../../models/HooshPayInvoice.js";
+import { observeJob } from "../reliability/telemetry.js";
 import NowPaymentsInvoice from "../../models/NowPaymentsInvoice.js";
 import PaymentTombstone from "../../models/PaymentTombstone.js";
 import { acquireRedisLease, releaseRedisLease } from "../redisLease.js";
@@ -169,7 +170,9 @@ export async function runInvoiceCleanup(options = {}) {
 let timer = null;
 export function startInvoiceCleanupCron({ intervalMs = 60 * 60 * 1000, run = runInvoiceCleanup } = {}) {
   if (timer) return timer;
-  const tick = () => run().catch((error) => log("error", "Invoice cleanup failed", { errorType: error?.name || "Error" }));
+  const tick = () => run()
+    .then((summary) => { observeJob("invoice-cleanup", { ok: true, skipped: summary?.skipped ? summary.reason : null }); return summary; })
+    .catch((error) => { observeJob("invoice-cleanup", { ok: false }); log("error", "Invoice cleanup failed", { errorType: error?.name || "Error" }); });
   timer = setInterval(tick, intervalMs);
   timer.unref?.();
   setTimeout(tick, 60_000).unref?.();

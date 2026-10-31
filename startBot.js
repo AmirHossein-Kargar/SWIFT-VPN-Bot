@@ -11,6 +11,8 @@ import { startNowPaymentsRecoveryCron, stopNowPaymentsRecoveryCron } from "./ser
 import { startInvoiceCleanupCron, stopInvoiceCleanupCron } from "./services/payments/invoiceCleanup.js";
 import { startUserSpendSweeper, stopUserSpendSweeper } from "./services/users/userSpendSweeper.js";
 import { startSentinelCron, stopSentinelCron } from "./services/sentinel/reconciler.js";
+import { observeTelegramUpdate } from "./services/reliability/telemetry.js";
+import { startReliabilityCron, stopReliabilityCron } from "./services/reliability/queries.js";
 import mongoose from "mongoose";
 import { connectRedis, closeRedis } from "./config/redisClient.js";
 import { seedDefaultProducts } from "./services/plans.js";
@@ -186,6 +188,10 @@ export default async function startBot() {
     }));
   });
 
+  // Counts only, for the Service Reliability Center. The handlers that act on updates are registered in bot.js.
+  bot.on("message", observeTelegramUpdate);
+  bot.on("callback_query", observeTelegramUpdate);
+
   // Register the instance before an incoming signed callback can be processed.
   setBotInstance(bot);
   try {
@@ -251,6 +257,13 @@ export default async function startBot() {
     console.error("\x1b[31m%s\x1b[0m", "❌ Failed to start Money Flow Sentinel:", error?.name || "Error");
   }
 
+  // 6d. Service Reliability Center: one bounded monitor in this process, on its own timer. Disable with RELIABILITY_ENABLED=off.
+  try {
+    if (startReliabilityCron()) console.log("\x1b[32m%s\x1b[0m", "✔ Service Reliability Center Started");
+  } catch (error) {
+    console.error("\x1b[31m%s\x1b[0m", "❌ Failed to start Service Reliability Center:", error?.name || "Error");
+  }
+
   // 7. Graceful shutdown — SIGTERM (Railway) + SIGINT (Ctrl-C)
   let shuttingDown = false;
 
@@ -296,6 +309,13 @@ export default async function startBot() {
       stopSentinelCron();
     } catch (e) {
       console.error("⚠️  Sentinel stop error:", e?.name || "Error");
+    }
+
+    // Before the HTTP server closes: server.close() waits for open responses, and a live stream never ends by itself.
+    try {
+      await stopReliabilityCron();
+    } catch (e) {
+      console.error("⚠️  Service Reliability stop error:", e?.name || "Error");
     }
 
     // 7d. Close Express HTTP server

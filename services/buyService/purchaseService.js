@@ -8,6 +8,7 @@ import {
   refundPurchaseReservation,
   reserveBalance,
 } from "./purchaseLedger.js";
+import { withTelemetryContext } from "../reliability/telemetry.js";
 
 const USERNAME_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;
 const HASH_PATTERN = /^[A-Za-z0-9_-]{1,256}$/;
@@ -431,7 +432,7 @@ export async function purchasePlan(
 export async function runProviderCreation({ purchaseModel, userModel, createService, provisioning, plan, purchaseId, telegramId }) {
   let providerService;
   try {
-    const apiResponse = await createService(plan.gig, plan.days, 0);
+    const apiResponse = await withTelemetryContext({ orderKey: `wallet:${purchaseId}` }, () => createService(plan.gig, plan.days, 0));
     providerService = normalizeProvisioningResponse(apiResponse);
   } catch (error) {
     const errorCode = safeErrorCode(error, error?.ambiguous ? "PANEL_RESULT_UNKNOWN" : "PROVIDER_REJECTED");

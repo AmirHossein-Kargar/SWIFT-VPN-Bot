@@ -67,6 +67,9 @@ malformed.
 | `SENTINEL_STUCK_MINUTES` | `30` (5–10080) | When an intermediate payment or order state counts as stuck |
 | `SENTINEL_AWAITING_PROVIDER_HOURS` | `24` (1–720) | When waiting on the provider is reported |
 | `SENTINEL_LEDGER_EPOCH` | `2026-10-05T00:00:00.000Z` | Records older than this may predate the wallet ledger, so they can never produce a confirmed balance finding. An out-of-range `SENTINEL_*` value falls back to its default |
+| `RELIABILITY_ENABLED` | on | `off` stops the [Service Reliability Center](reliability.md) monitor; the panel then reads Unknown, never healthy |
+| `RELIABILITY_INTERVAL_SECONDS` | `30` (10–300) | How often the monitor pings MongoDB and Redis and re-evaluates incidents |
+| `RELIABILITY_PROBE_SECONDS` | `60` (30–600) | How often it calls Telegram and WizardXray and reads the order records. An out-of-range `RELIABILITY_*` value falls back to its default |
 | `ADMIN_PENDING_DELETE_MIN_HOURS` | `72` (minimum `24`) | Minimum age before the admin panel may delete a still-pending or expired top-up record; see [Deleting payment records](admin.md#deleting-payment-records-admin-panel) |
 | `SUPPORT_CONTACT` | empty | Support contact shown to users (`@username` or numeric ID). If empty, the direct-support buttons are hidden |
 | `SUPPORT_TERMS_URL` | empty | https URL of the terms page, shown as a button before a support ticket is created. Ignored unless https |

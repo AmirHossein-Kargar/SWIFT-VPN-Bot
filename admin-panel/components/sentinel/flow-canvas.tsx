@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef } from "react";
 
+import { EdgeParticles, useInView, useSceneTilt } from "@/components/shared/scene-motion";
 import { useReducedMotion } from "@/lib/use-reduced-motion";
-import { buildFlowGraph, SEVERITY_LABEL, type FlowEdge, type FlowNode, type FlowNodeId, type SentinelFlow } from "@/lib/sentinel";
+import { buildFlowGraph, SEVERITY_LABEL, type FlowNode, type FlowNodeId, type SentinelFlow } from "@/lib/sentinel";
 import { cn, formatNumber, formatToman } from "@/lib/utils";
 
 const VIEW_W = 1000;
@@ -21,41 +22,8 @@ export function FlowCanvas({ flow, selected, onSelect }: { flow: SentinelFlow; s
   const reducedMotion = useReducedMotion();
   const { nodes, edges } = buildFlowGraph(flow);
   const scene = useRef<HTMLDivElement>(null);
-  const [visible, setVisible] = useState(true);
-
-  useEffect(() => {
-    const element = scene.current;
-    if (!element || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver(([entry]) => setVisible(entry?.isIntersecting ?? true), { threshold: 0.05 });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    const element = scene.current;
-    if (!element || reducedMotion || !window.matchMedia("(pointer: fine)").matches) return;
-    let frame = 0;
-    const onMove = (event: PointerEvent) => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        const box = element.getBoundingClientRect();
-        element.style.setProperty("--mf-tilt-x", `${(((event.clientY - box.top) / box.height - 0.5) * -3).toFixed(2)}deg`);
-        element.style.setProperty("--mf-tilt-y", `${(((event.clientX - box.left) / box.width - 0.5) * 3).toFixed(2)}deg`);
-      });
-    };
-    const onLeave = () => {
-      cancelAnimationFrame(frame);
-      element.style.setProperty("--mf-tilt-x", "0deg");
-      element.style.setProperty("--mf-tilt-y", "0deg");
-    };
-    element.addEventListener("pointermove", onMove);
-    element.addEventListener("pointerleave", onLeave);
-    return () => {
-      cancelAnimationFrame(frame);
-      element.removeEventListener("pointermove", onMove);
-      element.removeEventListener("pointerleave", onLeave);
-    };
-  }, [reducedMotion]);
+  const visible = useInView(scene);
+  useSceneTilt(scene, reducedMotion);
 
   return (
     <div className="mf-stage" ref={scene} data-paused={visible ? undefined : "true"}>
@@ -76,74 +44,11 @@ export function FlowCanvas({ flow, selected, onSelect }: { flow: SentinelFlow; s
             <path key={edge.id} d={edge.path} className="mf-edge" data-active={edge.count > 0 ? "true" : undefined} data-tone={edge.tone} style={{ strokeWidth: edgeWidth(edge.count) }} />
           ))}
         </svg>
-        {reducedMotion ? null : <Particles edges={edges} paused={!visible} />}
+        {reducedMotion ? null : <EdgeParticles edges={edges} paused={!visible} width={VIEW_W} height={VIEW_H} />}
         {nodes.map((node) => <FlowNodeButton key={node.id} node={node} selected={selected === node.id} onSelect={onSelect} />)}
       </div>
     </div>
   );
-}
-
-const FRAMES = 32;
-
-/**
- * Dots that follow the real edge paths without touching the main thread: each path is sampled once into transform
- * keyframes, which the compositor runs by itself. They are rebuilt only when the edges or the size change.
- */
-function Particles({ edges, paused }: { edges: FlowEdge[]; paused: boolean }) {
-  const layer = useRef<HTMLDivElement>(null);
-  const animations = useRef<Animation[]>([]);
-  const signature = edges.map((edge) => `${edge.id}:${edge.particles}`).join();
-  const latest = useRef(edges);
-  latest.current = edges;
-
-  useEffect(() => {
-    const element = layer.current;
-    if (!element) return;
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    const build = () => {
-      animations.current.forEach((animation) => animation.cancel());
-      animations.current = [];
-      element.replaceChildren();
-      const scaleX = element.offsetWidth / VIEW_W;
-      const scaleY = element.offsetHeight / VIEW_H;
-      if (!scaleX || !scaleY) return;
-      for (const edge of latest.current) {
-        if (!edge.particles) continue;
-        path.setAttribute("d", edge.path);
-        const length = path.getTotalLength();
-        const keyframes = Array.from({ length: FRAMES + 1 }, (_, index) => {
-          const progress = index / FRAMES;
-          const point = path.getPointAtLength(length * progress);
-          return { offset: progress, opacity: Math.min(1, progress / 0.08, (1 - progress) / 0.08), transform: `translate(${(point.x * scaleX).toFixed(1)}px, ${(point.y * scaleY).toFixed(1)}px)` };
-        });
-        const duration = 2400 + length * 5;
-        for (let index = 0; index < edge.particles; index += 1) {
-          const dot = document.createElement("span");
-          dot.className = "mf-particle";
-          dot.dataset.tone = edge.tone;
-          element.append(dot);
-          animations.current.push(dot.animate(keyframes, { duration, iterations: Infinity, delay: (-duration * index) / edge.particles }));
-        }
-      }
-    };
-    build();
-    const resize = new ResizeObserver(build);
-    resize.observe(element);
-    return () => {
-      resize.disconnect();
-      animations.current.forEach((animation) => animation.cancel());
-      animations.current = [];
-    };
-  }, [signature]);
-
-  useEffect(() => {
-    for (const animation of animations.current) {
-      if (paused) animation.pause();
-      else animation.play();
-    }
-  }, [paused, signature]);
-
-  return <div ref={layer} className="mf-particles" aria-hidden />;
 }
 
 function FlowNodeButton({ node, selected, onSelect }: { node: FlowNode; selected: boolean; onSelect: (id: FlowNodeId | null) => void }) {

@@ -1,4 +1,5 @@
 import axios from "axios";
+import { observeProvider } from "../reliability/telemetry.js";
 
 const DEFAULT_BASE_URL = "https://hooshpay.xyz/api/v1";
 const TIMEOUT_MS = 15_000;
@@ -54,10 +55,13 @@ function normalizeError(operation, error) {
 
 async function request(operation, method, path, data) {
   const client = createHooshPayClient();
+  const started = Date.now();
   try {
     const response = await client.request({ method, url: path, data });
+    observeProvider("provider.hooshpay", { operation, ms: Date.now() - started });
     return response.data;
   } catch (error) {
+    observeProvider("provider.hooshpay", { operation, ms: Date.now() - started, error });
     throw normalizeError(operation, error);
   }
 }

@@ -66,6 +66,7 @@ Redis connected (configuration: …)
 ✔ HooshPay Recovery Cron Started
 ✔ NOWPayments Recovery Cron Started
 ✔ Money Flow Sentinel Started
+✔ Service Reliability Center Started
 ```
 
 Then:

@@ -1,4 +1,5 @@
 import axios from "axios";
+import { observeProvider } from "../reliability/telemetry.js";
 import { NowPaymentsFlowError } from "./money.js";
 
 export class NowPaymentsApiError extends Error {
@@ -81,6 +82,7 @@ export function createNowPaymentsRequest({
     if (data !== undefined) headers["Content-Type"] = "application/json";
 
     const normalizedPath = String(path || "").startsWith("/") ? String(path) : `/${String(path || "")}`;
+    const started = Date.now();
     try {
       const response = await transport({
         method,
@@ -92,12 +94,15 @@ export function createNowPaymentsRequest({
         maxBodyLength: 1_048_576,
         validateStatus: () => true,
       });
+      const failed = response.status >= 500 || response.status === 408;
+      observeProvider("provider.nowpayments", { operation: `${method} request`, ms: Date.now() - started, error: failed ? { code: `http_${response.status}` } : null });
       return {
         status: response.status,
         data: response.data,
         ...providerDetails(response.data, secrets),
       };
     } catch (error) {
+      observeProvider("provider.nowpayments", { operation: `${method} request`, ms: Date.now() - started, error });
       const status = Number.isInteger(error?.response?.status) ? error.response.status : undefined;
       const details = providerDetails(error?.response?.data, secrets);
       const wrapped = new NowPaymentsApiError("transport", {

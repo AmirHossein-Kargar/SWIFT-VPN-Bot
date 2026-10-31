@@ -1,4 +1,5 @@
 import User from "../../models/User.js";
+import { observeDelivery } from "../reliability/telemetry.js";
 import WalletPurchase from "../../models/WalletPurchase.js";
 import { getSuccessServiceMessage, guideButtons } from "../../messages/staticMessages.js";
 import escapeHtml from "../../utils/escapeHtml.js";
@@ -316,8 +317,10 @@ async function notifyPurchaseOnce(purchase, bot, user) {
       { _id: claim._id, notificationClaimedAt: now, notificationPending: true },
       { $set: { notificationPending: false, notifiedAt: new Date() }, $unset: { notificationClaimedAt: 1 } }
     );
+    observeDelivery({ orderKey: `wallet:${claim.purchaseId}`, ok: true, ms: Date.now() - now.getTime() });
     return true;
   } catch (error) {
+    observeDelivery({ orderKey: `wallet:${claim.purchaseId}`, ok: false, code: error?.name });
     // Bounded retries with exponential backoff: delivery stays eventual (the service already exists and is never
     // recreated), but a blocked chat cannot be hammered every recovery cycle. After the cap it stays visible in the
     // admin recovery queue as "delivery-notification-pending".

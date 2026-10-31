@@ -21,10 +21,12 @@ import { serveAdminSpa, notFoundHandler } from "./web/spa.js";
 import { nextAdminMiddleware } from "./web/nextAdminMiddleware.js";
 import { handleNowPaymentsIpn } from "./services/nowpayments/ipnHandler.js";
 import { findTombstone, recordLateEvent } from "./services/payments/invoiceCleanup.js";
+import { observeRequests, observeWebhook } from "./services/reliability/telemetry.js";
 
 const app = express();
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
+app.use(observeRequests);
 
 export const MAX_PAYLOAD_BYTES = 64 * 1024;
 const RATE_WINDOW_MS = 60_000;
@@ -327,6 +329,7 @@ export async function handleHooshWebhook(req, res) {
   }
 }
 
+app.use("/api/hooshpay/webhook", observeWebhook("hooshpay"));
 app.post("/api/hooshpay/webhook", handleHooshWebhook);
 
 export async function handleNowPaymentsWebhook(req, res) {
@@ -338,6 +341,7 @@ export async function handleNowPaymentsWebhook(req, res) {
   return handleNowPaymentsIpn(req, res, { requestId: reqId });
 }
 
+app.use("/api/nowpayments/ipn", observeWebhook("nowpayments"));
 app.post("/api/nowpayments/ipn", handleNowPaymentsWebhook);
 
 app.get("/health", (_req, res) => {
