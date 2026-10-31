@@ -181,6 +181,12 @@ describe("HTML security headers (clickjacking and caching)", () => {
     }
   });
 
+  test("fonts are cached for a month: only a hand-replaced file ever changes them", async () => {
+    const font = await call("GET", "/store/fonts/vazirmatn-arabic-wght-normal.woff2");
+    assert.equal(font.status, 200);
+    assert.equal(font.headers.get("cache-control"), "public, max-age=2592000");
+  });
+
   test("the storefront uses the official brand kit and no off-brand blue/purple palette", async () => {
     for (const path of ["/brand/logo-horizontal.svg", "/brand/logo-horizontal-on-dark.svg", "/brand/logo-stacked.svg", "/favicon.ico", "/apple-touch-icon.png", "/og-image.png", "/site.webmanifest"]) {
       assert.equal((await call("GET", path)).status, 200, path);

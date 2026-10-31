@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 /**
  * Everything here describes what the bot does today (paymentHandlers/payHoosh.js for card-to-card,
  * paymentHandlers/payNowPayments.js for crypto). The steps and images come from lib/topup-guide.json, which
- * tests/unit/topupGuide.test.js pins to the bot's source. Images are labelled illustrations with placeholder values.
+ * tests/unit/topupGuide.test.js pins to the bot's source. Images are illustrations with masked placeholder values.
  */
 export interface GuideStep { id: string; label: string; kind: string; title: string; text: string; caption: string; alt: string }
 
@@ -21,6 +21,20 @@ const loadLightbox = () => import("@/components/guide-lightbox").then((module) =
 const GuideLightbox = dynamic(loadLightbox, { ssr: false });
 
 export const guideImage = (step: GuideStep) => `/store/guide/${step.id}.webp`;
+
+/** A tinted skeleton holds the frame until the image arrives. Checked after mount, because a cached image fires no load event; without JavaScript the image simply shows. */
+function GuideImage({ step }: { step: GuideStep }) {
+  const imageRef = useRef<HTMLImageElement>(null);
+  const [waiting, setWaiting] = useState(false);
+  useEffect(() => { if (!imageRef.current?.complete) setWaiting(true); }, []);
+  return (
+    <>
+      {waiting ? <span aria-hidden="true" className="skeleton absolute inset-0" /> : null}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img ref={imageRef} src={guideImage(step)} alt={step.alt} width={400} height={500} loading="lazy" decoding="async" onLoad={() => setWaiting(false)} onError={() => setWaiting(false)} className={cn("size-full object-cover transition-opacity duration-300", waiting && "opacity-0")} />
+    </>
+  );
+}
 
 function StepFlow({ steps, label }: { steps: GuideStep[]; label: string }) {
   const [current, setCurrent] = useState(0);
@@ -43,10 +57,11 @@ function StepFlow({ steps, label }: { steps: GuideStep[]; label: string }) {
     const from = nav.getBoundingClientRect();
     const to = active.getBoundingClientRect();
     nav.scrollBy({ left: to.left + to.width / 2 - (from.left + from.width / 2) });
-    // The next image is usually wanted right away; hidden lazy images would otherwise only start loading on arrival.
+    // Once someone is walking through the steps the next image is usually wanted right away. Not before: both guides
+    // mount at page load, and a visitor who never opens them should not pay for their images.
     const next = steps[current + 1];
-    if (next) new Image().src = guideImage(next);
-  }, [current, steps]);
+    if (next && direction) new Image().src = guideImage(next);
+  }, [current, direction, steps]);
 
   const closeLightbox = () => {
     setEnlarged(false);
@@ -107,8 +122,7 @@ function StepFlow({ steps, label }: { steps: GuideStep[]; label: string }) {
                 onClick={() => setEnlarged(true)}
                 className="press group relative block aspect-[4/5] w-full max-w-[360px] overflow-hidden rounded-2xl border border-border-strong bg-secondary max-md:mx-auto"
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={guideImage(step)} alt={step.alt} width={400} height={500} loading="lazy" decoding="async" className="size-full object-cover" />
+                <GuideImage step={step} />
                 <span className="glass absolute bottom-2.5 end-2.5 inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[12px] font-bold text-foreground transition-transform group-hover:scale-105">
                   <Maximize2 className="size-3.5" aria-hidden="true" />بزرگ‌نمایی تصویر
                 </span>

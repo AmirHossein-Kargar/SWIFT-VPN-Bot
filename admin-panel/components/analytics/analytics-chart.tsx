@@ -42,7 +42,7 @@ export default function AnalyticsChart({ series }: { series: AnalyticsReport["se
               type="button"
               aria-pressed={on}
               onClick={() => toggle(entry.key)}
-              className={cn("inline-flex items-center gap-2 rounded-md border border-border px-2 py-1 text-xs transition-[opacity,background-color] duration-150 hover:bg-accent", !on && "opacity-55")}
+              className={cn("inline-flex h-8 items-center gap-2 rounded-md border border-border px-3 text-xs transition-[opacity,background-color] duration-150 hover:bg-accent", !on && "opacity-55")}
             >
               <SeriesKey color={entry.color} dashed={entry.dashed} />
               <span>{entry.label}</span>

@@ -207,7 +207,7 @@ export function TicketWorkspace({ initial }: { initial: WorkspaceInitial }) {
           </div>
           <TicketsFilters filters={filters} search={search} onSearchChange={onSearchChange} onChange={updateFilters} />
           <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" variant={selectMode ? "secondary" : "outline"} className="h-8 text-xs" onClick={() => (selectMode ? leaveSelectMode() : setSelectMode(true))}>
+            <Button size="sm" variant={selectMode ? "secondary" : "outline"} onClick={() => (selectMode ? leaveSelectMode() : setSelectMode(true))}>
               {selectMode ? "Cancel selection" : "Select to delete"}
             </Button>
             {list?.canClearHistory ? <ClearHistoryControl onCleared={() => { leaveSelectMode(); select(null); trigger(); }} /> : null}
@@ -216,8 +216,8 @@ export function TicketWorkspace({ initial }: { initial: WorkspaceInitial }) {
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
               <span>{selectedIds.length} selected (max {MAX_BULK_SELECT}) · only tickets closed over 72 hours ago can be ticked</span>
               <span className="flex gap-2">
-                <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setChecked(new Set([...deletableIds].slice(0, MAX_BULK_SELECT)))} disabled={deletableIds.size === 0}>Select all deletable</Button>
-                <Button size="sm" variant="destructive" className="h-7 text-xs" disabled={selectedIds.length === 0} onClick={() => setBulkOpen(true)}>Delete selected</Button>
+                <Button size="sm" variant="ghost" onClick={() => setChecked(new Set([...deletableIds].slice(0, MAX_BULK_SELECT)))} disabled={deletableIds.size === 0}>Select all deletable</Button>
+                <Button size="sm" variant="destructive" disabled={selectedIds.length === 0} onClick={() => setBulkOpen(true)}>Delete selected</Button>
               </span>
             </div>
           ) : null}

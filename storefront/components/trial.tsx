@@ -1,4 +1,4 @@
-import { CalendarCheck, Gift, MessageCircleQuestion, QrCode, Send, UserCheck } from "lucide-react";
+import { CalendarCheck, Gift, LoaderCircle, MessageCircleQuestion, QrCode, Send, UserCheck } from "lucide-react";
 
 import { buttonVariants } from "@/components/ui/button";
 import { Container } from "@/components/site-chrome";
@@ -48,7 +48,7 @@ export function Trial({ botUrl, loading }: { botUrl: string | null; loading: boo
                 {botUrl ? (
                   <a href={botUrl} target="_blank" rel="noopener" className={cn(buttonVariants({ size: "lg" }), "press")}><Send aria-hidden="true" />دریافت سرویس تست رایگان</a>
                 ) : (
-                  <span className={cn(buttonVariants({ size: "lg" }), "opacity-55")} aria-disabled="true">{loading ? "در حال آماده‌سازی لینک ربات…" : "ربات در حال حاضر در دسترس نیست"}</span>
+                  <span className={cn(buttonVariants({ size: "lg" }), "opacity-55")} aria-disabled="true">{loading ? <><LoaderCircle className="animate-spin" aria-hidden="true" />در حال آماده‌سازی لینک ربات…</> : "ربات در حال حاضر در دسترس نیست"}</span>
                 )}
                 <a href="#devices" className={cn(buttonVariants({ size: "lg", variant: "outline" }), "press")}>راهنمای اتصال</a>
               </div>

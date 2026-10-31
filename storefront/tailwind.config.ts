@@ -34,6 +34,7 @@ const config: Config = {
         brand: token("brand"),
         faint: token("faint"),
         alt: token("alt"),
+        overlay: token("overlay"),
       },
       borderRadius: { lg: "var(--radius)", md: "calc(var(--radius) - 4px)", sm: "calc(var(--radius) - 8px)" },
       maxWidth: { page: "1180px" },

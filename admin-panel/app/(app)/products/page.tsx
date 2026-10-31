@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { ProgressLink } from "@/components/shared/progress-link";
 
 import { adminApiGet } from "@/lib/adminApi.server";
 import type { AdminProductPage } from "@/lib/types";
@@ -43,9 +43,9 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
   return (
     <div className="space-y-4">
       <nav aria-label="VPN sections" className="flex gap-2">
-        <Link href="/vpns" className={buttonVariants({ variant: "outline", size: "sm" })}>Local services</Link>
-        <Link href="/vpns/remote" className={buttonVariants({ variant: "outline", size: "sm" })}>Remote clients</Link>
-        <Link href="/products" aria-current="page" className={buttonVariants({ variant: "default", size: "sm" })}>Service catalog</Link>
+        <ProgressLink href="/vpns" className={buttonVariants({ variant: "outline", size: "sm" })}>Local services</ProgressLink>
+        <ProgressLink href="/vpns/remote" className={buttonVariants({ variant: "outline", size: "sm" })}>Remote clients</ProgressLink>
+        <ProgressLink href="/products" aria-current="page" className={buttonVariants({ variant: "default", size: "sm" })}>Service catalog</ProgressLink>
       </nav>
       <Card>
         <CardHeader>
@@ -66,7 +66,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
             <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm">
               <p className="font-medium">Could not load the service catalog.</p>
               <p className="mt-1 text-muted-foreground">{failure}</p>
-              <Link href="/products" className={buttonVariants({ variant: "outline", size: "sm", className: "mt-3" })}>Try again</Link>
+              <ProgressLink href="/products" className={buttonVariants({ variant: "outline", size: "sm", className: "mt-3" })}>Try again</ProgressLink>
             </div>
           )}
         </CardContent>

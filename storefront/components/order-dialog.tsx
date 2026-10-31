@@ -73,7 +73,7 @@ export function OrderDialog({ plan, catalog, onClose, onGone }: { plan: StorePla
         <DialogDescription className="px-5 pt-3.5">مبلغ نهایی هنگام تأیید سفارش در ربات دوباره روی سرور محاسبه و از کیف پول شما کسر می‌شود.</DialogDescription>
         <div className="grid gap-2.5 p-5">
           {/* Keyed by outcome so each result fades in, and the row keeps its height so the dialog does not jump. */}
-          <div key={check.kind} className="animate-rise grid min-h-[52px] gap-2.5">
+          <div key={check.kind} className="animate-rise grid min-h-12 gap-2.5">
             {check.kind === "checking" ? (
               <Button size="lg" className="w-full" disabled aria-disabled="true"><LoaderCircle className="animate-spin" aria-hidden="true" />در حال بررسی موجودی پلن…</Button>
             ) : null}

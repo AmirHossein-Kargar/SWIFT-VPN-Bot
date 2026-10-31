@@ -15,6 +15,7 @@ Architecture, features and the repository layout are in `README.md`; do not repe
 | Admin surfaces and `/api/admin` | `docs/admin.md` |
 | Support tickets | `docs/support.md` |
 | Storefront build, routes, CSP | `docs/storefront.md` |
+| Colour palette, scrollbars, skeletons for both Next apps | `design/theme.css` |
 | Deployment, health checks, scaling | `docs/deployment.md`, `docs/operations.md`, `DEPLOYMENT_CHECKLIST.md` |
 | Test suites and prerequisites | `docs/testing.md` |
 | Sensitive-data policy | `docs/privacy.md` |

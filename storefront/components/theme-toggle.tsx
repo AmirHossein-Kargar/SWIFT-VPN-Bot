@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { storageSet } from "@/lib/format";
 import { THEME_STORAGE_KEY } from "@/lib/store";
 
-const THEME_COLOR = { light: "#FAFAFA", dark: "#0B0F0D" } as const;
+const THEME_COLOR = { light: "#F2F8F5", dark: "#0B0F0D" } as const;
 
 /**
  * The first paint theme is applied by the external /store/theme-init.js (the
@@ -23,8 +23,8 @@ export function toggleTheme() {
 export function ThemeToggle() {
   return (
     <Button variant="outline" size="icon" aria-label="تغییر پوسته (روشن/تیره)" title="تغییر پوسته" onClick={toggleTheme}>
-      <Sun className="hidden size-[19px] dark:block" />
-      <Moon className="size-[19px] dark:hidden" />
+      <Sun className="theme-icon hidden size-[19px] dark:block" />
+      <Moon className="theme-icon size-[19px] dark:hidden" />
     </Button>
   );
 }

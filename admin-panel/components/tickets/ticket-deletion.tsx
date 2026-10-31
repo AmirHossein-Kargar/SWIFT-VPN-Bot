@@ -70,7 +70,6 @@ export function TicketDeleteControl({ ticket, onDeleted }: { ticket: TicketSumma
       <Button
         size="sm"
         variant="outline"
-        className="h-8 text-xs"
         disabled={!ticket.deletable}
         title={deletionNote(ticket)}
         onClick={() => { setError(null); setOpen(true); }}
@@ -206,7 +205,7 @@ export function ClearHistoryControl({ onCleared }: { onCleared: () => void }) {
 
   return (
     <>
-      <Button size="sm" variant="outline" className="h-8 border-destructive/50 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => { setError(null); setPhrase(""); setOpen(true); }}>
+      <Button size="sm" variant="outline" className="border-destructive/50 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => { setError(null); setPhrase(""); setOpen(true); }}>
         <Trash2 /> Clear All Ticket History
       </Button>
       <AlertDialog open={open} onOpenChange={(next) => { if (!busy) setOpen(next); }}>

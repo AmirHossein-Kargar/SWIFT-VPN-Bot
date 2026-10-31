@@ -182,11 +182,11 @@ export function ProductsTable({
                     {canReorder ? (
                       <TableCell>
                         <div className="flex items-center gap-0.5">
-                          <Button variant="ghost" size="icon" className="h-6 w-6" disabled={busyId !== null || (index === 0 && !searchParams.get("page"))} onClick={() => move(product, "up")} aria-label={`Move ${product.name} up`}>
-                            <ArrowUp className="h-3.5 w-3.5" />
+                          <Button variant="ghost" size="icon-sm" disabled={busyId !== null || (index === 0 && !searchParams.get("page"))} onClick={() => move(product, "up")} aria-label={`Move ${product.name} up`}>
+                            <ArrowUp />
                           </Button>
-                          <Button variant="ghost" size="icon" className="h-6 w-6" disabled={busyId !== null} onClick={() => move(product, "down")} aria-label={`Move ${product.name} down`}>
-                            <ArrowDown className="h-3.5 w-3.5" />
+                          <Button variant="ghost" size="icon-sm" disabled={busyId !== null} onClick={() => move(product, "down")} aria-label={`Move ${product.name} down`}>
+                            <ArrowDown />
                           </Button>
                         </div>
                       </TableCell>

@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { ProgressLink } from "@/components/shared/progress-link";
 
 import { adminApiGet } from "@/lib/adminApi.server";
 import { AdminApiError } from "@/lib/types";
@@ -33,9 +33,9 @@ export default async function RemoteClientsPage() {
   return (
     <div className="space-y-4">
       <nav aria-label="VPN sections" className="flex gap-2">
-        <Link href="/vpns" className={buttonVariants({ variant: "outline", size: "sm" })}>Local services</Link>
-        <Link href="/vpns/remote" aria-current="page" className={buttonVariants({ variant: "default", size: "sm" })}>Remote clients</Link>
-        <Link href="/products" className={buttonVariants({ variant: "outline", size: "sm" })}>Service catalog</Link>
+        <ProgressLink href="/vpns" className={buttonVariants({ variant: "outline", size: "sm" })}>Local services</ProgressLink>
+        <ProgressLink href="/vpns/remote" aria-current="page" className={buttonVariants({ variant: "default", size: "sm" })}>Remote clients</ProgressLink>
+        <ProgressLink href="/products" className={buttonVariants({ variant: "outline", size: "sm" })}>Service catalog</ProgressLink>
       </nav>
       <Card>
         <CardHeader>

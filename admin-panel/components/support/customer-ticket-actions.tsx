@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 
-import Link from "next/link";
+import { ProgressLink } from "@/components/shared/progress-link";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -73,7 +73,7 @@ export function CustomerTicketActions({ ticketId, status }: { ticketId: string; 
       {closed ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/40 p-3">
           <p className="text-sm text-muted-foreground">{CUSTOMER_COPY.closed}</p>
-          <Link href="/support/new" className={buttonVariants({ size: "sm", variant: "outline" })}>ثبت تیکت جدید</Link>
+          <ProgressLink pendingLabel="در حال بارگذاری" href="/support/new" className={buttonVariants({ size: "sm", variant: "outline" })}>ثبت تیکت جدید</ProgressLink>
         </div>
       ) : (
         <form

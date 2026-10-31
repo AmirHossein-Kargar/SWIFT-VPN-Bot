@@ -1,3 +1,5 @@
+@import "../../design/theme.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -42,75 +44,11 @@
 }
 
 /*
- * Swift brand palette (brand kit "Lockform S") expressed as shadcn tokens.
- * Vault Black surfaces in dark, neutral surfaces in light; Emerald (light) /
- * Mint (dark) is the single brand accent, used for text on tinted surfaces,
- * focus rings and status. Primary actions are high-contrast neutral so button
- * text always reaches WCAG AA. No blue/purple/cyan anywhere.
- * The theme class (`dark`) and `data-theme` are set before first paint by the
- * external /store/theme-init.js (the storefront CSP forbids inline scripts).
+ * Colours, scrollbars and skeletons come from design/theme.css. The theme class (`dark`) and `data-theme` are set before
+ * first paint by the external /store/theme-init.js (the storefront CSP forbids inline scripts).
  */
 @layer base {
-  :root {
-    --background: 0 0% 98%;
-    --foreground: 150 15% 5%;
-    --card: 0 0% 100%;
-    --card-foreground: 150 15% 5%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 150 15% 5%;
-    --primary: 150 15% 5%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 120 3% 96%;
-    --secondary-foreground: 150 15% 5%;
-    --muted: 120 3% 96%;
-    --muted-foreground: 150 6% 31%;
-    --accent: 120 3% 94%;
-    --accent-foreground: 150 15% 5%;
-    --destructive: 0 76% 42%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 140 5% 90%;
-    --border-strong: 140 5% 83%;
-    --input: 140 5% 83%;
-    --ring: 162 93% 24%;
-    --success: 162 93% 24%;
-    --brand: 162 93% 24%;
-    --faint: 150 5% 39%;
-    --alt: 140 8% 96%;
-    --radius: 0.75rem;
-    --shadow-card: 0 1px 2px rgb(11 15 13 / 0.05), 0 12px 28px rgb(11 15 13 / 0.06);
-    --shadow-card-hover: 0 2px 4px rgb(11 15 13 / 0.08), 0 20px 40px rgb(11 15 13 / 0.1);
-    color-scheme: light;
-  }
-
-  .dark {
-    --background: 150 15% 5%;
-    --foreground: 150 20% 94%;
-    --card: 150 13% 8%;
-    --card-foreground: 150 20% 94%;
-    --popover: 150 13% 8%;
-    --popover-foreground: 150 20% 94%;
-    --primary: 152 81% 96%;
-    --primary-foreground: 150 15% 5%;
-    --secondary: 150 12% 11%;
-    --secondary-foreground: 150 20% 94%;
-    --muted: 150 12% 11%;
-    --muted-foreground: 150 8% 68%;
-    --accent: 150 12% 13%;
-    --accent-foreground: 150 20% 94%;
-    --destructive: 0 91% 71%;
-    --destructive-foreground: 150 15% 5%;
-    --border: 150 13% 14%;
-    --border-strong: 150 11% 20%;
-    --input: 150 11% 20%;
-    --ring: 160 84% 39%;
-    --success: 160 84% 39%;
-    --brand: 160 84% 39%;
-    --faint: 150 7% 56%;
-    --alt: 150 14% 6%;
-    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4), 0 14px 34px rgb(0 0 0 / 0.28);
-    --shadow-card-hover: 0 2px 4px rgb(0 0 0 / 0.45), 0 22px 48px rgb(0 0 0 / 0.36);
-    color-scheme: dark;
-  }
+  :root { --radius: 0.75rem; }
 }
 
 @layer base {
@@ -144,7 +82,7 @@
     -webkit-mask-image: radial-gradient(ellipse 70% 70% at 50% 40%, #000 20%, transparent 75%);
     mask-image: radial-gradient(ellipse 70% 70% at 50% 40%, #000 20%, transparent 75%);
   }
-  .glass { background: hsl(var(--card) / 0.72); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+  .glass { background: hsl(var(--card) / 0.9); }
   /* Cards: lift, brighten the border and reveal a faint brand wash on hover. */
   .lift { position: relative; transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease; }
   .lift::before {
@@ -175,6 +113,7 @@
     background: radial-gradient(38% 42% at 78% 22%, hsl(var(--brand) / 0.08), transparent 70%), radial-gradient(34% 40% at 20% 78%, hsl(var(--brand) / 0.06), transparent 70%);
     animation: drift 26s ease-in-out infinite alternate;
   }
+  [data-offscreen]::before, [data-offscreen] .flow-line, [data-offscreen] .flow-packet, [data-offscreen] .node-pulse { animation-play-state: paused; }
   /* Wallet top-up guide. */
   .guide-nav { scroll-behavior: smooth; scrollbar-width: none; overscroll-behavior-x: contain; scroll-snap-type: x proximity; }
   .guide-nav::-webkit-scrollbar { display: none; }
@@ -208,22 +147,18 @@
 @keyframes faq-open { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-@keyframes shimmer { to { background-position: -200% 0; } }
 @keyframes drift { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(3%, 2%, 0); } }
 /* Right-to-left: the next step arrives from the left, the previous one from the right. */
 @keyframes guide-in-next { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
 @keyframes guide-in-back { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
 .animate-rise { animation: rise 0.35s ease both; }
+/* The static HTML ships a screenful of skeletons: they stay still through first paint, and the band starts after hydration (pages/index.tsx). */
+html:not([data-hydrated]) .skeleton::after { display: none; }
 /* Hero entrance: quick, and without a start delay on the h1 so it never holds back the largest paint. */
 .hero-copy > * { animation: rise 0.4s ease both; }
 .hero-copy > :nth-child(3) { animation-delay: 60ms; }
 .hero-copy > :nth-child(4) { animation-delay: 110ms; }
 .hero-copy > :nth-child(5) { animation-delay: 160ms; }
-.skeleton-shimmer {
-  background: linear-gradient(90deg, hsl(var(--muted)), hsl(var(--accent)), hsl(var(--muted)));
-  background-size: 200% 100%;
-  animation: shimmer 1.3s linear infinite;
-}
 
 @media (prefers-reduced-motion: reduce) {
   html, .guide-nav { scroll-behavior: auto; }

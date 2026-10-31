@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { ProgressLink } from "@/components/shared/progress-link";
 import type { Metadata } from "next";
 
 import { customerApiGet } from "@/lib/customerApi.server";
@@ -21,21 +21,21 @@ export default async function SupportHomePage() {
       <CustomerLiveRefresh />
       <div className="flex items-center justify-between gap-2">
         <h1 className="text-lg font-semibold">تیکت‌های من</h1>
-        <Link href="/support/new" className={buttonVariants({ size: "sm" })}>تیکت جدید</Link>
+        <ProgressLink pendingLabel="در حال بارگذاری" href="/support/new" className={buttonVariants({ size: "sm" })}>تیکت جدید</ProgressLink>
       </div>
 
       {tickets.length === 0 ? (
         <Card>
           <CardContent className="space-y-3 py-12 text-center">
             <p className="text-sm text-muted-foreground">{CUSTOMER_COPY.noTickets}</p>
-            <Link href="/support/new" className={buttonVariants({ variant: "outline" })}>ثبت اولین تیکت</Link>
+            <ProgressLink pendingLabel="در حال بارگذاری" href="/support/new" className={buttonVariants({ variant: "outline" })}>ثبت اولین تیکت</ProgressLink>
           </CardContent>
         </Card>
       ) : (
         <ul className="space-y-2">
           {tickets.map((ticket) => (
             <li key={ticket.ticketId}>
-              <Link href={`/support/${ticket.ticketId}`} className="block rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent">
+              <ProgressLink pendingLabel="در حال بارگذاری" href={`/support/${ticket.ticketId}`} className="block rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-medium" dir="auto">{ticket.subject}</span>
                   <span className="flex items-center gap-2">
@@ -48,7 +48,7 @@ export default async function SupportHomePage() {
                   <span>ایجاد: {formatCustomerDate(ticket.createdAt)}</span>
                   <span>آخرین بروزرسانی: {formatCustomerDate(ticket.lastMessageAt)}</span>
                 </p>
-              </Link>
+              </ProgressLink>
             </li>
           ))}
         </ul>

@@ -1,12 +1,11 @@
 /* ============================================================================
    SWIFT VPN — public storefront
    Static, Persian/RTL, strict CSP (no inline scripts). Uses the official
-   Swift brand kit and shares the admin panel's neutral + emerald palette.
+   Swift brand kit and the palette in design/theme.css (hand-mapped here).
    ========================================================================== */
-/* Swift brand palette (brand kit "Lockform S"): Vault Black surfaces on dark,
-   neutral surfaces on light, Emerald (#059669, light) / Mint (#10B981, dark)
-   as the single brand accent. Primary actions are high-contrast neutral so
-   button text always meets WCAG AA; green marks brand, success and focus. */
+/* Swift brand palette (brand kit "Lockform S"): Vault Black surfaces on dark, mint
+   paper and deep green ink on light, Emerald (light) / Mint (dark) as the single
+   accent for actions, focus and scrollbars. */
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
@@ -19,11 +18,11 @@
   --text: #ECF3EF;
   --text-dim: #A5B2AB;
   --text-faint: #86948C;
-  --primary: #ECFDF5;
-  --primary-strong: #ECFDF5;
-  --primary-hover: #FFFFFF;
+  --primary: #10B981;
+  --primary-strong: #10B981;
+  --primary-hover: #34D399;
   --primary-soft: rgba(16, 185, 129, 0.12);
-  --on-primary: #0B0F0D;
+  --on-primary: #070D0A;
   --accent: #10B981;
   --success: #10B981;
   --danger: #F87171;
@@ -44,32 +43,41 @@
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #FAFAFA;
-  --bg-elev: #FFFFFF;
-  --bg-elev-2: #F4F5F4;
-  --bg-alt: #F3F5F4;
-  --border: #E4E7E5;
-  --border-strong: #D2D7D4;
-  --text: #0B0F0D;
-  --text-dim: #4A544F;
-  --text-faint: #5E6963;
-  --primary: #0B0F0D;
-  --primary-strong: #0B0F0D;
-  --primary-hover: #26302B;
-  --primary-soft: rgba(5, 150, 105, 0.09);
-  --on-primary: #FFFFFF;
-  --accent: #047857;
-  --success: #047857;
-  --danger: #B91C1C;
+  --bg: #F2F8F5;
+  --bg-elev: #FAFCFB;
+  --bg-elev-2: #E3EFE9;
+  --bg-alt: #E9F3EE;
+  --border: #D0E2D9;
+  --border-strong: #B6CEC2;
+  --text: #0D211A;
+  --text-dim: #385147;
+  --text-faint: #445A51;
+  --primary: #046246;
+  --primary-strong: #046246;
+  --primary-hover: #03523B;
+  --primary-soft: rgba(4, 98, 70, 0.1);
+  --on-primary: #F3FCF7;
+  --accent: #046246;
+  --success: #046246;
+  --danger: #AB1B1B;
   --danger-soft: rgba(185, 28, 28, 0.08);
-  --header-bg: rgba(255, 255, 255, 0.88);
-  --card-shadow: 0 1px 2px rgba(11, 15, 13, 0.05), 0 12px 28px rgba(11, 15, 13, 0.06);
-  --card-shadow-hover: 0 2px 4px rgba(11, 15, 13, 0.08), 0 20px 40px rgba(11, 15, 13, 0.1);
-  --glow: rgba(5, 150, 105, 0.07);
-  --overlay: rgba(11, 15, 13, 0.45);
-  --skeleton: #ECEFED;
-  --skeleton-shine: #F6F7F6;
-  --focus-ring: #047857;
+  --header-bg: rgba(242, 248, 245, 0.88);
+  --card-shadow: 0 1px 2px rgba(13, 33, 26, 0.06), 0 12px 28px rgba(13, 33, 26, 0.07);
+  --card-shadow-hover: 0 2px 4px rgba(13, 33, 26, 0.09), 0 20px 40px rgba(13, 33, 26, 0.11);
+  --glow: rgba(4, 98, 70, 0.07);
+  --overlay: rgba(8, 22, 17, 0.45);
+  --skeleton: #E3EFE9;
+  --skeleton-shine: #EEF6F2;
+  --focus-ring: #046246;
+}
+
+html { accent-color: var(--accent); }
+::selection { background: var(--primary-soft); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: var(--accent) padding-box; }
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: var(--accent) transparent; }
 }
 
 /* Official lockups ship as separate light/dark files; show the matching one. */
@@ -118,7 +126,7 @@ p { margin: 0; }
 }
 .btn svg { width: 18px; height: 18px; flex: none; }
 .btn-sm { min-height: 40px; padding: 0 16px; font-size: 14px; }
-.btn-lg { min-height: 52px; padding: 0 26px; font-size: 16px; border-radius: 14px; }
+.btn-lg { min-height: 48px; padding: 0 24px; font-size: 16px; }
 .btn-block { width: 100%; }
 .btn-primary { background: var(--primary-strong); color: var(--on-primary); }
 .btn-primary:hover { background: var(--primary-hover); transform: translateY(-1px); }

@@ -18,6 +18,11 @@ Details: `docs/storefront.md` (storefront) and `docs/admin.md` (dashboard).
 - **Storefront content** is Persian, right-to-left, light/dark. There is no web checkout; orders continue in Telegram.
 - **Admin dashboard** (`admin-panel/`) is the English Next.js app with `basePath: "/panel"`. Its responses send
   `frame-ancestors 'none'` without `script-src` (Next and next-themes need inline bootstrap scripts).
+- **One palette:** `design/theme.css` holds the colours, scrollbars and skeletons for both Next apps. Light mode is
+  green-tinted, never plain black and white, and components use tokens. `web/public/store/store.css`, `web/public/styles.css`
+  and the `theme-color` values are hand-mapped copies; `tests/unit/themeTokens.test.js` checks AA contrast and that they agree.
+- **Buttons** take their size from the variants, never a one-off height: `/panel` 32/36/40 px (40 on touch screens), the
+  storefront 40/44/48 px.
 - The legacy vanilla-JS dashboard files in `web/public/` are still served at `/index.html`; removing them is an owner
   decision.
 - **`/panel` has no route loading file under `app/(app)`.** It hung filter navigation and streamed failed pages as 200; see

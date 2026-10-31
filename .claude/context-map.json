@@ -119,7 +119,8 @@
       "globs": [
         "services/admin/**",
         "handlers/admin/**",
-        "admin-panel/**"
+        "admin-panel/**",
+        "design/**"
       ],
       "review": [
         "docs/admin.md"
@@ -150,6 +151,7 @@
       "summary": "Public storefront build, serving, CSP and the Telegram hand-off",
       "globs": [
         "storefront/**",
+        "design/**",
         "web/storeRouter.js",
         "web/spa.js",
         "scripts/build-storefront.mjs",

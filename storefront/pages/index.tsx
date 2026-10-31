@@ -1,5 +1,5 @@
 import Head from "next/head";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Faq, FAQ_ITEMS } from "@/components/faq";
 import { DeviceGuide } from "@/components/devices";
@@ -13,7 +13,7 @@ import { Trust } from "@/components/trust";
 import { currentYearLabel } from "@/lib/format";
 import { safeExternalUrl } from "@/lib/store";
 import { useCatalog } from "@/lib/use-catalog";
-import { useReveal } from "@/lib/use-reveal";
+import { useAmbientPause, useReveal } from "@/lib/use-reveal";
 
 const TITLE = "SWIFT VPN — خرید اشتراک VPN پرسرعت و پایدار";
 const DESCRIPTION = "خرید اشتراک اختصاصی SWIFT VPN با اتصال نامحدود کاربر و تحویل خودکار لینک و QR در تلگرام. پلن‌ها با قیمت شفاف به تومان، شارژ کیف پول با کارت‌به‌کارت یا ارز دیجیتال و سرویس تست رایگان یک‌روزه.";
@@ -34,7 +34,25 @@ export default function Home() {
   // Set after mount: the Persian-calendar year is a runtime value, so rendering
   // it during the static build would not match the client.
   useEffect(() => setYear(currentYearLabel()), []);
+  useEffect(() => { document.documentElement.dataset.hydrated = "true"; }, []);
   useReveal();
+  useAmbientPause();
+
+  // A deep link lands while the plans are still a skeleton, and their real height then pushes the target a screen or
+  // more down on a phone. Land again once the first catalog answer has settled the layout, and after the font swap
+  // unless the visitor has already scrolled away.
+  const landed = useRef(false);
+  useEffect(() => {
+    if (landed.current || state.status === "loading") return;
+    landed.current = true;
+    const target = window.location.hash ? document.getElementById(window.location.hash.slice(1)) : null;
+    if (!target) return;
+    target.scrollIntoView({ behavior: "instant" });
+    const settled = window.scrollY;
+    void document.fonts.ready.then(() => {
+      if (window.scrollY === settled) target.scrollIntoView({ behavior: "instant" });
+    });
+  }, [state.status]);
 
   const catalog = state.status === "ready" || state.status === "empty" ? state.catalog : null;
   const botUrl = catalog?.checkout.available ? safeExternalUrl(catalog.checkout.botUrl) : null;

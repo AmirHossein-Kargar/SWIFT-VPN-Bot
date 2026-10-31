@@ -1,0 +1,123 @@
+/*
+ * The one Swift palette, imported by storefront/styles/globals.css and admin-panel/app/globals.css.
+ *
+ * Dark mode is Vault Black with green-tinted surfaces; light mode is the same family: mint paper, deep green ink, no
+ * plain white or black. Emerald (light) / Mint (dark) is the single accent: primary actions, focus rings, scrollbars,
+ * loading states and charts. Red and amber stay semantic. No blue, purple or cyan.
+ *
+ * Plain CSS (no Tailwind directives), so each app can import it above its own `@tailwind` lines. A palette change also
+ * goes into web/public/store/store.css and web/public/styles.css (hand-mapped static pages) and into the theme-color
+ * values; tests/unit/themeTokens.test.js checks contrast and that those copies agree.
+ */
+:root {
+  --background: 150 30% 96%;
+  --foreground: 158 45% 9%;
+  --card: 150 33% 98.5%;
+  --card-foreground: 158 45% 9%;
+  --popover: 150 33% 98.5%;
+  --popover-foreground: 158 45% 9%;
+  --primary: 162 93% 20%;
+  --primary-foreground: 150 60% 97%;
+  --secondary: 150 28% 91.5%;
+  --secondary-foreground: 158 45% 11%;
+  --muted: 150 28% 91.5%;
+  --muted-foreground: 156 18% 27%;
+  --accent: 152 34% 88%;
+  --accent-foreground: 158 45% 11%;
+  --destructive: 0 72% 38%;
+  --destructive-foreground: 150 60% 97%;
+  --success: 162 93% 20%;
+  --success-foreground: 150 60% 97%;
+  --warning: 26 83% 28%;
+  --warning-foreground: 150 60% 97%;
+  --brand: 162 93% 20%;
+  --border: 150 24% 85%;
+  --border-strong: 150 20% 76%;
+  --input: 150 20% 72%;
+  --ring: 162 93% 20%;
+  --faint: 156 14% 31%;
+  --alt: 150 30% 93.5%;
+  --overlay: 158 45% 6%;
+  --chart-1: 162 93% 20%;
+  --chart-2: 156 14% 45%;
+  --shadow-card: 0 1px 2px hsl(158 45% 9% / 0.06), 0 12px 28px hsl(158 45% 9% / 0.07);
+  --shadow-card-hover: 0 2px 4px hsl(158 45% 9% / 0.09), 0 20px 40px hsl(158 45% 9% / 0.11);
+  color-scheme: light;
+}
+
+.dark {
+  --background: 150 15% 5%;
+  --foreground: 150 20% 94%;
+  --card: 150 13% 8%;
+  --card-foreground: 150 20% 94%;
+  --popover: 150 13% 8%;
+  --popover-foreground: 150 20% 94%;
+  --primary: 160 84% 39%;
+  --primary-foreground: 150 30% 4%;
+  --secondary: 150 12% 11%;
+  --secondary-foreground: 150 20% 94%;
+  --muted: 150 12% 11%;
+  --muted-foreground: 150 8% 68%;
+  --accent: 150 13% 14%;
+  --accent-foreground: 150 20% 94%;
+  --destructive: 0 91% 75%;
+  --destructive-foreground: 150 15% 5%;
+  --success: 160 84% 39%;
+  --success-foreground: 150 30% 4%;
+  --warning: 38 85% 58%;
+  --warning-foreground: 150 15% 5%;
+  --brand: 160 84% 39%;
+  --border: 150 13% 14%;
+  --border-strong: 150 11% 20%;
+  --input: 150 11% 24%;
+  --ring: 160 84% 39%;
+  --faint: 150 7% 60%;
+  --alt: 150 14% 6%;
+  --overlay: 150 30% 2%;
+  --chart-1: 160 84% 39%;
+  --chart-2: 150 8% 58%;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4), 0 14px 34px rgb(0 0 0 / 0.28);
+  --shadow-card-hover: 0 2px 4px rgb(0 0 0 / 0.45), 0 22px 48px rgb(0 0 0 / 0.36);
+  color-scheme: dark;
+}
+
+/* `accent-color` covers native checkboxes, radios and range inputs that no component styles. */
+html { accent-color: hsl(var(--brand)); }
+::selection { background: hsl(var(--brand) / 0.24); }
+
+/*
+ * Scrollbars. Standard properties only where the WebKit ones are missing: Chrome ignores ::-webkit-scrollbar as soon
+ * as scrollbar-color is set, and only the WebKit form gives a rounded thumb with an inset.
+ */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: hsl(var(--brand) / 0.45) padding-box; }
+::-webkit-scrollbar-thumb:hover { background: hsl(var(--brand) / 0.75) padding-box; }
+::-webkit-scrollbar-thumb:active { background: hsl(var(--brand)) padding-box; }
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: hsl(var(--brand) / 0.55) transparent; }
+}
+
+/*
+ * Skeletons: a still tinted block with a light band moving across it. The band is a transform on a pseudo-element, so
+ * it stays on the compositor where a moving background-position would repaint every frame. Reading order sets its
+ * direction, and reduced motion leaves the still block.
+ */
+.skeleton { position: relative; overflow: hidden; background: hsl(var(--muted)); }
+.skeleton::after {
+  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, hsl(var(--brand) / 0.13), transparent);
+  animation: skeleton-band 1.5s ease-in-out infinite;
+}
+[dir="rtl"] .skeleton::after { animation-name: skeleton-band-rtl; transform: translateX(100%); }
+@keyframes skeleton-band { to { transform: translateX(100%); } }
+@keyframes skeleton-band-rtl { to { transform: translateX(-100%); } }
+
+/* The theme toggle's icon swaps with `display`, which restarts this each time. */
+.theme-icon { animation: theme-icon-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) backwards; }
+@keyframes theme-icon-in { from { opacity: 0; transform: rotate(-60deg) scale(0.7); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton::after { display: none; }
+  .theme-icon { animation: none; }
+}

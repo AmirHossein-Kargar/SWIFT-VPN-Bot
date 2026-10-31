@@ -99,7 +99,7 @@ function MobileNav({ botUrl, active }: { botUrl: string | null; active: string |
         aria-controls="mobile-nav"
         aria-label={open ? "بستن منو" : "باز کردن منو"}
         onClick={() => setOpen((value) => !value)}
-        className="press inline-grid size-11 place-items-center rounded-xl border border-border-strong bg-card text-foreground hover:border-faint"
+        className={buttonVariants({ variant: "outline", size: "icon" })}
       >
         {open ? <X key="close" className="animate-rise size-5" aria-hidden="true" /> : <Menu key="open" className="animate-rise size-5" aria-hidden="true" />}
       </button>

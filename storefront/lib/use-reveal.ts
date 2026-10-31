@@ -8,6 +8,18 @@ import { useEffect } from "react";
  * transform only). Skipped entirely for reduced-motion visitors; pricing is
  * never given `data-reveal`.
  */
+/** Decorative loops stop while scrolled away: the hero's dashes animate on the main thread, with nobody watching. */
+export function useAmbientPause() {
+  useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) entry.target.toggleAttribute("data-offscreen", !entry.isIntersecting);
+    });
+    for (const element of document.querySelectorAll("[data-ambient], .aurora")) observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+}
+
 export function useReveal() {
   useEffect(() => {
     if (typeof IntersectionObserver === "undefined") return;

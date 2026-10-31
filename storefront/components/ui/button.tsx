@@ -6,17 +6,17 @@ import { cn } from "@/lib/utils";
 // No Radix Slot/asChild: links are styled by calling buttonVariants() directly,
 // which keeps this primitive free of extra client JavaScript.
 export const buttonVariants = cva(
-  "press inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-transparent font-bold disabled:pointer-events-none disabled:opacity-55 aria-disabled:pointer-events-none aria-disabled:opacity-55 [&_svg]:size-[18px] [&_svg]:shrink-0",
+  "press inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl border font-bold disabled:pointer-events-none disabled:opacity-55 aria-disabled:pointer-events-none aria-disabled:opacity-55 [&_svg]:size-[18px] [&_svg]:shrink-0",
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/90",
-        outline: "border-border-strong bg-card text-foreground hover:border-faint",
+        default: "border-transparent bg-primary text-primary-foreground hover:bg-primary/90 hover:shadow-[0_8px_20px_-10px_hsl(var(--brand)/0.75)]",
+        outline: "border-border-strong bg-card text-foreground hover:border-brand/60 hover:bg-accent/50",
       },
       size: {
         sm: "min-h-10 px-4 text-sm",
         default: "min-h-11 px-5 text-[15px]",
-        lg: "min-h-[52px] rounded-2xl px-6 text-base",
+        lg: "min-h-12 px-6 text-base",
         icon: "size-11 p-0",
       },
     },

@@ -47,7 +47,7 @@ Suites that need MongoDB: `adminBankConfirm`, `adminRegistryMutations`, `adminSe
 | Admin services and panels | `tests/unit/admin*.test.js`, `tests/integration/admin*.test.js` | Audit idempotency, auth sessions, validation, registry, Telegram panel authorization, CSRF and session enforcement over HTTP |
 | Admin user actions | `adminUserMessaging`, `accessGate`, `adminSettings`, `adminTestEligibility`, `nextPanelHeaders` | Message delivery mapping, block enforcement, settings output never contains secret values, eligibility reset, anti-framing headers |
 | Mock tests | `tests/unit/mockTests.test.js`, `mockTestsUi.test.js`, `tests/integration/adminTelegramMock.test.js` | Harness isolation and all scenarios against the real services; UI data contract |
-| Storefront | `tests/integration/storefrontAndPanel.test.js`, `storefrontBuild.test.js`, `tests/unit/storefrontLogic`, `storefrontApi`, `topupGuide` | Routing, CSP, canonical URL, caching and compression, hand-off URL safety, API client; the top-up guide against the bot's source |
+| Storefront | `tests/integration/storefrontAndPanel.test.js`, `storefrontBuild.test.js`, `tests/unit/storefrontLogic`, `storefrontApi`, `topupGuide`, `themeTokens` | Routing, CSP, canonical URL, caching and compression, hand-off URL safety, API client; the top-up guide against the bot's source; the shared palette (contrast, static-page copies, button scale) |
 | Configuration and startup | `envResolution`, `mongoStartup`, `moduleSmoke` | Environment aliases and validation, startup ordering, every production module imports cleanly |
 | Telegram UI | `messageManager`, `myServicesFlow`, `handleGuide`, `persianUiGuard`, `profile*`, `showPaymentMethods`, `supportContact` | Message handling, Persian UI guard, privacy of profile data |
 | Engineering context | `tests/unit/checkContext.test.js` | References in `CLAUDE.md` and `.claude/` resolve; impact map and skills are valid; change classification and the Stop-hook decision (`scripts/check-context.mjs`) |
@@ -58,7 +58,9 @@ Suites that need MongoDB: `adminBankConfirm`, `adminRegistryMutations`, `adminSe
   answers `/api/admin/*` from fixtures inside the browser, so it needs no database and never
   touches live services. It checks responsive layout, light/dark, right-to-left, drawer
   navigation, dialogs, touch targets, contrast and localization of the admin dashboard and the
-  storefront.
+  storefront. **Known broken (seen on `a8cd18b`, 2026-10-31):** it opens `/admin` and waits for the legacy `#app.ready`, but
+  `/admin` now leads to the Next panel, so it stalls there and starts a Next dev server in the test process. Until it is
+  ported, `nextPanel.e2e.mjs` is the working admin suite.
 - `node tests/e2e/nextPanel.e2e.mjs` (after `npx next build admin-panel`) drives the real `/panel` with the real session,
   CSRF and origin middleware. It covers money actions under delayed and failing API answers (nothing looks successful
   early, a retry keeps its `operationId`, a double click sends one request), filter navigation, charts and reduced motion.

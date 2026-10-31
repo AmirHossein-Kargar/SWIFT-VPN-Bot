@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { ProgressLink } from "@/components/shared/progress-link";
 import { CheckCircle2, CircleSlash, Lock } from "lucide-react";
 
 import { adminApiGet, adminSession } from "@/lib/adminApi.server";
@@ -185,7 +185,7 @@ export default async function SettingsPage() {
                 <Row label="Panel API URL"><Configured value={overview.vpn.wizardApiUrl} /></Row>
                 <Row label="Panel API key"><Configured value={overview.vpn.wizardApiKey} /></Row>
                 <p className="pt-3 text-xs text-muted-foreground">
-                  Live reachability is on <Link href="/system-health" className="underline underline-offset-2">System health</Link>; plans are managed on <Link href="/products" className="underline underline-offset-2">Products</Link>.
+                  Live reachability is on <ProgressLink href="/system-health" className="underline underline-offset-2">System health</ProgressLink>; plans are managed on <ProgressLink href="/products" className="underline underline-offset-2">Products</ProgressLink>.
                 </p>
                 <div className="pt-3"><ReadOnlyNote what="VPN panel settings" /></div>
               </>
@@ -215,7 +215,7 @@ export default async function SettingsPage() {
                     </Badge>
                   </Row>
                 ))}
-                <p className="pt-3 text-xs text-muted-foreground"><Link href="/system-health" className="underline underline-offset-2">Open System health</Link> for history and a fresh check.</p>
+                <p className="pt-3 text-xs text-muted-foreground"><ProgressLink href="/system-health" className="underline underline-offset-2">Open System health</ProgressLink> for history and a fresh check.</p>
               </>
             ) : unavailable}
           </Section>
@@ -225,7 +225,7 @@ export default async function SettingsPage() {
           <Card>
             <CardHeader>
               <CardTitle>Recent admin activity</CardTitle>
-              <CardDescription>Every admin action is recorded. <Link href="/audit" className="underline underline-offset-2">Open the full audit log</Link>.</CardDescription>
+              <CardDescription>Every admin action is recorded. <ProgressLink href="/audit" className="underline underline-offset-2">Open the full audit log</ProgressLink>.</CardDescription>
             </CardHeader>
             <CardContent className="p-0">
               {audit ? (

@@ -38,9 +38,9 @@ function ConnectionArt() {
       </svg>
       <div className="absolute left-1/2 top-1/2 grid size-[92px] -translate-x-1/2 -translate-y-1/2 place-items-center rounded-[28px] border border-border-strong bg-card shadow-[var(--shadow-card-hover)] sm:size-24">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="logo-light size-[52px]" src="/brand/icon.svg" alt="" width={52} height={52} />
+        <img loading="lazy" decoding="async" className="logo-light size-[52px]" src="/brand/icon.svg" alt="" width={52} height={52} />
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="logo-dark size-[52px]" src="/brand/icon-on-dark.svg" alt="" width={52} height={52} />
+        <img loading="lazy" decoding="async" className="logo-dark size-[52px]" src="/brand/icon-on-dark.svg" alt="" width={52} height={52} />
       </div>
       <Node className="left-[17.5%] top-[79%]" label="ربات تلگرام"><Send /></Node>
       <Node className="left-[28%] top-[27%]" label="اندروید و آیفون"><Smartphone /></Node>
@@ -52,7 +52,7 @@ function ConnectionArt() {
 
 export function Hero() {
   return (
-    <section aria-labelledby="hero-title" className="relative overflow-hidden pb-10 pt-9 sm:pb-16 sm:pt-16">
+    <section data-ambient aria-labelledby="hero-title" className="relative overflow-hidden pb-10 pt-9 sm:pb-16 sm:pt-16">
       <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 -top-24 h-[520px] bg-[radial-gradient(640px_320px_at_18%_30%,hsl(var(--brand)/0.10),transparent_70%),radial-gradient(520px_300px_at_88%_8%,hsl(var(--brand)/0.08),transparent_70%)]" />
       <Container className="relative grid items-center gap-10 lg:grid-cols-[1.1fr_0.9fr] lg:gap-14">
         <div className="hero-copy">

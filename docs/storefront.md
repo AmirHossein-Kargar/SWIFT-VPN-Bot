@@ -57,8 +57,8 @@ payment, devices and FAQ and has a mobile menu (`aria-expanded`, closes on Escap
   and `verbatim` line to the bot's source, so a renamed button fails a test instead of leaving the guide wrong.
 - **Guide images are illustrations, not screenshots.** Telegram is not reachable from the build, so
   `npm run build:guide-images` draws `web/public/store/guide/<id>.webp` (800×1000) from that JSON with the bot's real
-  labels and placeholder values, and each image carries a visible label saying so. Steps at the payment provider are
-  diagrams, never an imitation of its screen, and no image shows a successful payment. A real screenshot can replace
+  labels and masked placeholder values; captions say what is a sample. Steps at the payment provider are diagrams,
+  labelled as such in the image, never an imitation of its screen, and no image shows a successful payment. A real screenshot can replace
   a file at the same path and 4:5 ratio; change that step's caption and its `kind` with it. Neither offered method
   has a receipt step, and the guide says so.
 - **Deliberately absent:** testimonials, user counts, ratings, uptime or speed claims,
@@ -97,7 +97,7 @@ switch to it.
 |---|---|
 | `npm run build` (storefront part: `npm run build:storefront`) | `scripts/build-storefront.mjs` runs `next build storefront`, **refuses** output with executable inline scripts, inline event handlers or `javascript:` URLs, installs `storefront.html` and `_next/` into `web/public` (git-ignored build output) with pre-compressed `.br`/`.gz` copies, and deletes the build cache. `npm run build` also builds the `/panel` admin dashboard |
 | Serving (`web/spa.js`) | `/` serves `storefront.html`, falling back to the static `web/public/store.html` if the build is missing, so the site stays up. It injects the canonical link from `WEBHOOK_BASE_URL`, compresses the HTML once per encoding and serves `/_next/static/**` pre-compressed with `Cache-Control: public, max-age=31536000, immutable` |
-| Fonts | **IRANYekanX** (proprietary, fontiran.com) is the primary face in the storefront and the admin panel: one variable woff2, `web/public/store/fonts/iranyekanx-vf.woff2`, preloaded by the storefront, with Vazirmatn as the fallback. **Licence NOT confirmed:** publishing it needs a fontiran.com web licence registered for this project (licence code in `FontLicense.txt` next to the font and in a CSS comment); none is on record. The file is gitignored and must be placed on the server by hand; without it the sites fall back to Vazirmatn. Vazirmatn is self-hosted (OFL-1.1; license text in `OFL.txt` next to the fonts, served as `text/plain`) in `web/public/store/fonts/`: variable weight, Arabic and Latin subsets split by `unicode-range`, both preloaded in `pages/_document.tsx` (spaces are Latin, so both are needed for the first paint). The former Google Fonts stylesheet blocked first render and its late swap shifted the hero heading (Lighthouse CLS 0.09 on mobile) |
+| Fonts | **IRANYekanX** (proprietary, fontiran.com) is the primary face in the storefront and the admin panel: one variable woff2, `web/public/store/fonts/iranyekanx-vf.woff2`, preloaded by the storefront, with Vazirmatn as the fallback. **Licence NOT confirmed:** publishing it needs a fontiran.com web licence registered for this project (licence code in `FontLicense.txt` next to the font and in a CSS comment); none is on record. The file is gitignored and must be placed on the server by hand; without it the sites fall back to Vazirmatn. Vazirmatn is self-hosted (OFL-1.1; license text in `OFL.txt` next to the fonts, served as `text/plain`) in `web/public/store/fonts/`: variable weight, Arabic and Latin subsets split by `unicode-range`. `.woff2` files are served with a 30-day cache. The former Google Fonts stylesheet blocked first render and its late swap shifted the hero heading (Lighthouse CLS 0.09 on mobile) |
 | Theme | The external `web/public/store/theme-init.js` sets `data-theme` and the `dark` class before first paint (no inline script, so no CSP change) |
 | Plan loading | The catalog request is preloaded in `<head>` so it overlaps the JavaScript download and is reused by the app's `fetch()`. Retries and the refresh after "plan no longer sold" bypass the HTTP cache. The order dialog (Radix Dialog) is a separate chunk fetched on pointer/focus/touch intent over a plan. Tabs are a small in-repo component |
 | Development | `npm run storefront:dev` (port 3101) and `npm run admin:dev` (port 3100). Remove `storefront/.next` and `admin-panel/.next` afterwards: the module smoke test imports stray `.js` files |
@@ -125,6 +125,18 @@ throttling; no field/CrUX data exists for this site). Three runs each, after sel
 | Desktop (after) | 100 | 0.6–0.7 s | 0 | 10–20 ms | 100 / 100 / 100 |
 
 INP needs real interaction and is not produced by a Lighthouse navigation run.
+
+Comparing changes here needs both builds alternated on one machine: separate batches differed by more than any change
+tested (LCP 1.7 s to 2.8 s for one build), and LCP is bimodal, because the font swap can repaint the heading. A PC with
+IRANYekanX installed also hides the "file missing" case, since Chrome falls back to the local face; rename the family in
+a copy of the built CSS to simulate a visitor. Measured that way (slow 4G, 4× CPU, 2026-10-31):
+
+- **Kept:** guide images past step one load only once someone uses the guide, and the hero icons load lazily, which cut a
+  first visit by about 38 kB and 3 requests with timing unchanged within noise. Skeletons stay still until hydration, the
+  hero's loops pause off screen, and `.glass` no longer uses `backdrop-filter`.
+- **Rejected:** `content-visibility: auto` on sections took about 0.5 s off first paint but sent 12 of 14 anchor checks
+  up to thousands of pixels off target. Dropping the font preload made no reliable difference with the file present and
+  raised CLS from 0.01 to 0.066 without it. Preloading Vazirmatn instead was slower.
 
 After the landing-page redesign the page's own JavaScript grew by about 5 kB brotli (framework
 58 kB, main 30 kB, page 17 kB, plus a 6 kB shared chunk; the order dialog stays a lazy chunk),

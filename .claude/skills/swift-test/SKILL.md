@@ -51,6 +51,7 @@ rerun with `TEST_CONCURRENCY=1` to isolate a concurrency-sensitive test from a g
 
 - `npm run build` checks both Next apps. Its `.next` output is git-ignored and skipped by
   `tests/unit/moduleSmoke.test.js`; leave an existing `.next` alone unless you created it.
+- `npm run test:e2e` currently stalls on the legacy dashboard (see `docs/testing.md`); use `nextPanel.e2e.mjs` for admin.
 - `npm run test:e2e` (admin, fixture backend) and `npm run test:e2e:store` (storefront under the real CSP) need Chrome
   (`CHROME_PATH`); the storefront suite needs a storefront build and exits 0 with `SKIP` without one. axe checks run only
   when `axe-core` resolves (`AXE_PATH`).

@@ -90,10 +90,10 @@ describe("the guide never pretends", () => {
     }
   });
 
-  test("the image generator labels every image as an illustration", () => {
+  test("the image generator labels provider diagrams, and bot images carry no placeholder badge", () => {
     const script = read("scripts/build-guide-images.mjs");
-    assert.match(script, /تصویر نمونه، نه اسکرین‌شات/);
     assert.match(script, /نمودار راهنما، نه تصویر درگاه/);
+    assert.doesNotMatch(script, /تصویر نمونه|نه اسکرین‌شات/);
   });
 
   test("values are placeholders: no card number or wallet address anywhere", () => {

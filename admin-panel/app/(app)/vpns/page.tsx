@@ -3,7 +3,7 @@ import type { AdminVpn, PagedResult } from "@/lib/types";
 import { Card, CardContent } from "@/components/ui/card";
 import { VpnsFilters } from "@/components/vpns/vpns-filters";
 import { VpnsTable } from "@/components/vpns/vpns-table";
-import Link from "next/link";
+import { ProgressLink } from "@/components/shared/progress-link";
 import { buttonVariants } from "@/components/ui/button";
 import { PaginationNav } from "@/components/shared/pagination-nav";
 
@@ -26,9 +26,9 @@ export default async function VpnsPage({ searchParams }: { searchParams: Promise
   return (
     <div className="space-y-4">
       <nav aria-label="VPN sections" className="flex gap-2">
-        <Link href="/vpns" aria-current="page" className={buttonVariants({ variant: "default", size: "sm" })}>Local services</Link>
-        <Link href="/vpns/remote" className={buttonVariants({ variant: "outline", size: "sm" })}>Remote clients</Link>
-        <Link href="/products" className={buttonVariants({ variant: "outline", size: "sm" })}>Service catalog</Link>
+        <ProgressLink href="/vpns" aria-current="page" className={buttonVariants({ variant: "default", size: "sm" })}>Local services</ProgressLink>
+        <ProgressLink href="/vpns/remote" className={buttonVariants({ variant: "outline", size: "sm" })}>Remote clients</ProgressLink>
+        <ProgressLink href="/products" className={buttonVariants({ variant: "outline", size: "sm" })}>Service catalog</ProgressLink>
       </nav>
       <VpnsFilters defaultSearch={search} status={status} />
       <Card>

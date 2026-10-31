@@ -114,7 +114,7 @@ for (const scheme of ["light", "dark"]) {
       assert.equal(dark, scheme === "dark");
       assert.equal(await page.evaluate(() => document.documentElement.getAttribute("data-theme")), scheme);
       const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-      assert.equal(bg, scheme === "dark" ? "rgb(11, 15, 13)" : "rgb(250, 250, 250)");
+      assert.equal(bg, scheme === "dark" ? "rgb(11, 15, 13)" : "rgb(242, 248, 245)");
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
       assert.ok(overflow <= 1, `overflow ${overflow}px`);
     });
@@ -162,7 +162,7 @@ for (const scheme of ["light", "dark"]) {
     assert.equal(await page.evaluate(() => document.documentElement.classList.contains("dark")), true, "stored dark beats the light OS setting");
     await page.getByRole("button", { name: /تغییر پوسته/ }).click();
     assert.equal(await page.evaluate(() => localStorage.getItem("swift.theme")), "light");
-    assert.equal(await page.evaluate(() => document.querySelector('meta[name="theme-color"]').content), "#FAFAFA");
+    assert.equal(await page.evaluate(() => document.querySelector('meta[name="theme-color"]').content), "#F2F8F5");
   });
   await step("the theme is applied BEFORE first paint (no flash): class is set by the blocking external script", async () => {
     const early = await context.newPage();
@@ -578,6 +578,44 @@ await failurePath("failure: a hostile hand-off URL from the API is never rendere
     assert.equal(await panel.locator("[data-guide-step]:not([hidden]) h3").innerText(), "انتخاب کارت‌به‌کارت");
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), 0);
   });
+  await context.close();
+}
+
+// ───────────────────────── load behaviour: theme chrome, deep links, what a first visit pays for ─────────────────────────
+{
+  const { context, page } = await open({ width: 375 });
+  await step("a first visit downloads no guide image past step one", async () => {
+    const later = await page.evaluate(() => performance.getEntriesByType("resource").map((entry) => entry.name).filter((name) => /\/store\/guide\/(?:card-(?:method|amount|invoice|pay|verify)|crypto-(?:coin|network|amount|invoice|send|status))\.webp/.test(name)));
+    assert.deepEqual(later, []);
+  });
+  await step("scrollbars carry the brand accent, in light and dark", async () => {
+    const thumb = () => page.evaluate(() => getComputedStyle(document.documentElement, "::-webkit-scrollbar-thumb").backgroundColor);
+    const green = async () => {
+      const [r, g, b, alpha] = (await thumb()).match(/[\d.]+/g).map(Number);
+      assert.ok(g > r * 2 && g > b && alpha > 0 && alpha < 1, await thumb());
+    };
+    await green();
+    await page.getByRole("button", { name: /تغییر پوسته/ }).click();
+    await green();
+  });
+  await step("the hero's loops stop while it is scrolled away and resume on return", async () => {
+    await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" }));
+    await page.waitForFunction(() => document.querySelector("[data-ambient]").hasAttribute("data-offscreen"));
+    assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector(".flow-line")).animationPlayState), "paused");
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+    await page.waitForFunction(() => !document.querySelector("[data-ambient]").hasAttribute("data-offscreen"));
+  });
+  for (const id of ["faq", "devices", "how"]) {
+    await step(`a phone deep link to #${id} lands on it once the plans have loaded`, async () => {
+      await page.goto(`${base}/#${id}`, { waitUntil: "networkidle" });
+      await page.reload({ waitUntil: "networkidle" });
+      await page.waitForFunction(() => document.querySelectorAll('button[aria-label^="انتخاب پلن"]').length > 0);
+      await page.waitForFunction((target) => {
+        const top = document.getElementById(target).getBoundingClientRect().top;
+        return top > 30 && top < 130;
+      }, id, { timeout: 4000 });
+    });
+  }
   await context.close();
 }
 

@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { ProgressLink } from "@/components/shared/progress-link";
 import { redirect } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
 
@@ -26,10 +26,10 @@ export default async function SupportPortalLayout({ children }: { children: Reac
     <CustomerSessionProvider csrfToken={session.csrfToken}>
       <div className="min-h-screen bg-background" dir="rtl" lang="fa">
         <header className="flex h-14 items-center justify-between border-b border-border bg-card px-4 sm:px-6">
-          <Link href="/support" className="flex items-center gap-2.5" aria-label="پشتیبانی سوییفت">
+          <ProgressLink pendingLabel="در حال بارگذاری" href="/support" className="flex items-center gap-2.5" aria-label="پشتیبانی سوییفت">
             <Logo height={24} />
             <span className="text-sm font-semibold">پشتیبانی</span>
-          </Link>
+          </ProgressLink>
           <div className="flex items-center gap-2">
             <ThemeToggle />
             <CustomerSignOut />

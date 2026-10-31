@@ -13,6 +13,8 @@ const HTML_FILE = /\.html?[.\s]*$/i;
 /** Next.js static build output (web/public/_next/static/**), written by scripts/build-storefront.mjs. */
 const HASHED_ASSET = /[\\/]_next[\\/]static[\\/]/;
 const PRECOMPRESSED_ASSET = /^\/_next\/static\/.+\.(?:js|css)$/;
+/** Fonts change only when a file is replaced by hand, and a revalidation per hour is paid by every returning visitor. */
+const FONT_ASSET = /[\\/]store[\\/]fonts[\\/].+\.woff2$/;
 
 export const STATIC_OPTIONS = {
   dotfiles: "ignore",
@@ -28,6 +30,10 @@ export const STATIC_OPTIONS = {
     // Content-hashed storefront build assets never change under the same URL.
     if (HASHED_ASSET.test(filePath)) {
       res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      return;
+    }
+    if (FONT_ASSET.test(filePath)) {
+      res.setHeader("Cache-Control", "public, max-age=2592000");
       return;
     }
     if (!HTML_FILE.test(filePath)) return;

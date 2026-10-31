@@ -11,7 +11,7 @@ export const Dialog = DialogPrimitive.Root;
 export const DialogContent = React.forwardRef<React.ElementRef<typeof DialogPrimitive.Content>, React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>>(
   ({ className, children, ...props }, ref) => (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+      <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-overlay/60 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
       <DialogPrimitive.Content
         ref={ref}
         className={cn(
@@ -25,7 +25,7 @@ export const DialogContent = React.forwardRef<React.ElementRef<typeof DialogPrim
         {...props}
       >
         {children}
-        <DialogPrimitive.Close className="press absolute end-4 top-4 inline-grid size-11 place-items-center rounded-xl border bg-card text-muted-foreground hover:text-foreground">
+        <DialogPrimitive.Close className="press absolute end-4 top-4 inline-grid size-11 place-items-center rounded-xl border bg-card text-muted-foreground hover:border-brand/60 hover:text-foreground">
           <X className="size-[19px]" />
           <span className="sr-only">بستن</span>
         </DialogPrimitive.Close>

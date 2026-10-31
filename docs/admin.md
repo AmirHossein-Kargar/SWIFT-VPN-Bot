@@ -84,9 +84,9 @@ HooshPay invoice lookup/forced re-fulfillment, API service purchase and messagin
   its `operationId`.
 - **No route loading file under `app/(app)`.** A route loading boundary left filter changes stuck in a transition that never
   committed (about 1 in 16 on Users, 10 in 32 on the catalog) and streamed pages, turning a failed API into HTTP 200.
-  `components/shared/navigation-pending.tsx` provides the waiting states instead; `tests/e2e/nextPanel.e2e.mjs` guards
-  both. `app/(app)/error.tsx` shows a failed page.
-- Charts keep the greyscale tokens, so a second series is also dashed and legend-keyed; Recharts' own animation follows
+  `components/shared/navigation-pending.tsx` provides the waiting states instead, and `components/shared/progress-link.tsx`
+  gives links outside it (page tabs, the support portal) the same bar; `tests/e2e/nextPanel.e2e.mjs` guards both. `app/(app)/error.tsx` shows a failed page.
+- Charts use the green `--chart-*` tokens from `design/theme.css`; a second series is also dashed and legend-keyed; Recharts' own animation follows
   `prefers-reduced-motion` through `lib/use-reduced-motion.ts`.
 
 ## Money safety in admin actions

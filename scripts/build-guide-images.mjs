@@ -2,7 +2,7 @@
 /**
  * Draws the wallet top-up guide images from storefront/lib/topup-guide.json into web/public/store/guide/<id>.webp.
  * Run it by hand after changing that file (`npm run build:guide-images`, needs Chrome); the images are committed, so
- * deploys do not need a browser. They are labelled illustrations built from the bot's real labels and placeholder
+ * deploys do not need a browser. They are illustrations built from the bot's real labels and masked placeholder
  * values, not screenshots: Telegram is not reachable from the build. A real screenshot can replace a file at the same
  * path and 4:5 ratio.
  */
@@ -76,9 +76,8 @@ function diagramBody({ nodes, warning }) {
 function pageFor(step) {
   const diagram = step.kind === "diagram";
   const body = diagram ? diagramBody(step.diagram) : botBody(step.mock);
-  const badge = diagram ? "نمودار راهنما، نه تصویر درگاه" : "تصویر نمونه، نه اسکرین‌شات";
   return `<!doctype html><html lang="fa"><head><meta charset="utf-8"><style>${STYLE}</style></head><body>`
-    + `<header><i></i>${diagram ? "مسیر پرداخت" : "ربات سویفت"}<b>${badge}</b></header><main>${body}</main></body></html>`;
+    + `<header><i></i>${diagram ? "مسیر پرداخت" : "ربات سویفت"}${diagram ? "<b>نمودار راهنما، نه تصویر درگاه</b>" : ""}</header><main>${body}</main></body></html>`;
 }
 
 mkdirSync(outDir, { recursive: true });
