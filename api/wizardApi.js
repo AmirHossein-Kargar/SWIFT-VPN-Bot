@@ -1,4 +1,5 @@
 import axios from "axios";
+import { observeProvider, observeProviderStart } from "../services/reliability/telemetry.js";
 
 /**
  * WizardXray web service v1 (see the provider document "API v1"):
@@ -120,7 +121,24 @@ function panelRejectionCode(body, status) {
   return "panel_rejected_request";
 }
 
-async function request(operation, method, path, form, { mutation = false } = {}) {
+/** Telemetry only: the call, its result and its error reach the caller exactly as sendRequest produced them. */
+async function request(operation, method, path, requestForm, options = {}) {
+  const series = /creation/.test(operation) ? "provider.wizardxray.create" : options.mutation ? "provider.wizardxray.write" : "provider.wizardxray.read";
+  const creating = series === "provider.wizardxray.create";
+  const started = Date.now();
+  if (creating) observeProviderStart(series, { operation });
+  try {
+    const body = await sendRequest(operation, method, path, requestForm, options);
+    observeProvider(series, { operation, ms: Date.now() - started, mutation: creating });
+    return body;
+  } catch (error) {
+    // A proven refusal is the panel answering, not the panel being down.
+    observeProvider(series, { operation, ms: Date.now() - started, error, rejected: WIZARD_REJECTION_CODES.includes(error?.code), mutation: creating });
+    throw error;
+  }
+}
+
+async function sendRequest(operation, method, path, form, { mutation = false } = {}) {
   const client = getClient();
   try {
     const response = await client.request({

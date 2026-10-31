@@ -20,6 +20,7 @@ import {
   LifeBuoy,
   Gift,
   Radar,
+  Network,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -64,6 +65,7 @@ const NAV_SECTIONS: NavSection[] = [
       { href: "/audit", label: "Audit log", icon: ScrollText },
       { href: "/admins", label: "Admins", icon: UserCog },
       { href: "/mock-tests", label: "Mock tests", icon: FlaskConical },
+      { href: "/reliability", label: "Service reliability", icon: Network },
       { href: "/system-health", label: "System health", icon: Activity },
       { href: "/settings", label: "Settings", icon: Settings },
     ],

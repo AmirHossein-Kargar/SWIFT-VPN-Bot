@@ -166,7 +166,7 @@ happened: dismiss the finding and name the operation in the reason.
 ## The no-mutation guarantee
 
 - `services/sentinel/readOnly.js` is the only door to money collections. It exposes reads; any other member throws, and
-  aggregations are checked for `$out` and `$merge`.
+  aggregations are checked for `$out` and `$merge`. The [Service Reliability Center](reliability.md) reads through the same door.
 - `findingsStore.js` is the only writer, and knows only `SentinelFinding`. The job also writes its own `JobCheckpoint` row.
 - No Sentinel module imports code that credits, refunds, provisions or calls a provider.
 - `tests/unit/sentinelReadOnly.test.js` scans the folder for these rules. `tests/integration/sentinel.mongo.test.js` proves

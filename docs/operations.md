@@ -105,8 +105,16 @@ stale, with the last error type. The first pass after a deploy may list many inf
 before the wallet ledger; that is history, not a fault. `SENTINEL_ENABLED=off` stops the job. See
 [Money Flow Sentinel](sentinel.md).
 
+## Service Reliability Center
+
+`/panel/reliability` is the first place to look when something seems wrong: it shows what has evidence of working, what does
+not, and what has none. It logs under `"service":"service-reliability"`. A failing monitor changes no business record: the page
+goes *Stale* by itself. Right after a deploy, jobs read *Unknown* until each reports, and a quiet payment provider reads *Unknown*
+until real traffic proves it; neither is a fault. `RELIABILITY_ENABLED=off` stops it. See
+[troubleshooting](reliability.md#troubleshooting).
+
 ## Shutdown and restarts
 
-`SIGTERM` / `SIGINT` stop Telegram polling, the TRX scanner and the crons, then close Express,
+`SIGTERM` / `SIGINT` stop Telegram polling, the TRX scanner and the crons, close the panel's live streams, then close Express,
 MongoDB and Redis before exiting, so in-flight work finishes. Railway sends `SIGTERM` on
 redeploy.

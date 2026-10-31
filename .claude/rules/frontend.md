@@ -28,5 +28,7 @@ Details: `docs/storefront.md` (storefront) and `docs/admin.md` (dashboard).
 - **`/panel` has no route loading file under `app/(app)`.** It hung filter navigation and streamed failed pages as 200; see
   `docs/admin.md`. Waiting states live in `admin-panel/components/shared/navigation-pending.tsx`. Success motion and
   toasts follow a server response, never a click.
+- **Health claims need evidence.** In `/panel/reliability`, a state, a *Live* label or a moving dot appears only for something measured; silence reads
+  *Unknown* or *Stale*, never healthy. See `docs/reliability.md`.
 - Node tests must never request `/panel` on the real app: outside `NODE_ENV=production`, `web/nextAdminMiddleware.js`
   starts a Next.js dev server inside the test process.

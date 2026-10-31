@@ -35,6 +35,7 @@ import { getUserProfilePhoto } from "../services/admin/userPhoto.js";
 import { sendUserMessage } from "../services/admin/userMessaging.js";
 import { getSettingsOverview } from "../services/admin/settings.js";
 import { getSentinelFinding, getSentinelFlow, getSentinelLive, getSentinelOverview, getSentinelSync, getSentinelTransaction, listSentinelFindings, listSentinelTransactions, runSentinelReconciliation, updateSentinelFindingReview } from "../services/admin/sentinel.js";
+import { getReliabilityEvents, getReliabilityHistory, getReliabilityIncident, getReliabilityIncidents, getReliabilityOrderTrace, getReliabilityOrders, getReliabilitySnapshot, openReliabilityStream } from "../services/admin/reliability.js";
 import { listSupportTickets, getSupportTicket, getSupportTicketUpdates, getSupportTicketHistory, replyToSupportTicket, setSupportTicketStatus, deleteSupportTickets, clearSupportHistory } from "../services/admin/tickets.js";
 import { getMessageAttachment, toAdminError } from "../services/support/tickets.js";
 import { streamAttachment } from "../services/support/attachments.js";
@@ -915,6 +916,47 @@ router.post("/sentinel/reconcile", rateLimitMiddleware({ limit: 6 }), requireBod
 });
 
 // Convenience endpoint used by the frontend to mint fresh idempotency keys.
+// Service Reliability Center: every route reads. Nothing here can change an order, a balance or a job.
+router.get("/reliability/snapshot", rateLimitMiddleware({ limit: 60 }), (req, res, next) => {
+  try { res.json({ ok: true, data: getReliabilitySnapshot({ actorId: req.adminActorId }) }); }
+  catch (error) { next(error); }
+});
+
+router.get("/reliability/stream", rateLimitMiddleware({ limit: 30 }), (req, res, next) => {
+  try { openReliabilityStream({ actorId: req.adminActorId, token: req.adminSessionToken, lastEventId: req.get("last-event-id") ?? req.query.cursor, req, res }); }
+  catch (error) { next(error); }
+});
+
+router.get("/reliability/history", (req, res, next) => {
+  try { res.json({ ok: true, data: getReliabilityHistory({ actorId: req.adminActorId, query: req.query }) }); }
+  catch (error) { next(error); }
+});
+
+router.get("/reliability/events", rateLimitMiddleware({ limit: 60 }), async (req, res, next) => {
+  try { res.json({ ok: true, data: await getReliabilityEvents({ actorId: req.adminActorId, query: req.query }) }); }
+  catch (error) { next(error); }
+});
+
+router.get("/reliability/incidents", async (req, res, next) => {
+  try { res.json({ ok: true, data: await getReliabilityIncidents({ actorId: req.adminActorId, query: req.query }) }); }
+  catch (error) { next(error); }
+});
+
+router.get("/reliability/incidents/:id", async (req, res, next) => {
+  try { res.json({ ok: true, data: await getReliabilityIncident({ actorId: req.adminActorId, id: req.params.id }) }); }
+  catch (error) { next(error); }
+});
+
+router.get("/reliability/orders", async (req, res, next) => {
+  try { res.json({ ok: true, data: await getReliabilityOrders({ actorId: req.adminActorId, query: req.query }) }); }
+  catch (error) { next(error); }
+});
+
+router.get("/reliability/orders/:orderId", async (req, res, next) => {
+  try { res.json({ ok: true, data: await getReliabilityOrderTrace({ actorId: req.adminActorId, orderId: req.params.orderId }) }); }
+  catch (error) { next(error); }
+});
+
 router.get("/operations/new-id", (_req, res) => res.json({ ok: true, operationId: newOperationId() }));
 
 router.use(adminApiErrorHandler);

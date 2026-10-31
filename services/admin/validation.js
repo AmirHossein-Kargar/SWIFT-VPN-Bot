@@ -43,6 +43,39 @@ export function requireReason(value, { min = 5, max = 240, name = "reason" } = {
   return reason;
 }
 
+/** Query-string filters. Repeated or nested parameters arrive as arrays or objects; only a plain string is a value. */
+export function invalidFilter(code, message = "One of the filters is not valid.") {
+  return new AdminServiceError(message, { status: 400, code });
+}
+
+export function filterText(value, code) {
+  if (value == null || value === "") return null;
+  if (typeof value !== "string") throw invalidFilter(code);
+  return value.trim() || null;
+}
+
+export function filterOneOf(value, allowed, code, fallback = null) {
+  const parsed = filterText(value, code);
+  if (parsed == null) return fallback;
+  if (!allowed.includes(parsed)) throw invalidFilter(code);
+  return parsed;
+}
+
+export function filterMatching(value, pattern, code) {
+  const parsed = filterText(value, code);
+  if (parsed == null) return null;
+  if (!pattern.test(parsed)) throw invalidFilter(code);
+  return parsed;
+}
+
+export function filterDate(value, code) {
+  const parsed = filterText(value, code);
+  if (parsed == null) return null;
+  const when = new Date(parsed);
+  if (parsed.length > 40 || Number.isNaN(when.getTime())) throw invalidFilter(code);
+  return when;
+}
+
 export function validPageFilter(value, allowed, fallback = "all") {
   return allowed.includes(value) ? value : fallback;
 }

@@ -61,6 +61,8 @@ rerun with `TEST_CONCURRENCY=1` to isolate a concurrency-sensitive test from a g
   sequence and capture state on failure; do not add a sleep.
 - `node tests/e2e/sentinel.e2e.mjs` is the `/panel/sentinel` suite: real app and a disposable `TEST_MONGO_URL`, needs
   `npx next build admin-panel`. Set `AXE_PATH` to the axe-core script or its accessibility step reports itself as skipped.
+- `node tests/e2e/reliability.e2e.mjs` is the `/panel/reliability` suite, with the same prerequisites and `AXE_PATH`, `E2E_ONLY` and
+  `E2E_SHOTS` options. It takes several minutes.
 - Set `SHOTS` to a scratch folder for the storefront suite: without it, it overwrites the tracked `store-*.png` in the
   repo root. `tsc` can rewrite the untracked `admin-panel/tsconfig.tsbuildinfo`. Check `git status` before and after,
   and restore anything you changed that the owner did not ask for.

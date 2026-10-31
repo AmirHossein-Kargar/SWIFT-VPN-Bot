@@ -1,4 +1,5 @@
 import NowPaymentsInvoice from "../../models/NowPaymentsInvoice.js";
+import { observeJob } from "../reliability/telemetry.js";
 import { applyNowPaymentsUpdate } from "./applyStatus.js";
 import { notifyNowPaymentsCredit } from "./notify.js";
 import { readNowPaymentsConfig } from "./money.js";
@@ -190,14 +191,16 @@ async function runSafely() {
   let lease = null;
   try {
     lease = await acquireRedisLease("nowpayments:recovery", 180, { timeoutMs: 2_000 });
-    if (!lease) return;
+    if (!lease) { observeJob("nowpayments-recovery", { ok: true, skipped: "lease" }); return; }
     let bot = null;
     try {
       const module = await import("../../config/botInstance.js");
       bot = module.default?.bot || null;
     } catch { /* notification remains pending */ }
     await recoverNowPaymentsInvoices({ bot });
+    observeJob("nowpayments-recovery", { ok: true });
   } catch (error) {
+    observeJob("nowpayments-recovery", { ok: false });
     log("warn", "Recovery cycle skipped", { errorType: error?.name || "Error" });
   } finally {
     if (lease) {

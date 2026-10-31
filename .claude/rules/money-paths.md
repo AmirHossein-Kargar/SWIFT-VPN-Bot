@@ -35,6 +35,9 @@ change must never break. If a change needs to break one, stop and ask the owner.
 - **Sentinel stays read-only and complete.** `services/sentinel` writes only `SentinelFinding` and its checkpoint, and reaches
   money collections only through `readOnly.js`. A new balance writer or ledger key must be taught to `services/sentinel/ledger.js`
   and `bundle.js` in the same change, or every affected wallet reports as drift. See `docs/sentinel.md`.
+- **Telemetry observes, and only observes.** Money code may call the `observe*` functions in `services/reliability/telemetry.js`, which are
+  synchronous, never throw and do no I/O. Never await one, branch on one, or read `Reliability*` collections from a money path. See
+  `docs/reliability.md`.
 - **Logging.** Log `errorType`/`code`/status only; never provider payloads, tokens, card numbers or full ids.
 
 Tests for these paths are Mongo-backed and skip without a disposable MongoDB; see

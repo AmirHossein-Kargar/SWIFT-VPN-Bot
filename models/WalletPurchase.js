@@ -156,6 +156,12 @@ walletPurchaseSchema.index({ telegramId: 1, createdAt: -1 }, { name: "idx_wallet
 walletPurchaseSchema.index({ recoveryStatus: 1, status: 1, createdAt: 1 }, { name: "idx_wallet_purchase_recovery_queue" });
 // Read-only lookup of recent completions for the user-spend sweeper (services/users/userSpendSweeper.js).
 walletPurchaseSchema.index({ status: 1, completedAt: 1, _id: 1 }, { name: "idx_wallet_purchase_completed_at" });
+// Undelivered services for the Service Reliability Center and System Health (docs/reliability.md): without it, counting them
+// walks every completed order, once a minute. Only rows waiting in the outbox are indexed, so it stays tiny.
+walletPurchaseSchema.index(
+  { completedAt: 1 },
+  { name: "idx_reliability_delivery_pending", partialFilterExpression: { notificationPending: true } },
+);
 // Refund feed of Money Flow Sentinel (docs/sentinel.md); only refunded orders are indexed.
 walletPurchaseSchema.index(
   { refundedAt: 1 },
