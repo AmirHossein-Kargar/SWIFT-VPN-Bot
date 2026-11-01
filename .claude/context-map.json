@@ -43,6 +43,8 @@
         "services/manageServices/**",
         "services/plans.js",
         "services/subscriptionLink.js",
+        "services/qrCode.js",
+        "services/admin/orderSettlement.js",
         "services/wizardAccount.js",
         "services/wizardServiceStatus.js",
         "utils/serviceTerms.js",
@@ -232,7 +234,8 @@
         "config/botInstance.js",
         "config/botIdentity.js",
         "services/admin/monitoring.js",
-        "scripts/preflight.js"
+        "scripts/preflight.js",
+        "scripts/verify-production.mjs"
       ],
       "review": [
         "CLAUDE.md",

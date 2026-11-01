@@ -6,8 +6,8 @@ what the code does about each part.
 
 **What has been proven.** Everything here is tested against a local server that follows the document
 (`tests/helpers/fakeWizardPanel.js`, `tests/unit/wizardApiEndpoints.test.js`, `tests/unit/wizardErrorCatalog.test.js`). That shows the
-application keeps its side of the contract. **Nothing here has been run against the live provider**, because no credentials were
-available when this was written.
+application keeps its side of the contract. **Nothing authenticated has been run against the live provider**, because no credentials
+were available when this was written. See [What the live provider has confirmed](#what-the-live-provider-has-confirmed).
 
 - [Connection](#connection)
 - [Methods](#methods)
@@ -18,6 +18,7 @@ available when this was written.
 - [Subscription links](#subscription-links)
 - [Unlimited](#unlimited)
 - [Renewal](#renewal)
+- [What the live provider has confirmed](#what-the-live-provider-has-confirmed)
 - [What is deliberately not done](#what-is-deliberately-not-done)
 
 ## Connection
@@ -85,10 +86,20 @@ This decides whether money can move, so it is one rule, in one place (`api/wizar
 | 500 with the exact text the document lists **for that method** | Definite, because the document states the outcome | Refunds the customer |
 | `internal error`, any other 5xx, a 3xx, a 408, a timeout, a dropped connection, a body that contradicts itself | **Ambiguous** | Held for review, never replayed, never refunded by itself |
 
-An ambiguous order stays `manual_review` with the debit held. To help decide it, the recovery page has **Check provider**
-(`findProviderCandidates`), which lists services nobody here knows about with the same terms from around that time. That is the
-document's advice after a lost answer, with `clients` standing in for an idempotency key. A match is a lead and no match proves
-nothing, so it never settles an order.
+An ambiguous order stays `manual_review` with the debit held. Nothing settles it by itself. On the recovery page **Check provider**
+(`findProviderCandidates`) lists services nobody here knows about with the same terms from around that time, which is the document's
+advice after a lost answer, with `clients` standing in for an idempotency key. An admin then settles the order
+(`services/admin/orderSettlement.js`), and neither way calls a provider method that changes anything:
+
+| Decision | The server requires | What happens |
+|---|---|---|
+| **Link** a found service | `info` answering live, with the sold traffic, not a test service, created between 2 minutes before the attempt and 15 after, and on no other order or customer | The order takes the service and is delivered. The held debit pays for it |
+| **Refund** | The whole of `clients` read, with no candidate in it | The held debit goes back once through the normal refund path |
+
+Both need a reason of 10 to 240 characters, are audited under `ORDER_UNKNOWN_SETTLED`, and are refused while the attempt is under 15
+minutes old, because `create` may still answer and the list can lag. A list that cannot be read, or a stale `info`, moves nothing. A
+late provider answer after a refund cannot deliver: the order is no longer `manual_review`. If a service does appear after a
+refund, it stays at the provider as an orphan, which the refund dialog warns about.
 
 ## Errors
 
@@ -157,9 +168,8 @@ only for a record with no stored link. A built link does not follow `change_link
 
 A subscription link is a credential: it is never logged, never returned by the remote client list, and never passed to monitoring.
 
-**Open issue:** QR codes are drawn by the third-party `api.qrserver.com`, so the link is sent to it in a URL. Replacing that needs a local QR
-encoder, which is a new dependency, and is left to the owner. Delivery no longer depends on it: if the picture fails, the same text goes
-out as a message.
+QR codes are drawn in this process (`services/qrCode.js`), so a link goes nowhere but Telegram. If the picture fails, the same text goes
+out as a message. A chat that refuses the bot would refuse the text as well, so that error goes to the caller's retry instead.
 
 ## Unlimited
 
@@ -190,11 +200,29 @@ Admin only. Usage resets and the days are added. What carries over depends on th
 
 Stored dates and volumes come from the `service` in the answer, not from local arithmetic.
 
+## What the live provider has confirmed
+
+Nothing about the authenticated API, as of the probes behind this page. Those ran without a key, so they could only show who answers:
+
+| Provider | Unauthenticated probe | Shows | Still unproven |
+|---|---|---|---|
+| WizardXray | The document's example host did not complete TLS from the test machine, and each bot has its own address | Nothing | The whole API, including every answer shape on this page |
+| HooshPay | `GET /api/v1/balance` and `/account` answer 401 with a JSON `detail`; an unknown route answers 404 | The routes exist and require a key. A 401 can carry `detail` with no `success`, despite the document's statement that every answer has `success` | The authenticated answer |
+
+**`/balance` is two different things.** For WizardXray, `balance` is only an alias of `me`, and this application calls `me` for the wallet.
+The HooshPay `GET /balance` is the one a health check calls, and its document gives only the method, the path and the `X-API-KEY`
+header: no fields, no rate limit. It lists 401 for a bad key, 403 for a blocked account and 503 for a disabled gateway or no active
+card, and `probeHooshPay` reports each as itself. Only the `success` field is relied on.
+
+`scripts/verify-production.mjs` runs the read-only half of this with real credentials: `railway run node scripts/verify-production.mjs`.
+It prints the field names of the HooshPay answer and never their values, so the real shape can be read without exposing a balance.
+
 ## What is deliberately not done
 
-- **Customers cannot renew or upgrade.** The bot's buttons answer that the option is off and to buy a new service. That was an existing
-  decision, and opening it needs a customer price per day and per gigabyte, which the catalog does not have. The provider
-  methods are integrated for admins, and the customer path is the owner's call.
+- **Customers cannot renew or upgrade.** The bot's buttons answer that the option is off and to buy a new service. The catalog has no
+  customer price per day or per gigabyte, and the provider's quote is what it charges this bot, not a retail price. The provider methods
+  are integrated for admins only, `tests/unit/customerRenewalDisabled.test.js` fails if a customer route reaches them, and opening
+  this needs a pricing policy from the owner.
 - **A customer's delete refunds nothing to the customer.** `delsv` returns the unused value to this bot's provider wallet. The confirmation
   screen says so. Passing it on would be a new money path, and is the owner's call.
 - **Provider cost is not stored on the order.** `result.charged` is ignored, as all supplier figures are, so profit reports use the

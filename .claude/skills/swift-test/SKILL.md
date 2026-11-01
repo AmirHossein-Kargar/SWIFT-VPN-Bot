@@ -51,7 +51,8 @@ rerun with `TEST_CONCURRENCY=1` to isolate a concurrency-sensitive test from a g
 
 - `npm run build` checks both Next apps. Its `.next` output is git-ignored and skipped by
   `tests/unit/moduleSmoke.test.js`; leave an existing `.next` alone unless you created it.
-- `npm run test:e2e` currently stalls on the legacy dashboard (see `docs/testing.md`); use `nextPanel.e2e.mjs` for admin.
+- `npm run test:e2e` currently stalls on the legacy dashboard and deletes the production `/panel` build (see `docs/testing.md`); use
+  `nextPanel.e2e.mjs` for admin. A browser suite with no build prints `SKIP` and exits 0, so read its summary line, never only its exit code.
 - `npm run test:e2e` (admin, fixture backend) and `npm run test:e2e:store` (storefront under the real CSP) need Chrome
   (`CHROME_PATH`); the storefront suite needs a storefront build and exits 0 with `SKIP` without one. axe checks run only
   when `axe-core` resolves (`AXE_PATH`).
@@ -65,6 +66,8 @@ rerun with `TEST_CONCURRENCY=1` to isolate a concurrency-sensitive test from a g
 - `node tests/e2e/dashboard.e2e.mjs` is the `/panel` dashboard suite, with the same prerequisites and `AXE_PATH` and `E2E_ONLY` options.
 - `node tests/e2e/reliability.e2e.mjs` is the `/panel/reliability` suite, with the same prerequisites and `AXE_PATH`, `E2E_ONLY` and
   `E2E_SHOTS` options. It takes several minutes.
+- `node tests/e2e/orderSettlement.e2e.mjs` is the settlement suite. It needs `npx next build admin-panel`, a disposable `TEST_MONGO_URL`
+  and a real disposable `REDIS_URL`.
 - Set `SHOTS` to a scratch folder for the storefront suite: without it, it overwrites the tracked `store-*.png` in the
   repo root. `tsc` can rewrite the untracked `admin-panel/tsconfig.tsbuildinfo`. Check `git status` before and after,
   and restore anything you changed that the owner did not ask for.

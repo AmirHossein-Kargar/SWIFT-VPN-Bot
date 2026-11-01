@@ -12,7 +12,7 @@ over to the bot.
 
 | Area | What is included |
 |---|---|
-| **Customers (Telegram)** | Buy a plan from a live catalog, top up the wallet, manage services (usage, link, QR, extend time/data, enable/disable, delete), one free trial per account, profile, guide, support relay |
+| **Customers (Telegram)** | Buy a plan from a live catalog, top up the wallet, manage services (usage, link, QR, enable/disable, delete), one free trial per account, profile, guide, support relay |
 | **Payments** | **HooshPay** online card-to-card, **NOWPayments** hosted TRON invoices. Every credit is signature-verified, idempotent and crash-safe ([details](docs/payments.md)) |
 | **Provisioning** | WizardXray API v1, including unlimited services where the provider account allows them ([WizardXray](docs/wizardxray.md)). Ambiguous results are never replayed; definitive failures refund exactly once |
 | **Admin** | Telegram panel and two web dashboards over one audited service layer: users, wallet credit/debit, block, per-user messages, VPN services, payments and recovery, plans, broadcasts, analytics, audit log ([details](docs/admin.md)) |
@@ -64,7 +64,7 @@ TRON) → enter an amount in Toman → pay → the wallet is credited only after
 callback is verified.
 
 **Manage services.** `📦 سرویس‌های من` → pick a service → view usage, change the link, get the QR,
-extend time or data, enable/disable or delete it. `🎁 سرویس تست` gives one free trial per account.
+enable/disable or delete it. Renewing is admin-only. `🎁 سرویس تست` gives one free trial per account.
 
 **Admin.** Send `/admin` (or `/panel`) as an allow-listed admin, or open
 `<WEBHOOK_BASE_URL>/panel` (`/next-panel`, `/panel-next` and `/admin` redirect there) and sign in with your Telegram ID; the bot sends a one-time code.
@@ -168,7 +168,7 @@ are in [docs/operations.md](docs/operations.md).
 | `web/` | Admin router, middleware, static dashboard, storefront assets and serving |
 | `admin-panel/` | Next.js admin dashboard served at `/panel` |
 | `storefront/` | Next.js static export of the public storefront |
-| `scripts/` | `preflight.js`, `build-storefront.mjs` |
+| `scripts/` | `preflight.js`, `verify-production.mjs`, `build-storefront.mjs` |
 | `tests/` | Unit, integration and browser tests |
 
 ## Documentation
