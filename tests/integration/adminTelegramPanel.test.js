@@ -25,6 +25,13 @@ after(async () => {
 
 const { handleAdminPanelCallbacks, handleAdminPanelCommand, handleAdminPanelStep } = await import("../../handlers/admin/panel.js");
 
+// The steps below span two updates, so they need a session store. This file never had one: with Redis unreachable or not connected
+// here, the second update found no step and was correctly ignored, which is what those tests kept reporting as a failure.
+const { setSessionClientForTests, clearSessionClientForTests } = await import("../../config/sessionStore.js");
+const { makeSessionClient } = await import("../helpers/fakeSupport.js");
+setSessionClientForTests(makeSessionClient());
+after(() => clearSessionClientForTests());
+
 function query(bot, data, { chatId = 555, chatType = "private", userId = ADMIN } = {}) {
   return {
     id: `q_${Math.random().toString(36).slice(2)}`,
@@ -127,7 +134,7 @@ describe("text-input steps", () => {
   // placeholder or a separate confirmation message alongside it.
   skip("admin_panel_user_search: a match edits the prompt into the profile screen (no placeholder, no second message)", async () => {
     const { default: User } = await import("../../models/User.js");
-    const telegramId = `au_${Date.now()}`;
+    const telegramId = String(Date.now());
     await User.create({ telegramId, firstName: "Regress", balance: 1000 });
 
     const bot = makeBotStub();
@@ -155,7 +162,7 @@ describe("text-input steps", () => {
 
   skip("admin_panel_balance: a successful adjustment edits the prompt into the profile screen with a confirmation banner", async () => {
     const { default: User } = await import("../../models/User.js");
-    const telegramId = `au_${Date.now()}_2`;
+    const telegramId = String(Date.now() + 1);
     await User.create({ telegramId, firstName: "Regress2", balance: 1000 });
 
     const bot = makeBotStub();

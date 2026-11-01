@@ -40,6 +40,21 @@ const UNIQUE_DB_NAME = `${dbName}_${process.pid}_${Math.random().toString(36).sl
 export const TEST_MONGO_URL = `${prefix}/${UNIQUE_DB_NAME}${query}`;
 
 /**
+ * Unique indexes are part of the money guarantees, and in production startup waits for them (config/db.js). Here most test files import
+ * their models after connecting, so nothing waits: tests could start while the indexes were still building, and duplicates got through.
+ * That read as a double charge and was a race in this harness. Every model registered after this line waits for its own indexes
+ * before its first write, in every test file, so no file has to remember to.
+ */
+mongoose.plugin((schema) => {
+  const indexesBuilt = async function indexesBuilt() {
+    const model = this.constructor?.init ? this.constructor : this.model;
+    await model?.init?.().catch(() => {});
+  };
+  schema.pre("save", indexesBuilt);
+  schema.pre(["findOneAndUpdate", "updateOne", "updateMany"], indexesBuilt);
+});
+
+/**
  * Connect to the test database and wipe it.
  * @returns {Promise<boolean>} false when no MongoDB is reachable (tests should skip)
  */

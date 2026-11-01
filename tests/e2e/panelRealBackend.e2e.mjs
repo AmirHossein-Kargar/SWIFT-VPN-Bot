@@ -83,7 +83,8 @@ const PAGES = [
   ["mock-tests", "/mock-tests", /./],
   ["settings", "/settings", /./],
   ["system-health", "/system-health", /./],
-  ["tickets", "/tickets", /تیکت واقعی/],
+  // The list names the customer, not the subject, since 1a7ca4c; the subject stays on the ticket itself.
+  ["tickets", "/tickets", /real_user_1|Real User 1|910001/],
   ["ticket-detail", `/tickets/${ticketId}`, /سلام/],
 ];
 const results = { passed: 0, failed: [] };

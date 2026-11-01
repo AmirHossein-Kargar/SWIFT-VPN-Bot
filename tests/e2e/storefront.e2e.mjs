@@ -34,6 +34,9 @@ auth.setAdminSessionRedisForTests(makeFakeRedis());
 const { default: app } = await import("../../server.js");
 const { resetStoreRateLimitsForTests } = await import("../../web/storeRouter.js");
 const server = await new Promise((resolve) => { const s = app.listen(0, "127.0.0.1", () => resolve(s)); });
+const LICENSED_FONT = /\/store\/fonts\/iranyekanx-[^/]*\.woff2$/;
+const fontPresent = existsSync(new URL("../../web/public/store/fonts/iranyekanx-vf.woff2", import.meta.url));
+const environment = new Set();
 let catalogHits = 0; // real network requests that reached Express (cache/preload hits do not count)
 server.prependListener("request", (request) => { if (request.url.startsWith("/api/store/catalog")) catalogHits += 1; });
 const base = `http://127.0.0.1:${server.address().port}`;
@@ -70,10 +73,17 @@ async function open({ scheme = "light", width = 1280, stored = {}, route } = {})
     for (const [key, value] of Object.entries(entries)) { try { if (!localStorage.getItem("__seeded")) localStorage.setItem(key, value); } catch { /* blocked */ } }
     try { localStorage.setItem("__seeded", "1"); } catch { /* blocked */ }
   }, stored);
+  // The licensed font is gitignored and the page falls through to Vazirmatn without it. Its 404 is the machine, not the code, so it is
+  // reported apart. Any other missing file is still an issue, and the console line is only ignored when this request explains it.
+  let missingFont = false;
+  page.on("response", (response) => {
+    if (response.status() === 404 && LICENSED_FONT.test(new URL(response.url()).pathname) && !fontPresent) { missingFont = true; environment.add("licensed font not on this machine (gitignored); Vazirmatn was used"); }
+  });
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     // Scenarios that deliberately break the API make the browser log the failed request itself.
     if (route && /^Failed to load resource/.test(message.text())) return;
+    if (missingFont && /^Failed to load resource: .*404/.test(message.text()) && LICENSED_FONT.test(message.location().url || "")) return;
     issues.add(`[${tag}] console: ${message.text().slice(0, 160)}`);
   });
   page.on("pageerror", (error) => issues.add(`[${tag}] pageerror: ${String(error).slice(0, 160)}`));
@@ -730,5 +740,6 @@ const failed = results.filter((result) => !result.ok);
 console.log(`\nSUMMARY: ${results.length - failed.length}/${results.length} checks passed`);
 if (failed.length) console.log("FAILED:\n  " + failed.map((f) => f.name).join("\n  "));
 console.log(`CONSOLE/PAGE ERRORS: ${issues.size}`);
+for (const note of environment) console.log(`ENVIRONMENT: ${note}`);
 for (const issue of issues) console.log("  " + issue);
 process.exit(failed.length || issues.size ? 1 : 0);
