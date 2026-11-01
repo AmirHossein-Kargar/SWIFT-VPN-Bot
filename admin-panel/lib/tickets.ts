@@ -21,6 +21,8 @@ export interface TicketSummary {
   unread: number;
   /** Admin view only. */
   userTelegramId?: string;
+  /** Admin list only; null when the customer has no user record or the lookup failed. */
+  customer?: { name: string | null; username: string | null } | null;
   closedBy?: "customer" | "admin" | null;
   closedByAdminId?: string | null;
   /** Admin view only: closed 72h+ ago, computed by the server. */
@@ -118,6 +120,14 @@ export const MAX_MESSAGE_LENGTH = 3500;
 
 export function formatTicketDateTime(value: string | null | undefined): string {
   return formatDateTime(value);
+}
+
+/** The customer's display name, else their @username; null when neither is known. */
+export function ticketCustomerName(ticket: Pick<TicketSummary, "customer">): string | null {
+  const name = ticket.customer?.name?.trim();
+  if (name) return name;
+  const username = ticket.customer?.username?.replace(/^@/, "");
+  return username ? `@${username}` : null;
 }
 
 const KNOWN_CODES: Record<string, string> = {

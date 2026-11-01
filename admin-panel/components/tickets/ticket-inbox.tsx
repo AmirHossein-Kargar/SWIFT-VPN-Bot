@@ -4,12 +4,14 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { TicketStatusBadge } from "@/components/tickets/ticket-thread";
-import { formatTicketDateTime, type TicketSummary } from "@/lib/tickets";
+import { UserAvatar } from "@/components/users/user-avatar";
+import { formatTicketDateTime, ticketCustomerName, type TicketSummary } from "@/lib/tickets";
 
 /**
- * The ticket list. A row's unread dot is hidden for the ticket currently open
- * on screen (its unread count is being cleared by the conversation), so the
- * list never flags something the admin is already reading.
+ * The ticket list. Rows are identified by customer and ticket ID, never by the
+ * customer's first message. A row's unread dot is hidden for the ticket
+ * currently open on screen (its unread count is being cleared by the
+ * conversation), so the list never flags something the admin is already reading.
  */
 export function TicketInbox({
   tickets,
@@ -65,6 +67,7 @@ export function TicketInbox({
           {tickets.map((ticket) => {
             const selected = ticket.ticketId === selectedId;
             const unread = selected ? 0 : ticket.unread;
+            const customerName = ticketCustomerName(ticket);
             return (
               <li key={ticket.ticketId} className="flex items-stretch">
                 {selectMode ? (
@@ -82,22 +85,26 @@ export function TicketInbox({
                   onClick={() => onSelect(ticket.ticketId)}
                   aria-current={selected ? "true" : undefined}
                   className={cn(
-                    "flex min-w-0 flex-1 flex-col gap-1 px-3 py-2.5 text-left transition-colors hover:bg-accent focus-visible:bg-accent",
+                    "flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-accent focus-visible:bg-accent",
                     selected && "bg-accent"
                   )}
                 >
-                  <span className="flex items-center gap-2">
-                    {unread > 0 ? (
-                      <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground" aria-label={`${unread} unread`}>
-                        {unread > 99 ? "99+" : unread}
-                      </span>
-                    ) : null}
-                    <span className={cn("min-w-0 flex-1 truncate text-sm", unread > 0 ? "font-semibold" : "font-medium")} dir="auto">{ticket.subject}</span>
-                    <TicketStatusBadge status={ticket.status} />
-                  </span>
-                  <span className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                    <span className="truncate"><span className="font-mono">{ticket.ticketId}</span> · <span className="font-mono">{ticket.userTelegramId}</span></span>
-                    <time className="shrink-0" dateTime={ticket.lastMessageAt}>{formatTicketDateTime(ticket.lastMessageAt)}</time>
+                  {ticket.userTelegramId ? <UserAvatar telegramId={ticket.userTelegramId} label={customerName ?? ticket.userTelegramId} size={40} /> : null}
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="flex items-center gap-2">
+                      <span className={cn("min-w-0 flex-1 truncate text-sm", unread > 0 ? "font-semibold" : "font-medium")} dir="auto" data-testid="ticket-row-name">{customerName ?? "Unknown customer"}</span>
+                      {unread > 0 ? (
+                        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground" aria-label={`${unread} unread`}>
+                          {unread > 99 ? "99+" : unread}
+                        </span>
+                      ) : null}
+                      <TicketStatusBadge status={ticket.status} />
+                    </span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {ticket.userTelegramId ? <>ID <span className="font-mono">{ticket.userTelegramId}</span> · </> : null}
+                      <span className="font-mono">{ticket.ticketId}</span>
+                    </span>
+                    <time className="truncate text-xs text-muted-foreground" dateTime={ticket.lastMessageAt} title={`Opened ${formatTicketDateTime(ticket.createdAt)}`}>Updated {formatTicketDateTime(ticket.lastMessageAt)}</time>
                   </span>
                 </button>
               </li>

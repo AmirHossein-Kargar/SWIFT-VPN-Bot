@@ -731,6 +731,67 @@ const adminMessages = (id, text) => supportDeps.Message.docs.filter((m) => m.tic
 let seedKey = 0;
 const customerSays = (id, userId, text) => workflow.customerReply({ userId, ticketId: id, text, dedupeKey: `e2e:${++seedKey}:${Date.now()}` });
 
+await step("tickets: rows lead with the customer's photo and name, then Telegram ID, ticket ID, status and last update; the first message is no title in the list or the header", async () => {
+  const subject = "Subject stays out of the titles";
+  await supportDeps.User.create({ telegramId: "900001", firstName: "Ali", lastName: "Rezaei", username: "photo_user" });
+  await supportDeps.User.create({ telegramId: "910022", firstName: "سارا", lastName: null, username: "sara" });
+  await supportDeps.User.create({ telegramId: "910023", firstName: null, lastName: null, username: "only_username" });
+  const withPhoto = await openTicket(900001, subject, "Row check with a photo");
+  const persianName = await openTicket(910022, subject, "Row check with a Persian name");
+  const usernameOnly = await openTicket(910023, subject, "Row check with only a username");
+  const unknown = await openTicket(910021, subject, "Row check without a user record");
+  const page = await newPage({ theme: "dark" });
+  await go(page, `/tickets?t=${withPhoto}`);
+  await conversation(page).getByText("Row check with a photo").waitFor();
+
+  const rows = page.getByRole("list", { name: "Tickets" });
+  const rowOf = (id) => rows.getByRole("button", { name: new RegExp(id) });
+  const row = rowOf(withPhoto);
+  assert.equal(await row.getByTestId("ticket-row-name").innerText(), "Ali Rezaei", "the name is the row's heading");
+  await row.getByText("900001", { exact: true }).waitFor();
+  await row.getByText(withPhoto, { exact: true }).waitFor();
+  await row.getByText("Open", { exact: true }).waitFor();
+  assert.match(await row.locator("time").innerText(), /^Updated /);
+  assert.match(await row.locator("time").getAttribute("title"), /^Opened /);
+  await page.waitForFunction(() => { const el = document.querySelector('[aria-label="Tickets"] img[alt="Profile photo of Ali Rezaei"]'); return el && el.complete && el.naturalWidth > 0; });
+
+  // Fallbacks, on rows the server rendered before hydration: name with no photo, username only, no user record.
+  assert.equal(await rowOf(persianName).getByTestId("ticket-row-name").innerText(), "سارا");
+  await rowOf(persianName).getByText("سا", { exact: true }).waitFor();
+  assert.equal(await rowOf(usernameOnly).getByTestId("ticket-row-name").innerText(), "@only_username");
+  await rowOf(usernameOnly).getByText("ON", { exact: true }).waitFor();
+  assert.equal(await rowOf(unknown).getByTestId("ticket-row-name").innerText(), "Unknown customer");
+  await rowOf(unknown).getByTestId("avatar-fallback-icon").waitFor();
+  assert.equal(await rows.getByRole("img", { name: /Profile photo of (سارا|@only_username|910021)/ }).count(), 0, "no broken image is left behind");
+
+  assert.equal(await page.getByText(subject).count(), 0, "the subject is not shown as a title anywhere");
+  await page.getByTestId("ticket-customer").getByText("900001").waitFor();
+  await conversation(page).getByRole("heading", { name: `Ticket ${withPhoto}` }).waitFor({ state: "attached" });
+  await conversation(page).getByRole("combobox", { name: "Ticket status" }).waitFor();
+  await page.screenshot({ path: join(shots, "ticket-identity-dark.png") });
+
+  // A live list refresh keeps the customer on the row, and bulk selection still works on it.
+  await customerSays(persianName, 910022, "Second message");
+  await rowOf(persianName).getByLabel("2 unread").waitFor({ timeout: 12_000 });
+  assert.equal(await rowOf(persianName).getByTestId("ticket-row-name").innerText(), "سارا");
+  await page.getByRole("button", { name: "Select to delete" }).click();
+  await page.getByRole("checkbox", { name: `Select ticket ${withPhoto}` }).waitFor();
+  await page.getByRole("button", { name: "Cancel selection" }).click();
+  await page.context().close();
+
+  const phone = await newPage({ width: 375, height: 800 });
+  await go(phone, "/tickets");
+  await phone.getByRole("list", { name: "Tickets" }).getByRole("button", { name: new RegExp(unknown) }).waitFor();
+  await phone.screenshot({ path: join(shots, "ticket-identity-375.png") });
+  const overflow = await phone.evaluate(() => ({
+    page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    rows: [...document.querySelectorAll('[aria-label="Tickets"] button')].filter((el) => el.scrollWidth > el.clientWidth + 1).length,
+  }));
+  assert.ok(overflow.page <= 1, "no horizontal page overflow on a phone");
+  assert.equal(overflow.rows, 0, "no row overflows on a phone");
+  await phone.context().close();
+});
+
 await step("tickets: English inbox + chat; a Telegram message appears live, offline shows reconnecting and recovers; Enter sends once, Shift+Enter adds a line", async () => {
   const live = await openTicket(910001, "Cannot connect", "Hello, my service does not connect");
   const page = await newPage();

@@ -32,6 +32,7 @@ import SupportTicket, {
   normalizeTicketStatus,
 } from "../../models/SupportTicket.js";
 import SupportTicketMessage from "../../models/SupportTicketMessage.js";
+import User from "../../models/User.js";
 import { SUPPORT_COPY } from "../../messages/supportCopy.js";
 import { ticketDeletionEligibility } from "./retention.js";
 
@@ -131,6 +132,7 @@ function models(deps = {}) {
   return {
     Ticket: deps.Ticket || base.Ticket || SupportTicket,
     Message: deps.Message || base.Message || SupportTicketMessage,
+    User: deps.User || base.User || User,
   };
 }
 
@@ -690,8 +692,31 @@ function escapeRegex(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * Adds each customer's name and username to one page of the admin list, in a
+ * single query on the unique telegramId index. Identity is optional: a failed
+ * lookup leaves `customer` null, so it can never hide a ticket from the inbox.
+ */
+async function withCustomers(tickets, UserModel) {
+  const ids = [...new Set(tickets.map((ticket) => ticket.userTelegramId).filter(Boolean))];
+  let users = [];
+  try {
+    if (ids.length) users = await UserModel.find({ telegramId: { $in: ids } }, "telegramId firstName lastName username").lean();
+  } catch (error) {
+    console.warn(JSON.stringify({ ts: new Date().toISOString(), service: "support", level: "warn", message: "Ticket customer lookup failed", code: typeof error?.code === "string" ? error.code : error?.name }));
+  }
+  const byId = new Map(users.map((user) => [String(user.telegramId), user]));
+  return tickets.map((ticket) => {
+    const user = byId.get(ticket.userTelegramId);
+    const customer = user
+      ? { name: [user.firstName, user.lastName].filter(Boolean).join(" ").trim() || null, username: user.username || null }
+      : null;
+    return { ...ticket, customer };
+  });
+}
+
 export async function listAdminTickets({ status, query, unreadOnly = false, page = 1, pageSize = 20 } = {}, deps = {}) {
-  const { Ticket } = models(deps);
+  const { Ticket, User: UserModel } = models(deps);
   const filter = { ...VISIBLE };
   if (status) {
     if (!TICKET_STATUSES.includes(status)) throw ERRORS.badStatus();
@@ -712,7 +737,8 @@ export async function listAdminTickets({ status, query, unreadOnly = false, page
     Ticket.countDocuments({ ...VISIBLE, status: "open", unreadForAdmin: { $gt: 0 } }),
     Ticket.countDocuments({ ...VISIBLE, unreadForAdmin: { $gt: 0 } }),
   ]);
-  return { tickets: rows.map((row) => publicTicket(row, "admin")), total, page: current, pageSize: size, needsAttention, unreadTotal };
+  const tickets = await withCustomers(rows.map((row) => publicTicket(row, "admin")), UserModel);
+  return { tickets, total, page: current, pageSize: size, needsAttention, unreadTotal };
 }
 
 export async function getAdminTicket({ ticketId, markRead = true, limit = ADMIN_PAGE_SIZE }, deps = {}) {

@@ -18,6 +18,7 @@ delete process.env.SUPPORT_GROUP_ALERTS;
 const { default: SupportTicket } = await import("../../models/SupportTicket.js");
 const { default: SupportTicketMessage } = await import("../../models/SupportTicketMessage.js");
 const { default: AdminAuditLog } = await import("../../models/AdminAuditLog.js");
+const { default: User } = await import("../../models/User.js");
 const { connectTestDB, disconnectTestDB } = await import("../helpers/db.js");
 const { makeFakeBot } = await import("../helpers/fakeSupport.js");
 
@@ -340,6 +341,22 @@ describe("listing", () => {
     await tickets.getAdminTicket({ ticketId: a });
     const after = await tickets.listAdminTickets({ query: "6001", unreadOnly: true });
     assert.deepEqual(after.tickets.map((t) => t.ticketId), [b]);
+  });
+
+  skip("the admin list reads the customer's name from the real users collection", async () => {
+    const telegramIds = ["6101", "6102"];
+    await User.deleteMany({ telegramId: { $in: telegramIds } });
+    await User.create({ telegramId: "6101", firstName: "Sara", lastName: "Test", username: "sara_test" });
+    try {
+      const known = await openTicket("6101", "first");
+      const unknown = await openTicket("6102", "second");
+      const { tickets: rows } = await tickets.listAdminTickets({});
+      const customerOf = (id) => rows.find((t) => t.ticketId === id).customer;
+      assert.deepEqual(customerOf(known), { name: "Sara Test", username: "sara_test" });
+      assert.equal(customerOf(unknown), null);
+    } finally {
+      await User.deleteMany({ telegramId: { $in: telegramIds } });
+    }
   });
 });
 

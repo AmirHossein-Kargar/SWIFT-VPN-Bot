@@ -83,10 +83,15 @@ panel is English-only (labels, statuses, errors, dates); customer messages are s
 - **Inbox:** search (ticket id, Telegram id, subject), status filter, "Unread only", unread badges
   per ticket and in total, paging. Filters, page and the open ticket are in the URL
   (`?status=…&t=T-XXXXXX`), so refresh, back/forward and shared links restore the view. Old
-  `/tickets/T-XXXXXX` links redirect there.
-- **Conversation:** customer bubbles on the left, support on the right, each with sender and time;
-  support messages show whether the customer's Telegram notification went out. The newest 40
-  messages load first and **Load earlier messages** fetches older pages (cursor = message id, no
+  `/tickets/T-XXXXXX` links redirect there. Each row leads with the customer's Telegram photo and
+  name, then Telegram ID, ticket ID, status and last update (the opening date is its tooltip). The
+  list API joins the name and username from `User` for the page; with no record the row reads
+  *Unknown customer* over a person icon, and a failed lookup never hides a ticket. The subject is
+  the customer's first message: it stays searchable and appears in the delete confirmation, but it
+  is not a list or conversation title.
+- **Conversation:** the header identifies the customer and the ticket. Customer bubbles on the left,
+  support on the right, each with sender and time; support messages show whether the customer's
+  Telegram notification went out. The newest 40 messages load first and **Load earlier messages** fetches older pages (cursor = message id, no
   gaps or duplicates, reading position kept). The view follows new messages only while the admin is
   at the bottom; otherwise a *N new messages* button appears.
 - **Composer:** Enter sends, Shift+Enter adds a line, text stays in the box until the server accepts

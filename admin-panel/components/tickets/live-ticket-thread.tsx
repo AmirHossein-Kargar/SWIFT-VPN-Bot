@@ -205,28 +205,26 @@ export function LiveTicketThread({
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-ticket-id={ticket.ticketId}>
-      <header className="space-y-2 border-b border-border p-3 sm:p-4">
-        <div className="flex items-start gap-2">
-          <Button variant="ghost" size="icon" className="-ml-2 shrink-0 md:hidden" onClick={onBack} aria-label="Back to inbox">
-            <ArrowLeft />
-          </Button>
-          <div className="min-w-0 flex-1">
-            <h2 className="truncate text-base font-semibold" dir="auto">{ticket.subject}</h2>
-            <p className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
-              <span className="font-mono">{ticket.ticketId}</span>
-              <span>{ticket.channel === "web" ? "Web" : "Telegram"}</span>
-              <span>Opened {formatTicketDateTime(ticket.createdAt)}</span>
-            </p>
-          </div>
-          <div className="flex shrink-0 flex-col items-end gap-1.5">
-            <TicketStatusControl ticketId={ticket.ticketId} status={ticket.status} onChanged={(status: TicketStatus) => { setTicket((current) => (current ? { ...current, status } : current)); trigger(); }} />
-            <div className="flex items-center gap-2">
-              <TicketDeleteControl ticket={ticket} onDeleted={onDeleted} />
-              <ConnectionStatus connection={connection} />
-            </div>
+      <header className="flex flex-wrap items-start gap-2 border-b border-border p-3 sm:p-4">
+        <Button variant="ghost" size="icon" className="-ml-2 shrink-0 md:hidden" onClick={onBack} aria-label="Back to inbox">
+          <ArrowLeft />
+        </Button>
+        <div className="min-w-0 flex-1 space-y-1">
+          <h2 className="sr-only">Ticket {ticket.ticketId}</h2>
+          {ticket.userTelegramId ? <TicketCustomer key={ticket.userTelegramId} telegramId={ticket.userTelegramId} /> : null}
+          <p className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+            <span className="font-mono">{ticket.ticketId}</span>
+            <span>{ticket.channel === "web" ? "Web" : "Telegram"}</span>
+            <span>Opened {formatTicketDateTime(ticket.createdAt)}</span>
+          </p>
+        </div>
+        <div className="flex w-full items-center justify-between gap-2 xl:w-auto xl:shrink-0 xl:flex-col xl:items-end xl:gap-1.5">
+          <TicketStatusControl ticketId={ticket.ticketId} status={ticket.status} onChanged={(status: TicketStatus) => { setTicket((current) => (current ? { ...current, status } : current)); trigger(); }} />
+          <div className="flex items-center gap-2">
+            <TicketDeleteControl ticket={ticket} onDeleted={onDeleted} />
+            <ConnectionStatus connection={connection} />
           </div>
         </div>
-        {ticket.userTelegramId ? <TicketCustomer key={ticket.userTelegramId} telegramId={ticket.userTelegramId} /> : null}
       </header>
 
       <div className="relative min-h-0 flex-1">

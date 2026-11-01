@@ -121,6 +121,7 @@ export function makeSupportDeps() {
   return {
     Ticket: makeFakeModel({ unique: ["ticketId", "createKey"], defaults: () => ({ unreadForAdmin: 0, unreadForCustomer: 0, messageCount: 0, closedAt: null, closedBy: null }) }),
     Message: makeFakeModel({ unique: ["dedupeKey"], defaults: () => ({ groupMessageIds: [], delivery: "pending", attachment: null, text: "" }) }),
+    User: makeFakeModel({ unique: ["telegramId"] }),
   };
 }
 
