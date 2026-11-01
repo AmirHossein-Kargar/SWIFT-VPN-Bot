@@ -15,7 +15,8 @@ const ALLOWED_STATUS_TRANSITIONS = Object.freeze({
   refunded: new Set(),
   // A still-running create call can return a valid result after a stale worker
   // marked its reservation for review; that specific forward transition is safe.
-  manual_review: new Set(["provisioned"]),
+  // refund_pending is an admin's settlement only (services/admin/orderSettlement.js).
+  manual_review: new Set(["provisioned", "refund_pending"]),
 });
 
 /**

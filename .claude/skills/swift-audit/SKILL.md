@@ -26,6 +26,7 @@ is the audit procedure and the inventory it checks against.
 | Datastores | MongoDB, Redis | MongoDB authoritative for money; Redis never trusted for balances |
 
 Privileged operations to trace end to end: wallet credit/debit, refunds and retries (`services/admin/payments.js`),
+settling an unknown order (`services/admin/orderSettlement.js`),
 payment deletion, custody conversions/payouts, admin registry changes, broadcasts, ticket deletion, catalog edits.
 
 ## Procedure

@@ -44,8 +44,9 @@ awaiting_provider --(admin cancel)--> refund_pending --> refunded
 ## Limits (provider API)
 
 - WizardXray `create` has no idempotency key and no lookup by external reference. After an ambiguous outcome the order is
-  held in `manual_review` for manual reconciliation against the panel; it is never auto-replayed. **Check provider** on the
-  recovery page lists unknown services with the same terms from around that time, as a lead and not as proof.
+  held in `manual_review` for an admin to settle; it is never auto-replayed. **Check provider** on the recovery page lists unknown
+  services with the same terms from around that time, and settling needs the provider's own proof. See
+  [Which answers are final](wizardxray.md#which-answers-are-final).
 - "Recheck" re-reads the order state and does not contact the provider. The provider balance is on `/panel/vpns/remote`, and
   an approval is still what proves the funds: only `create` answers that for the order's exact terms.
 - Telegram inline keyboards cannot set spacing between rows; the four duration buttons are one per row.

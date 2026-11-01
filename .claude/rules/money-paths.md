@@ -24,7 +24,9 @@ change must never break. If a change needs to break one, stop and ask the owner.
   needs a recovery path and a test for the crash between phases.
 - **Redis is never authoritative.** Locks may fail open; MongoDB guards must still guarantee a single credit or debit.
 - **Provisioning.** Ambiguous WizardXray results are never replayed (its `create` has no idempotency key); they are held
-  for admin review. Definitive failures refund exactly once. A proven provider balance shortage parks the order as
+  for admin review. Only a late provider answer or `services/admin/orderSettlement.js` ends that review: linking needs the
+  provider's live proof, and a refund needs the whole provider list read with no candidate. Never add another way out of
+  `manual_review`, and never let a note close one. Definitive failures refund exactly once. A proven provider balance shortage parks the order as
   `awaiting_provider` with the debit kept; it is never auto-refunded. A 5xx is definite only when `api/wizardErrors.js` lists
   its exact text for that method, because there the provider's document states the outcome.
 - **Unlimited.** `gig = 0` means unlimited, and only a literal zero may say so: `Number("")`, `Number(null)` and `Number(false)`

@@ -303,7 +303,8 @@ export async function getPaymentDetail({ actorId, key } = {}) {
       retryFulfillment: (() => { const plan = retryPlan(provider, record); return plan.kind === "attempt" && plan.action !== "verify" && plan.action !== "lookup"; })(),
       // The generic disposition must not be offered where it is refused: these orders have their own audited release.
       manualResolve: (normalized.status === "recovery-required" || record.recoveryStatus === "required")
-        && !(provider === "nowpayments" && ["creation_unknown", "creating"].includes(record.status)),
+        && !(provider === "nowpayments" && ["creation_unknown", "creating"].includes(record.status))
+        && !(provider === "wallet" && PURCHASE_RECOVERY.includes(record.status)),
       // NOWPayments orders with an unknown invoice outcome only (other providers' payloads keep their exact shape):
       // a read-only provider lookup (never releases the lock) and the audited release of the customer's create-lock.
       ...(provider === "nowpayments" && record.status === "creation_unknown" ? {
@@ -526,7 +527,11 @@ export async function resolvePaymentRecovery({ actorId, operationId, key, reason
       if (provider === "nowpayments" && ["creation_unknown", "creating"].includes(current.status)) {
         throw new AdminServiceError("این سفارش NOWPayments هنوز قفل ایجاد فاکتور دارد؛ از «آزادسازی قفل ایجاد» استفاده کنید.", { status: 409, code: "use_creation_lock_release" });
       }
-      if (current.recoveryStatus !== "required" && !["manual_review", "uncertain"].includes(current.status) && !(["paid", "finished"].includes(current.status) && current.balanceCredited === false)) {
+      // A note would close this and leave the customer's money held, with nothing to show for it. These are settled, not noted.
+      if (provider === "wallet" && PURCHASE_RECOVERY.includes(current.status)) {
+        throw new AdminServiceError("این سفارش با یادداشت بسته نمی‌شود؛ از صفحهٔ بازیابی تسویه‌اش کنید.", { status: 409, code: "order_needs_settlement" });
+      }
+      if (current.recoveryStatus !== "required" && !(["paid", "finished"].includes(current.status) && current.balanceCredited === false)) {
         throw new AdminServiceError("این پرداخت در انتظار بازیابی دستی نیست.", { status: 409, code: "not_recovery_required" });
       }
       await model.updateOne({ [field]: id }, { $set: { recoveryStatus: "resolved", recoveryReason: safeReason, recoveryResolvedAt: new Date(), recoveryResolvedBy: String(actorId) } });

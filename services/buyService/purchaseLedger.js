@@ -76,7 +76,7 @@ export async function reserveBalance(telegramId, amount, purchaseId, { userModel
  */
 export async function refundPurchaseReservation(
   purchase,
-  { allowProvisioning = false, allowAwaitingProvider = false, reason, errorCode, userModel = User, purchaseModel = WalletPurchase } = {}
+  { allowProvisioning = false, allowAwaitingProvider = false, allowManualReview = false, reason, errorCode, userModel = User, purchaseModel = WalletPurchase } = {}
 ) {
   const purchaseId = String(purchase?.purchaseId ?? "");
   const telegramId = String(purchase?.telegramId ?? "");
@@ -90,6 +90,8 @@ export async function refundPurchaseReservation(
   if (allowProvisioning) allowedStates.push("provisioning");
   // Only an explicit admin cancellation may refund an order that is waiting for provider funds.
   if (allowAwaitingProvider) allowedStates.push("awaiting_provider");
+  // Only services/admin/orderSettlement.js, after proving the provider holds no such service. Nothing automatic may pass this.
+  if (allowManualReview) allowedStates.push("manual_review");
 
   let refundIntent;
   try {

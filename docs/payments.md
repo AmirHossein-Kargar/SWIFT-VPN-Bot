@@ -238,8 +238,10 @@ sequenceDiagram
   stay a separate message delivered by the notification outbox.
 - **Ambiguous create results** (timeout, unavailable panel, malformed response) are never
   blindly retried and never marked fulfilled. The debit stays reserved in a recoverable
-  `manual_review` state until the result can be reconciled, and the customer is told not to
-  retry. Orders in manual review are surfaced to admins, never re-created.
+  `manual_review` state, and the customer is told not to retry. Orders in manual review are
+  surfaced to admins and never re-created. An admin settles one from the recovery page, by
+  linking a service the provider proves or by refunding; see
+  [Which answers are final](wizardxray.md#which-answers-are-final).
 - **Crash recovery.** Recovery jobs refund a reservation that never reached the provider,
   finish a durable successful response, or hold an ambiguous in-flight request without calling
   WizardXray create again.

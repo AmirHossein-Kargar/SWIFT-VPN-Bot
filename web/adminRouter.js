@@ -12,6 +12,7 @@ import { releaseCreationUnknownLock } from "../services/admin/creationUnknown.js
 import { listPayments, getPaymentDetail, retryPayment, markPaymentRecoveryRequired, resolvePaymentRecovery, confirmBankInvoice, rejectBankInvoice } from "../services/admin/payments.js";
 import { previewPaymentDeletion, deletePayments } from "../services/admin/paymentDeletion.js";
 import { getRecoveryQueue, retrySafeRecoveryItems } from "../services/admin/recovery.js";
+import { settleUnknownOrder } from "../services/admin/orderSettlement.js";
 import {
   getCustodyOverview,
   getCustodyAssets,
@@ -512,6 +513,21 @@ router.post("/payments/bank/:paymentId/reject", requireBody(), async (req, res, 
 router.get("/recovery", async (req, res, next) => {
   try { res.json({ ok: true, data: await getRecoveryQueue({ actorId: req.adminActorId, page: req.query.page, pageSize: req.query.pageSize }) }); }
   catch (error) { next(error); }
+});
+
+router.post("/recovery/orders/:purchaseId/settle", requireBody(), async (req, res, next) => {
+  try {
+    const result = await settleUnknownOrder({
+      actorId: req.adminActorId,
+      operationId: parseOperationId(req.body),
+      purchaseId: req.params.purchaseId,
+      outcome: req.body.outcome,
+      serviceUsername: req.body.serviceUsername,
+      reason: req.body.reason,
+      ipAddress: clientIp(req),
+    });
+    res.json({ ok: true, data: result });
+  } catch (error) { next(error); }
 });
 
 router.post("/recovery/retry-safe", requireBody(), async (req, res, next) => {

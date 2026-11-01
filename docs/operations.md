@@ -54,7 +54,7 @@ messages:
 | `Atomic wallet credit failed` · `Atomic TRX wallet credit failed` | error | A credit write failed; the invoice stays recoverable and the cron retries |
 | `Webhook processing failed; gateway retry requested` | error | The gateway will redeliver |
 | `Payment reversal recorded; wallet debit is a manual reconciliation` | warn | A paid invoice was reversed at the provider; an admin must decide how to reconcile the wallet |
-| `WizardXray create outcome is ambiguous; reservation retained and request will not be replayed` | warn | An order is in manual review: confirm on the panel whether the service exists |
+| `WizardXray create outcome is ambiguous; reservation retained and request will not be replayed` | warn | An order is in manual review: after 15 minutes, use **Check provider** on the **Recovery** page and settle it |
 | `Wallet reservation result is unknown; purchase recovery required` · `Wallet purchase recovery step failed` · `WizardXray created a service but its result needs database recovery` | error | A purchase needs recovery; use the admin Recovery page |
 | `TRX transfer matches multiple invoices; automatic credit withheld` | warn | Ambiguous deposit; an admin must review it |
 | `Redis scan lease unavailable; using database safeguards` | warn | Redis is down; credits still use the MongoDB guards |
