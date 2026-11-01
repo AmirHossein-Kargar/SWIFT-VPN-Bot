@@ -5,6 +5,7 @@ import { getSuccessServiceMessage, guideButtons } from "../../messages/staticMes
 import escapeHtml from "../../utils/escapeHtml.js";
 import { scheduleUserSpendRecompute } from "../users/userSpend.js";
 import { subscriptionLink } from "../subscriptionLink.js";
+import { sendWithQrCode } from "../qrCode.js";
 import { retryPendingReservedAlerts, retryPendingReservedNotices } from "./reservedAlerts.js";
 
 const NOTIFICATION_CLAIM_MS = 5 * 60_000;
@@ -12,7 +13,6 @@ const RECOVERY_STALE_MS = 5 * 60_000;
 export const NOTIFICATION_MAX_ATTEMPTS = 30;
 const NOTIFICATION_BACKOFF_BASE_MS = 5 * 60_000;
 const NOTIFICATION_BACKOFF_MAX_MS = 24 * 60 * 60_000;
-const CHAT_UNREACHABLE = /forbidden|chat not found|user is deactivated|bot was (?:blocked|kicked)/i;
 
 function log(level, message, meta = {}) {
   console[level === "error" ? "error" : level === "warn" ? "warn" : "log"](
@@ -301,26 +301,12 @@ async function notifyPurchaseOnce(purchase, bot, user) {
 
   try {
     const smartLink = subscriptionLink({ link: claim.serviceLink, hash: claim.serviceHash }) || "";
-    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(smartLink)}&size=200x200&margin=20`;
     const caption = getSuccessServiceMessage({
       username: escapeHtml(claim.serviceUsername),
       smartLink: escapeHtml(smartLink),
       singleLink: escapeHtml(claim.singleLink),
     });
-    try {
-      await bot.sendPhoto(String(claim.telegramId), qrUrl, {
-        caption,
-        parse_mode: "HTML",
-        disable_web_page_preview: true,
-        ...guideButtons,
-      });
-    } catch (photoError) {
-      // Telegram fetches that picture from a third party. The link is what the customer paid for, so when the picture is
-      // the part that fails it is sent as text. A chat that refuses the bot refuses text too, so that goes straight to the
-      // bounded retry below instead of spending a second call on it.
-      if (!bot.sendMessage || CHAT_UNREACHABLE.test(String(photoError?.message))) throw photoError;
-      await bot.sendMessage(String(claim.telegramId), caption, { parse_mode: "HTML", disable_web_page_preview: true, ...guideButtons });
-    }
+    await sendWithQrCode(bot, String(claim.telegramId), smartLink, caption, { parse_mode: "HTML", disable_web_page_preview: true, ...guideButtons });
     await WalletPurchase.findOneAndUpdate(
       { _id: claim._id, notificationClaimedAt: now, notificationPending: true },
       { $set: { notificationPending: false, notifiedAt: new Date() }, $unset: { notificationClaimedAt: 1 } }

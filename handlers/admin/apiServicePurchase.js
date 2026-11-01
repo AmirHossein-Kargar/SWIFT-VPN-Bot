@@ -2,6 +2,7 @@ import { escapeErrorMessage } from "../../utils/escapeHtml.js";
 import { createVpnService, StatusApi, WizardApiError, WIZARD_REJECTION_CODES, UNLIMITED_GIG } from "../../api/wizardApi.js";
 import { getProviderAccount, invalidateProviderAccount } from "../../services/wizardAccount.js";
 import { subscriptionLink } from "../../services/subscriptionLink.js";
+import { sendWithQrCode } from "../../services/qrCode.js";
 import { getSession, setSession } from "../../config/sessionStore.js";
 import { isAdmin } from "../../utils/auth.js";
 import { adminOwnerFields, canContinueAdminStep, isActiveForeignAdminPrompt, API_PURCHASE_IN_PROGRESS } from "../../utils/adminStepSession.js";
@@ -371,10 +372,6 @@ async function deliverCreatedService(bot, chatId, result) {
     Array.isArray(result.tak_links) && result.tak_links.length > 0
       ? result.tak_links[0]
       : "";
-  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(
-    smartLink
-  )}&size=200x200&margin=20`;
-
   let finalMessage =
     `✅ <b>سرویس شما با موفقیت ساخته شد!</b>\n\n` +
     `🆔 <b>آیدی سرویس:</b> <code>${username}</code>\n\n` +
@@ -394,13 +391,7 @@ async function deliverCreatedService(bot, chatId, result) {
 
   // The service already exists and is paid for: a delivery problem must never read as a failed purchase.
   try {
-    await bot.sendPhoto(chatId, qrUrl, { caption: finalMessage, parse_mode: "HTML", reply_markup });
-    return true;
-  } catch (photoError) {
-    logPurchaseError("QR delivery failed after a successful purchase", photoError);
-  }
-  try {
-    await bot.sendMessage(chatId, finalMessage, { parse_mode: "HTML", reply_markup });
+    await sendWithQrCode(bot, chatId, smartLink, finalMessage, { parse_mode: "HTML", reply_markup });
     return true;
   } catch (messageError) {
     logPurchaseError("Service delivery failed after a successful purchase", messageError);

@@ -5,6 +5,7 @@ import { createTestService as createTestServiceApi } from "../api/wizardApi.js";
 import escapeHtml from "../utils/escapeHtml.js";
 import { isNotModifiedError } from "./messaging/messageManager.js";
 import { subscriptionLink } from "./subscriptionLink.js";
+import { sendWithQrCode } from "./qrCode.js";
 
 const NOTIFICATION_CLAIM_MS = 5 * 60_000;
 const RECOVERY_STALE_MS = 5 * 60_000;
@@ -69,7 +70,6 @@ async function notifyTestServiceOnce(user, bot, userModel = User) {
 
   try {
     const smartLink = subscriptionLink({ link: claimed.testServiceLink, hash: claimed.testServiceHash }) || "";
-    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(smartLink)}&size=200x200&margin=20`;
     const message = getTestServiceMessage({
       maxUser: 1,
       maxUsageMB: 2,
@@ -77,8 +77,7 @@ async function notifyTestServiceOnce(user, bot, userModel = User) {
       singleLink: escapeHtml(claimed.testServiceSingleLink),
       username: escapeHtml(claimed.testServiceUsername),
     });
-    await bot.sendPhoto(String(claimed.telegramId), qrUrl, {
-      caption: `🎉 <b>سرویس تست یک‌ روزه شما فعال شد!</b>\n\n${message}`,
+    await sendWithQrCode(bot, String(claimed.telegramId), smartLink, `🎉 <b>سرویس تست یک‌ روزه شما فعال شد!</b>\n\n${message}`, {
       parse_mode: "HTML",
       disable_web_page_preview: true,
       reply_markup: guideButtons.reply_markup,

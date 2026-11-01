@@ -1,6 +1,7 @@
 import User from "../../models/User.js";
 import { getServiceLiveStatus } from "../wizardServiceStatus.js";
 import { subscriptionLink } from "../subscriptionLink.js";
+import { QR_PHOTO_FILE, subscriptionQrPng } from "../qrCode.js";
 
 const generateQRCode = async (bot, chatId, messageId, data, query = {}) => {
   // data is expected to be like "qrcode_USERNAME"
@@ -35,16 +36,12 @@ const generateQRCode = async (bot, chatId, messageId, data, query = {}) => {
     return;
   }
 
-  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(link)}&size=200x200&margin=20`;
+  // The picture is drawn here, and editMessageMedia cannot upload a Buffer, so the photo replaces the screen as a new message. The
+  // back button returns from a photo the way it always has: sendDetailsMessage sends text and removes the photo.
   try {
-    await bot.editMessageMedia(
-      { type: "photo", media: qrUrl, parse_mode: "HTML" },
-      {
-        chat_id: chatId,
-        message_id: messageId,
-        reply_markup: { inline_keyboard: [[{ text: "بازگشت", callback_data: `show_service_${username}` }]] },
-      },
-    );
+    const png = await subscriptionQrPng(link);
+    await bot.sendPhoto(chatId, png, { reply_markup: { inline_keyboard: [[{ text: "بازگشت", callback_data: `show_service_${username}` }]] } }, { ...QR_PHOTO_FILE });
+    await bot.deleteMessage(chatId, messageId).catch(() => {});
   } catch (error) {
     console.error("QR code could not be sent:", error?.name || "Error");
     if (query.id) await alert("خطا در ایجاد QRCode");
