@@ -106,19 +106,25 @@ export async function verifyInvoice(uid) {
 
 /**
  * A health check, not traffic, so it stays out of the provider series: a green probe must not read as customers paying.
- * `GET /balance` is the documented read that needs the API key, so it proves reachability and the key together. The reference
- * gives no response shape, so `success` is all that is relied on. Nothing is read from the body.
+ *
+ * `GET /api/v1/balance` is the documented read that needs the API key (`X-API-KEY`), so it proves reachability and the key together.
+ * The reference gives its path and nothing else: no fields, no units, no example. Its one general promise is that responses carry
+ * `success`, so that is all this relies on, and only the field NAMES are kept, never a value. Its status codes are documented: 401 a
+ * missing or invalid key, 403 a blocked account, 503 the gateway switched off.
  */
 export async function probeHooshPay() {
   const client = createHooshPayClient();
   try {
     const response = await client.get("/balance");
-    return { reachable: true, authorized: true, recognized: response.data?.success === true };
+    const body = response.data;
+    const fields = body && typeof body === "object" ? Object.keys(body).filter((name) => /^[A-Za-z0-9_]{1,40}$/.test(name)).sort().slice(0, 20) : [];
+    return { reachable: true, authorized: true, recognized: body?.success === true, fields };
   } catch (error) {
     const status = Number.isInteger(error?.response?.status) ? error.response.status : null;
-    if (status === 401 || status === 403) return { reachable: true, authorized: false, recognized: false };
-    // Any other 4xx is the service answering, so it is up. This path has not been tried against the live API, and a wrong path
-    // must read as something to look at, not as an outage.
+    if (status === 401) return { reachable: true, authorized: false, recognized: false };
+    if (status === 403) return { reachable: true, authorized: true, blocked: true, recognized: false };
+    if (status === 503) return { reachable: true, authorized: true, unavailable: true, recognized: false };
+    // Any other 4xx is the service answering, so it is up, but not with anything documented for this path.
     if (status >= 400 && status < 500 && status !== 408) return { reachable: true, authorized: true, recognized: false };
     throw new HooshPayApiError("health check", { status: status ?? undefined, code: typeof error?.code === "string" ? error.code : undefined, ambiguous: true });
   }

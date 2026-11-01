@@ -4,7 +4,7 @@
  * Real here: every checker in services/admin/monitoring.js, the collector and its health rules, the Express app from server.js on a
  * real port, the webhook handlers, and a disposable MongoDB. Stand-ins: a local HTTP server plays WizardXray and HooshPay, a local
  * transport plays NOWPayments, and a stub plays the Telegram bot, because none of them can be run here. Redis is the real client
- * when REDIS_URL names a disposable server and a stub otherwise.
+ * against a disposable server when REDIS_URL names one, and a stub otherwise, in which case this run says nothing about Redis.
  *
  * So this proves the checks are real and that they can fail. It does not prove the live providers answer this way.
  */
@@ -36,7 +36,7 @@ const CHECK_IDS = ["telegram", "hooshpay", "nowpayments", "wizardxray", "polling
 describe("the twelve checks", options, () => {
   let mongoose, app, HooshPayInvoice, NowPaymentsInvoice, PaymentTombstone, WalletPurchase;
   let defaultProbes, createCollector, createTelemetry, createIncidentTracker, HEALTH_CHECKERS, resetHealthCacheForTests, setBotInstance, resetProviderAccountForTests;
-  let appServer, port, provider;
+  let appServer, port, provider, closeRedis;
   let wizard;
   let nowpayments;
   let bot;
@@ -67,6 +67,12 @@ describe("the twelve checks", options, () => {
     ({ setBotInstance } = await import("../../config/botInstance.js"));
     ({ resetProviderAccountForTests } = await import("../../services/wizardAccount.js"));
 
+    if (process.env.REDIS_URL) {
+      const redis = await import("../../config/redisClient.js");
+      await redis.connectRedis();
+      closeRedis = redis.closeRedis;
+    }
+
     appServer = http.createServer(app);
     await new Promise((resolve) => appServer.listen(0, "127.0.0.1", resolve));
     port = appServer.address().port;
@@ -88,6 +94,7 @@ describe("the twelve checks", options, () => {
 
   after(async () => {
     setBotInstance?.(null);
+    await closeRedis?.();
     await new Promise((resolve) => appServer?.close(resolve));
     await new Promise((resolve) => provider?.close(resolve));
   });
@@ -235,6 +242,23 @@ describe("the twelve checks", options, () => {
       assert.match(reasons.hooshpay, /rejected the API key/);
     });
 
+    test("hooshpay: a blocked account and a disabled gateway are named, not read as a bad key", async () => {
+      wizard.hooshStatus = 403;
+      wizard.hooshBody = { detail: "blocked" };
+      assert.match((await run()).reasons.hooshpay, /account is blocked/);
+      resetHealthCacheForTests();
+      wizard.hooshStatus = 503;
+      wizard.hooshBody = { success: false };
+      assert.match((await run()).reasons.hooshpay, /gateway is disabled/);
+    });
+
+    test("hooshpay: a 200 without `success` proves nothing about the account", async () => {
+      wizard.hooshBody = { balance: 1 };
+      const { states, reasons } = await run();
+      assert.equal(states.hooshpay, "degraded");
+      assert.match(reasons.hooshpay, /recognizable/);
+    });
+
     test("nowpayments: its status endpoint is down", async () => {
       nowpayments = () => ({ status: 503, data: {} });
       assert.equal((await run()).states.nowpayments, "degraded");
@@ -280,6 +304,17 @@ describe("the twelve checks", options, () => {
 
     test("redis: a failed ping", async () => {
       assert.equal((await run({ redis: async () => ({ status: "down", latencyMs: null, error: "not connected" }) })).states.redis, "failed");
+    });
+
+    test("redis: it answers PING but refuses writes, which would break sessions and locks", async () => {
+      const readOnly = { ping: async () => "PONG", set: async () => { throw new Error("READONLY You can't write against a read only replica"); }, get: async () => null };
+      assert.equal((await HEALTH_CHECKERS.redis({ client: readOnly, ready: () => true })).status, "down");
+    });
+
+    test("redis: a write that does not read back is not healthy", async () => {
+      const lossy = { ping: async () => "PONG", set: async () => "OK", get: async () => null };
+      const result = await HEALTH_CHECKERS.redis({ client: lossy, ready: () => true });
+      assert.equal(result.status, "down");
     });
 
     test("mongodb and express answer for real here; their failure paths are in reliabilityCollector.test.js", async () => {

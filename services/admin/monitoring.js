@@ -26,6 +26,7 @@ let lastPersistAt = 0;
 
 const INTERNAL_SERVICES = new Set(["webhook", "background-jobs"]);
 const CRITICAL_SERVICES = ["mongodb", "redis", "telegram", "wizardxray"];
+const REDIS_PROBE_KEY = `health:probe:${process.pid}`;
 
 function nowMs() { return Date.now(); }
 
@@ -74,12 +75,19 @@ async function checkMongo() {
   }
 }
 
-async function checkRedis() {
+/**
+ * A Redis that answers PING can still refuse writes (out of memory, read-only), which would break sessions and locks while reading
+ * healthy. So this also writes one expiring key of its own and reads it back. It holds no data, and every run overwrites it.
+ */
+async function checkRedis({ client = redisClient, ready = isRedisReady } = {}) {
   const started = nowMs();
   try {
-    if (!redisClient || !isRedisReady()) throw new Error(getRedisError()?.name || "not connected");
-    const reply = await withTimeout(redisClient.ping(), CHECK_TIMEOUT_MS, "redis ping");
+    if (!client || !ready()) throw new Error(getRedisError()?.name || "not connected");
+    const reply = await withTimeout(client.ping(), CHECK_TIMEOUT_MS, "redis ping");
     if (reply !== "PONG") throw new Error("unexpected ping reply");
+    const stamp = String(nowMs());
+    await withTimeout(client.set(REDIS_PROBE_KEY, stamp, { EX: 120 }), CHECK_TIMEOUT_MS, "redis write");
+    if ((await withTimeout(client.get(REDIS_PROBE_KEY), CHECK_TIMEOUT_MS, "redis read")) !== stamp) throw new Error("a written value did not read back");
     return { status: classify(nowMs() - started, 300, null), latencyMs: nowMs() - started, error: null };
   } catch (error) {
     return { status: "down", latencyMs: null, error: safeError(error) };
@@ -177,6 +185,8 @@ async function checkHooshPay() {
     const answer = await withTimeout(probeHooshPay(), CHECK_TIMEOUT_MS, "hooshpay balance");
     const latencyMs = nowMs() - started;
     if (!answer.authorized) return { status: "down", latencyMs, error: "HooshPay rejected the API key" };
+    if (answer.blocked) return { status: "down", latencyMs, error: "HooshPay reports the account is blocked" };
+    if (answer.unavailable) return { status: "down", latencyMs, error: "HooshPay reports the gateway is disabled or has no card available" };
     if (!answer.recognized) return { status: "degraded", latencyMs, error: "HooshPay answered, but not in a recognizable form" };
     return { status: classify(latencyMs, 3_000, null), latencyMs, error: null, details: { configured: true } };
   } catch (error) {

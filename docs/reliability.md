@@ -56,12 +56,13 @@ everything reads *Unknown*.
 
 | Component | Evidence | Source |
 |---|---|---|
-| MongoDB, Redis | Active ping, every tick | `HEALTH_CHECKERS` in `services/admin/monitoring.js` |
+| MongoDB | Active ping, every tick | `HEALTH_CHECKERS` in `services/admin/monitoring.js` |
+| Redis | A short-lived key written and read back, every tick, because sessions and locks need writes and a read-only replica answers `PING` | Same |
 | Telegram Bot API | `getMe` and `getWebhookInfo`, on the probe interval | Same |
 | Polling loop | The poller's own last-success stamp; no extra Telegram call | `getPollingEvidence` |
 | Express app | Loopback `GET /livez`, 5xx share, event-loop delay | `services/reliability/collector.js`, `perf_hooks` |
 | WizardXray | `status` (the bot reaches its service panel), `me` (the key works, the prices are readable), then a location list, a sample `price` agreeing with `me`, and whether the wallet can fund the cheapest plan. All reads. Plus real create calls | `HEALTH_CHECKERS`, `api/wizardApi.js` |
-| HooshPay | `GET /balance` with the API key, or real traffic | `probeHooshPay`, `observeWebhook` |
+| HooshPay | `GET /balance` with the API key, or real traffic. 401 is the key, 403 a blocked account, 503 a disabled gateway or no active card, and only a JSON `success: true` counts as healthy | `probeHooshPay`, `observeWebhook` |
 | NOWPayments | `GET /status`, then `GET /merchant/coins` with the API key, or real traffic | `probeNowPayments`, `observeWebhook` |
 | Webhook path | Secrets present, callback outcomes by HTTP status, and a [signed test callback](#signed-test-callback) every 10 minutes | `checkWebhookPath`, `observeWebhook` on the route |
 | Order workflow | Stored records | `WalletPurchase`, through Sentinel's read-only wrappers |
@@ -94,7 +95,8 @@ for a few seconds every 10 minutes.
 These limits are deliberate statements, not gaps to paper over:
 
 - **A quiet check is not a full transaction.** The reachability checks prove the provider answers and accepts the key. They do not create
-  an invoice, because that would be a real invoice. HooshPay's `GET /balance` is documented by path alone, so only `success` is relied on.
+  an invoice, because that would be a real invoice. HooshPay's `GET /balance` is documented by path alone, so only `success` is relied on
+  ([what is confirmed](wizardxray.md#what-the-live-provider-has-confirmed)).
 - **Nothing measures Telegram's delivery to the phone**, only that Telegram accepted the message. The test send proves the admin group
   can be reached, not that one customer's chat can.
 - **Job starts are not observed**, only completions and failures, because jobs report when they finish. A job's history is in
@@ -234,7 +236,7 @@ All indexes are additive and created at startup by `createIndexes()`. `WalletPur
 on `notificationPending: true`, so it stays tiny, and it stops the delivery count walking every completed order once a minute. It
 is non-unique and changes no money guarantee, so no migration is needed.
 
-Cost of one process: one tick every 30 seconds runs two pings and a loopback request; once a minute it also calls Telegram
+Cost of one process: one tick every 30 seconds runs a ping, a Redis write and read, and a loopback request; once a minute it also calls Telegram
 `getMe` and `getWebhookInfo`, WizardXray `status` and `me`, HooshPay `/balance`, NOWPayments `/status` and `/merchant/coins`, and reads the
 order records (the indexed counts, up to 100 backlog rows, up to 3,000 orders from the last day). WizardXray `get_hosts` and `price`
 run once in 5 minutes, and the signed test callbacks and the admin-group send once in 10. A tick holds a `JobCheckpoint` lease only to
@@ -250,6 +252,7 @@ write. Memory is bounded: 24 hours of sparse minutes and 1,000 events. Reads of 
 | `stream_capacity` | Four tabs open for one admin | Close one |
 | Provider *Unknown* | It is not configured here, or no check has finished yet | Set its API key, or wait one minute |
 | Provider *Degraded* or *Failed* naming the API key | The provider answered and refused the key | Replace the key |
+| HooshPay *Failed*: blocked, or gateway disabled or no card | 403 or 503 from HooshPay. The key is fine | Check the account in the HooshPay dashboard |
 | Webhook path *Failed*: `answered 401` | The stored secret is not the one the route verifies with | Check `HOOSHPAY_WEBHOOK_SECRET` or `NOWPAYMENTS_IPN_SECRET` |
 | WizardXray *Degraded*: `cannot fund` | The provider wallet is below the cheapest plan's cost | Top it up. New orders wait as `awaiting_provider` until then |
 | Job *Unknown* after a deploy | No run reported yet by this process | Wait one interval |

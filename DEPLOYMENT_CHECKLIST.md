@@ -69,6 +69,13 @@ HooshPay, NOWPayments and WizardXray APIs. It ends with
 `Preflight result: N failure(s), M warning(s).` Fix every `✖ FAIL` before starting the bot.
 Warnings about probes that "did not complete" are expected before the first deploy.
 
+After a deploy, check the running service from outside it. Every call is a documented read, it creates and
+charges nothing, and it prints no value. A check it could not make is reported as blocked, never as passed:
+
+```bash
+PRODUCTION_URL=https://your-domain.com railway run node scripts/verify-production.mjs
+```
+
 ## 4. Manual verification
 
 ### 4.1 HooshPay webhook secret
@@ -295,6 +302,7 @@ migration.
 | `WEBHOOK_BASE_URL` is a public HTTPS origin | ☐ |
 | MongoDB healthy and indexed; Redis healthy | ☐ |
 | `/health` returns 200 and `/ready` returns 200 | ☐ |
+| `scripts/verify-production.mjs` exits 0 | ☐ |
 | Bot answers `/start`; admin panel opens | ☐ |
 | Panel sign-in works on every domain admins use; Settings → Security → Browser protections shows no *Failed* row and HSTS as *Verified* | ☐ |
 | A real low-value payment completes end to end | ☐ |
