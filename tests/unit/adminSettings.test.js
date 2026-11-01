@@ -46,6 +46,15 @@ describe("settings overview", () => {
     assert.equal(overview.application.environment, "development");
   });
 
+  test("protection status is measured or absent, never a stored true", () => {
+    const unchecked = getSettingsOverview({ actorId: "424242", env: {} });
+    assert.equal(unchecked.security.protection, null, "not checked must stay distinguishable from protected");
+    assert.equal("csrfProtection" in unchecked.security, false);
+    assert.equal("originCheck" in unchecked.security, false);
+    const posture = { csrf: { status: "failed" } };
+    assert.equal(getSettingsOverview({ actorId: "424242", env: {}, securityPosture: posture }).security.protection, posture);
+  });
+
   test("requires an admin actor", () => {
     assert.throws(() => getSettingsOverview({ actorId: "111", env: {} }));
   });

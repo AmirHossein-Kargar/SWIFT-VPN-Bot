@@ -40,12 +40,16 @@ import { listSupportTickets, getSupportTicket, getSupportTicketUpdates, getSuppo
 import { getMessageAttachment, toAdminError } from "../services/support/tickets.js";
 import { streamAttachment } from "../services/support/attachments.js";
 import { default as botInstance } from "../config/botInstance.js";
-import { attachAdminSession, requireAdminSession, requireCsrfToken, requireSameOrigin, adminApiHeaders, rateLimitMiddleware, clientIp, sessionCookieOptions, clearSessionCookieOptions, LEGACY_SESSION_COOKIE_PATH, NEXT_PANEL_SESSION_COOKIE_PATH, RETIRED_PANEL_COOKIE_PATH, adminApiErrorHandler } from "./adminMiddleware.js";
+import { attachAdminSession, requireAdminSession, requireCsrfForActiveSession, requireCsrfToken, requireJsonRequest, requireSameOrigin, adminApiHeaders, rateLimitMiddleware, clientIp, sessionCookieOptions, clearSessionCookieOptions, LEGACY_SESSION_COOKIE_PATH, NEXT_PANEL_SESSION_COOKIE_PATH, RETIRED_PANEL_COOKIE_PATH, adminApiErrorHandler } from "./adminMiddleware.js";
+import { apiCors } from "./webSecurity.js";
+import { inspectAdminSecurity } from "./securityPosture.js";
 import { runMockTests, listMockRuns, getMockRun } from "../services/mockTests/runner.js";
 
 const router = express.Router();
 router.use(adminApiHeaders);
+router.use(apiCors);
 router.use(requireSameOrigin);
+router.use(requireJsonRequest);
 router.use(attachAdminSession);
 
 function parseOperationId(body = {}) {
@@ -138,7 +142,7 @@ router.post("/auth/verify", rateLimitMiddleware({ limit: 10 }), requireBody(), a
   } catch (error) { next(error); }
 });
 
-router.post("/auth/logout", requireBody(), (req, res, next) => {
+router.post("/auth/logout", requireCsrfForActiveSession, requireBody(), (req, res, next) => {
   (async () => {
     const token = req.adminSessionToken;
     const actorId = req.adminActorId;
@@ -700,11 +704,9 @@ router.get("/analytics/report", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-// CSV export: admin session + CSRF-free GET, but strictly rate limited and audited.
+// CSV export: a CSRF-free GET, so requireSameOrigin keeps other sites from triggering it (and its audit record); strictly rate limited.
 router.get("/analytics/export.csv", rateLimitMiddleware({ limit: 10 }), async (req, res, next) => {
   try {
-    // A cross-site page must not be able to trigger an export (and its audit record).
-    if (req.get("sec-fetch-site") === "cross-site") return res.status(403).json({ ok: false, error: "origin_not_allowed" });
     const data = await getAnalyticsReport({ actorId: req.adminActorId, query: req.query });
     await runAuditedAction({
       actorTelegramId: req.adminActorId,
@@ -848,7 +850,7 @@ router.get("/system/health", async (req, res, next) => {
 
 // Settings (read-only diagnostics; no secret or raw environment value leaves the server)
 router.get("/settings/overview", (req, res, next) => {
-  try { res.json({ ok: true, data: getSettingsOverview({ actorId: req.adminActorId }) }); }
+  try { res.json({ ok: true, data: getSettingsOverview({ actorId: req.adminActorId, securityPosture: inspectAdminSecurity(router) }) }); }
   catch (error) { next(error); }
 });
 

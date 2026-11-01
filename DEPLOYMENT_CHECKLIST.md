@@ -278,6 +278,7 @@ migration.
 |---|---|
 | URLs | `<WEBHOOK_BASE_URL>/panel` (Next.js; `/next-panel`, `/panel-next` and `/admin` redirect to it); served by the same process, nothing extra to deploy |
 | Auth | Telegram allow-list (`ADMINS`) + one-time code by direct message + Redis session (HttpOnly cookie, CSRF token) |
+| Trusted origins | `WEBHOOK_BASE_URL`, Railway's domain and `ADMIN_ALLOWED_ORIGINS`. Any other domain needs adding, or sign-in there is refused |
 | Session lifetime | `ADMIN_SESSION_TTL_SECONDS` (default 8 h, min 15 min, max 24 h) |
 | Telegram panel | `/admin`, `/panel` or `پنل`; in private chat for allow-listed admins, or in the group set by `GROUP_ID` |
 | Audit | Every sensitive action is stored in `AdminAuditLog` with actor, target, reason and IP (web) |
@@ -295,6 +296,7 @@ migration.
 | MongoDB healthy and indexed; Redis healthy | ☐ |
 | `/health` returns 200 and `/ready` returns 200 | ☐ |
 | Bot answers `/start`; admin panel opens | ☐ |
+| Panel sign-in works on every domain admins use; Settings → Security → Browser protections shows no *Failed* row and HSTS as *Verified* | ☐ |
 | A real low-value payment completes end to end | ☐ |
 | Exactly one process / replica | ☐ |
 | PM2 start on boot is enabled | ☐ |

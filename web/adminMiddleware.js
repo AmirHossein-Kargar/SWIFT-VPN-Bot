@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { ADMIN_SESSION_COOKIE, getAdminSession } from "../services/admin/auth.js";
 import { AdminServiceError } from "../services/admin/authorization.js";
 import { ADMIN_PANEL_NEXT_BASE_PATH } from "./nextAdminMiddleware.js";
+import { ADMIN_PERMISSIONS_POLICY, API_CSP, SAFE_METHODS, applyHsts, isCrossSiteFetch, isTrustedOrigin } from "./webSecurity.js";
 
 const WINDOW_MS = 60_000;
 const MAX_BUCKETS = 20_000;
@@ -153,55 +154,78 @@ function resSessionUnavailable(req, res) {
   return res.status(503).json({ ok: false, error: "session_store_unavailable" });
 }
 
-function safeEqual(a, b) {
-  const bufferA = Buffer.from(String(a ?? ""));
-  const bufferB = Buffer.from(String(b ?? ""));
+/** An empty or absent token never matches, even against a session that somehow has none. */
+export function csrfTokensMatch(presented, expected) {
+  if (typeof presented !== "string" || typeof expected !== "string" || !presented || !expected) return false;
+  const bufferA = Buffer.from(presented);
+  const bufferB = Buffer.from(expected);
   if (bufferA.length !== bufferB.length) return false;
   return timingSafeEqual(bufferA, bufferB);
 }
 
 /**
- * CSRF protection. The session cookie is SameSite=Lax, which already blocks
- * cross-site POSTs from plain web pages; the double-submit token below also
- * covers SameSite exemptions (older browsers, Lax+POST) and non-browser
- * clients that somehow obtained the cookie header.
+ * CSRF protection: a synchronizer token kept in the server-side session, so it is unusable with any other session and dies
+ * with this one (a fresh sign-in issues a new one). It stays valid for the whole session on purpose: per-request rotation
+ * would break a second tab and the back button, and replays are already stopped by operationId. SameSite=Lax blocks
+ * cross-site POSTs in most browsers; this also covers the exceptions. Anything not known to be safe needs the token.
  */
 export function requireCsrfToken(req, res, next) {
-  if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return next();
+  if (SAFE_METHODS.has(req.method)) return next();
   if (!req.adminSession) return res.status(401).json({ ok: false, error: "unauthorized" });
-  const headerToken = req.get("x-csrf-token");
-  if (!headerToken || !safeEqual(headerToken, req.adminSession.csrfToken)) {
+  if (!csrfTokensMatch(req.get("x-csrf-token"), req.adminSession.csrfToken)) {
     return res.status(403).json({ ok: false, error: "csrf_token_invalid" });
   }
   next();
 }
 
-/** Admin API responses are private and must never be cached or sniffed. */
-export function adminApiHeaders(_req, res, next) {
+/**
+ * For sign-out, which must also work with an expired session: a live session needs its token, so another site cannot sign
+ * an admin out, while a dead or unreadable one only clears its own cookies.
+ */
+export function requireCsrfForActiveSession(req, res, next) {
+  if (!req.adminSession) return next();
+  return requireCsrfToken(req, res, next);
+}
+
+/**
+ * API responses are private: never cached, sniffed, framed or embedded by another origin. Mounted ahead of the body parser
+ * in server.js as well, so a malformed request is answered with these headers too.
+ */
+export function adminApiHeaders(req, res, next) {
   res.set("Cache-Control", "no-store");
   res.set("Pragma", "no-cache");
   res.set("X-Content-Type-Options", "nosniff");
   res.set("Referrer-Policy", "no-referrer");
+  res.set("X-Frame-Options", "DENY");
+  res.set("Content-Security-Policy", API_CSP);
+  res.set("Permissions-Policy", ADMIN_PERMISSIONS_POLICY);
+  res.set("Cross-Origin-Resource-Policy", "same-origin");
+  applyHsts(req, res);
   next();
 }
 
 /**
- * Rejects state-changing requests whose Origin header names another site.
- * This complements (never replaces) the session cookie and CSRF token; a
- * missing Origin (non-browser client) is left to those controls.
+ * Refuses a request a browser sent from an untrusted origin, whatever its method: the API has a few GETs that record
+ * something (mark-read, audited export), and a cross-site page must not reach those either. Non-browser clients send
+ * neither header and are left to the session and CSRF token, which a forged browser request cannot have. This adds to those
+ * controls and never replaces them.
  */
 export function requireSameOrigin(req, res, next) {
-  if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return next();
   const origin = req.get("origin");
-  if (!origin) return next();
-  let host;
-  try { host = new URL(origin).host.toLowerCase(); } catch { host = null; }
-  const allowed = new Set([String(req.get("host") || "").toLowerCase()]);
-  try {
-    const configured = process.env.WEBHOOK_BASE_URL?.trim();
-    if (configured) allowed.add(new URL(configured).host.toLowerCase());
-  } catch { /* ignore a malformed base URL */ }
-  if (!host || !allowed.has(host)) return res.status(403).json({ ok: false, error: "origin_not_allowed" });
+  const refused = origin ? !isTrustedOrigin(req, origin) : isCrossSiteFetch(req);
+  if (refused) return res.status(403).json({ ok: false, error: "origin_not_allowed" });
+  next();
+}
+
+/**
+ * The API only reads JSON. Accepting nothing else keeps a form post, which needs no preflight, from ever being a valid
+ * request. A POST with no body has no type to check (and req.is() reports Content-Length: 0 as a mismatch), so it passes.
+ */
+export function requireJsonRequest(req, res, next) {
+  const hasBody = Boolean(req.get("transfer-encoding")) || Number(req.get("content-length")) > 0;
+  if (!SAFE_METHODS.has(req.method) && hasBody && req.is("application/json") === false) {
+    return res.status(415).json({ ok: false, error: "unsupported_media_type" });
+  }
   next();
 }
 

@@ -372,6 +372,18 @@ export interface AuditLogEntry {
   completedAt: string | null;
 }
 
+/** Result of a check that ran on the server just now (web/securityPosture.js). */
+export type SecurityCheckStatus = "verified" | "attention" | "failed" | "not_applicable";
+
+export interface SecurityPosture {
+  checkedAt: string;
+  csrf: { status: SecurityCheckStatus; stateChangingRoutes: number; tokenRequiredRoutes: number; sessionBoundRoutes: number; preSessionRoutes: number; unprotectedRoutes: string[] };
+  origin: { status: SecurityCheckStatus; mode: "allow-list" | "request-host"; trustedOrigins: number; ignoredEntries: number };
+  cors: { status: SecurityCheckStatus };
+  headers: { status: SecurityCheckStatus };
+  hsts: { status: SecurityCheckStatus; lastSentAt: string | null };
+}
+
 /** GET /settings/overview — booleans and non-sensitive constants only (services/admin/settings.js). */
 export interface SettingsOverview {
   generatedAt: string;
@@ -382,8 +394,7 @@ export interface SettingsOverview {
     loginCodeTtlSeconds: number;
     sessionStore: string;
     cookie: { httpOnly: boolean; secure: boolean; sameSite: string; paths: string[] };
-    csrfProtection: boolean;
-    originCheck: boolean;
+    protection: SecurityPosture | null;
     loginRateLimitPerMinute: number;
     codeVerifyRateLimitPerMinute: number;
     ownerConfigured: boolean;

@@ -95,7 +95,8 @@ confirm the `PAYMENT_CREDITED` log line and the new wallet balance.
 
 Register exactly these URLs in the provider dashboards and set the same secrets in the
 environment. `WEBHOOK_BASE_URL` must be the public HTTPS **origin only**; the app appends the
-path itself.
+path itself. It is also the browser origin the admin panel trusts: if you open `/panel` on any other domain, add that
+origin to `ADMIN_ALLOWED_ORIGINS` (see [browser protections](admin.md#browser-protections)).
 
 - Signature verification is mandatory: for HooshPay the keys are sorted, the payload is
   re-serialized compactly and compared with `crypto.timingSafeEqual`. A missing secret rejects

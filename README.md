@@ -148,9 +148,9 @@ are in [docs/operations.md](docs/operations.md).
 - **Money paths are idempotent:** atomic single-document MongoDB writes, unique operation and
   purchase IDs, exactly-once refunds, and recovery crons for interrupted work.
 - **Admin access:** allow-list plus a one-time Telegram code, Redis-backed `HttpOnly` sessions, CSRF
-  tokens, same-origin checks, rate limits and an audit log written before each action.
-- **Web hardening:** the storefront serves a strict CSP (`script-src 'self'`); admin pages are not
-  framable.
+  tokens, an allow-list of trusted origins, rate limits and an audit log written before each action.
+- **Web hardening:** the storefront serves a strict CSP (`script-src 'self'`); `/panel` uses a per-response script nonce,
+  cannot be framed and sends HSTS over HTTPS. See [browser protections](docs/admin.md#browser-protections).
 - **Secrets:** never committed, printed or returned to a browser. The admin settings view reports only
   whether a value is configured. See [safe handling](docs/configuration.md#safe-handling-of-secrets).
 - **Reporting a vulnerability:** do not open a public issue containing secrets or exploit details;

@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import { ProgressLink } from "@/components/shared/progress-link";
-import { CheckCircle2, CircleSlash, Lock } from "lucide-react";
+import { CheckCircle2, CircleAlert, CircleSlash, Lock, XCircle } from "lucide-react";
 
 import { adminApiGet, adminSession } from "@/lib/adminApi.server";
-import type { AuditLogPage, SettingsOverview, SystemHealth } from "@/lib/types";
+import type { AuditLogPage, SecurityCheckStatus, SettingsOverview, SystemHealth } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -43,6 +43,15 @@ function Configured({ value, on = "Configured", off = "Not configured" }: { valu
   );
 }
 
+/** A protection is only called verified when the server has just proved it; a missing result is never a pass. */
+function ProtectionStatus({ status, verified = "Verified", attention = "Needs attention" }: { status: SecurityCheckStatus | undefined; verified?: string; attention?: string }) {
+  if (status === "verified") return <span className="inline-flex items-center gap-1.5 text-success"><CheckCircle2 aria-hidden className="h-4 w-4" />{verified}</span>;
+  if (status === "failed") return <span className="inline-flex items-center gap-1.5 text-destructive"><XCircle aria-hidden className="h-4 w-4" />Failed</span>;
+  if (status === "attention") return <span className="inline-flex items-center gap-1.5 text-warning"><CircleAlert aria-hidden className="h-4 w-4" />{attention}</span>;
+  if (status === "not_applicable") return <span className="inline-flex items-center gap-1.5 text-muted-foreground"><CircleSlash aria-hidden className="h-4 w-4" />Not applicable</span>;
+  return <span className="inline-flex items-center gap-1.5 text-muted-foreground"><CircleSlash aria-hidden className="h-4 w-4" />Not checked</span>;
+}
+
 function ReadOnlyNote({ what = "these values" }: { what?: string }) {
   return (
     <p className="flex items-start gap-2 rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
@@ -76,6 +85,8 @@ export default async function SettingsPage() {
   const health = healthResult.data;
   const audit = auditResult.data;
   const unavailable = <p className="text-sm text-muted-foreground">This section could not be loaded. Refresh to try again.</p>;
+  const protection = overview?.security.protection ?? null;
+  const unprotected = protection?.csrf.unprotectedRoutes ?? [];
 
   return (
     <div className="space-y-4">
@@ -139,10 +150,38 @@ export default async function SettingsPage() {
                 <Row label="Session cookie" hint={`Scoped to ${overview.security.cookie.paths.join(" and ")}`}>
                   {[overview.security.cookie.httpOnly && "HttpOnly", overview.security.cookie.secure && "Secure", `SameSite=${overview.security.cookie.sameSite}`].filter(Boolean).join(" · ")}
                 </Row>
-                <Row label="CSRF protection"><Configured value={overview.security.csrfProtection} on="Enabled" off="Disabled" /></Row>
-                <Row label="Cross-origin request blocking"><Configured value={overview.security.originCheck} on="Enabled" off="Disabled" /></Row>
                 <Row label="Sign-in rate limits">{overview.security.loginRateLimitPerMinute} code requests / {overview.security.codeVerifyRateLimitPerMinute} verifications per minute</Row>
                 <div className="pt-3"><ReadOnlyNote what="security settings" /></div>
+              </>
+            ) : unavailable}
+          </Section>
+          <Section title="Browser protections" description={protection ? `Checked by the server against the running routes and middleware at ${formatDateTime(protection.checkedAt)}. Refresh to check again.` : "Run by the server each time this page loads."}>
+            {overview ? (
+              <>
+                <Row
+                  label="CSRF tokens"
+                  hint={protection ? (unprotected.length ? `Unprotected: ${unprotected.join(", ")}` : `${protection.csrf.tokenRequiredRoutes} of ${protection.csrf.stateChangingRoutes} state-changing routes always need the session token; sign-out needs it for a live session; ${protection.csrf.preSessionRoutes} sign-in routes use the origin check and a single-use code.`) : undefined}
+                >
+                  <ProtectionStatus status={protection?.csrf.status} />
+                </Row>
+                <Row
+                  label="Trusted origins"
+                  hint={protection ? (protection.origin.mode === "allow-list" ? `${protection.origin.trustedOrigins} configured${protection.origin.ignoredEntries ? `; ${protection.origin.ignoredEntries} ignored as invalid` : ""}. Any other browser origin is refused.` : "Outside production the address in use is also trusted.") : undefined}
+                >
+                  <ProtectionStatus status={protection?.origin.status} attention={protection?.origin.mode === "request-host" ? "Development mode" : "Needs attention"} />
+                </Row>
+                <Row label="Cross-origin access (CORS)" hint={protection ? "Only trusted origins get an answer, always the exact origin and never a wildcard. A session and CSRF token are still required." : undefined}>
+                  <ProtectionStatus status={protection?.cors.status} />
+                </Row>
+                <Row label="Security headers" hint={protection ? "Script nonce, no framing, no MIME sniffing, referrer and permissions policies, as this server generates them. A proxy in front of it could still change them." : undefined}>
+                  <ProtectionStatus status={protection?.headers.status} />
+                </Row>
+                <Row
+                  label="HTTPS enforcement (HSTS)"
+                  hint={protection?.hsts.lastSentAt ? `Last sent ${formatDateTime(protection.hsts.lastSentAt)}.` : protection?.hsts.status === "attention" ? "No HTTPS request has reached this server since it started, so this could not be confirmed." : undefined}
+                >
+                  <ProtectionStatus status={protection?.hsts.status} attention="Not confirmed yet" />
+                </Row>
               </>
             ) : unavailable}
           </Section>

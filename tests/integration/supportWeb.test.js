@@ -108,6 +108,9 @@ describe("customer authentication", () => {
   test("logout destroys the session server-side", async () => {
     const session = await customerLogin("1001");
     assert.equal((await call("GET", "/api/support/tickets", session)).status, 200);
+    const forged = await call("POST", "/api/support/auth/logout", { cookie: session.cookie, body: {} });
+    assert.equal(forged.status, 403, "a live session needs its token to sign out");
+    assert.equal(forged.data.error, "csrf_token_invalid");
     assert.equal((await call("POST", "/api/support/auth/logout", { cookie: session.cookie, csrf: session.csrf, body: {} })).status, 200);
     assert.equal((await call("GET", "/api/support/tickets", session)).status, 401);
   });

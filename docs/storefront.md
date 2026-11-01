@@ -166,8 +166,7 @@ the fallback.
   live in `admin-panel/lib/form-schemas.ts` and are tested by `tests/unit/adminFormSchemas.test.js` and
   the form scenarios of `tests/e2e/nextPanel.e2e.mjs`. Zod 4 words its default messages differently
   (for example for an empty number field); the messages the forms define themselves are unchanged.
-- `/panel` responses send `X-Frame-Options: DENY` and `frame-ancestors 'none'` (no
-  `script-src`: Next.js and next-themes need inline bootstrap scripts there).
+- `/panel` has its own policy with a per-response script nonce; see [browser protections](admin.md#browser-protections).
 
 ## Verification
 

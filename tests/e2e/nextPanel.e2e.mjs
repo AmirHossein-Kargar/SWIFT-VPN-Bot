@@ -48,6 +48,8 @@ const tickets = await import("../../services/support/tickets.js");
 const workflow = await import("../../services/support/workflow.js");
 const adminTickets = await import("../../services/admin/tickets.js");
 const photoSvc = await import("../../services/admin/userPhoto.js");
+const { getSettingsOverview } = await import("../../services/admin/settings.js");
+const { inspectAdminSecurity } = await import("../../web/securityPosture.js");
 
 const CHROME = process.env.CHROME_PATH || [
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
@@ -194,6 +196,7 @@ const guard = (fn) => async (req, res) => {
 app.use("/api/admin", (req, res, next) => (req.path.startsWith("/auth/") ? realAdminRouter(req, res, next) : next()));
 api.use(mw.requireAdminSession, mw.requireCsrfToken);
 const actor = (req) => req.adminActorId;
+api.get("/settings/overview", guard(async (req, res) => ok(res, getSettingsOverview({ actorId: actor(req), securityPosture: inspectAdminSecurity(realAdminRouter) }))));
 
 // Money and list scenarios: `delayMs` holds a response open and `failNext` fails one, so the UI can be observed before the server has answered.
 const stub = { delayMs: 0, failNext: false, balance: [], bank: [], recovery: [], usersDelayMs: 0, bankConfirmed: false };
@@ -337,6 +340,7 @@ const server = app.listen(0, "127.0.0.1");
 await new Promise((resolve) => server.once("listening", resolve));
 process.env.PORT = String(server.address().port); // the panel's server-side loopback targets this port
 const base = `http://127.0.0.1:${server.address().port}`;
+process.env.ADMIN_ALLOWED_ORIGINS = base; // production trusts configured origins only, never the Host header
 
 const session = await auth.createAdminSession("424242");
 const cookieHeader = (path) => ({ name: auth.ADMIN_SESSION_COOKIE, value: session.token, domain: "127.0.0.1", path, httpOnly: true, secure: false, sameSite: "Lax" });
@@ -459,6 +463,102 @@ await step("security: unauthenticated API access is 401; mutations without/with 
   assert.equal((await fetch(`${base}/api/admin/payments/delete-preview`, { method: "POST", headers: { ...headers, "x-csrf-token": "nope" }, body })).status, 403);
   const crossOrigin = await fetch(`${base}/api/admin/payments/delete-preview`, { method: "POST", headers: { ...headers, "x-csrf-token": session.session.csrfToken, origin: "https://evil.example" }, body });
   assert.equal(crossOrigin.status, 403);
+});
+
+const trapViolations = (page) => page.context().addInitScript(() => {
+  window.__cspViolations = [];
+  document.addEventListener("securitypolicyviolation", (event) => window.__cspViolations.push(`${event.violatedDirective} ${event.blockedURI}`));
+});
+
+await step("csp: inline scripts on signed-out and signed-in pages carry this response's nonce, and the document is never cached", async () => {
+  for (const [path, signedIn] of [["/sign-in", false], ["/users", true], ["/support/login", false]]) {
+    const page = await newPage({ signedIn });
+    await trapViolations(page);
+    const response = await page.goto(`/panel${path}`, { waitUntil: "networkidle" });
+    const headers = response.headers();
+    const nonce = /'nonce-([^']+)'/.exec(headers["content-security-policy"] ?? "")?.[1];
+    assert.ok(nonce, `${path}: the response has a nonce`);
+    assert.match(headers["cache-control"] ?? "", /no-store/, `${path}: a nonce must never be replayed from a cache`);
+    const inline = await page.evaluate(() => [...document.scripts].filter((script) => !script.src).map((script) => ({ nonce: script.nonce, head: script.textContent.slice(0, 50) })));
+    assert.ok(inline.length > 0, `${path}: Next emitted inline scripts`);
+    const mismatched = inline.filter((script) => script.nonce !== nonce);
+    assert.deepEqual(mismatched, [], `${path} (${response.status()}): inline scripts without this response's nonce: ${JSON.stringify(mismatched)}`);
+    assert.deepEqual(await page.evaluate(() => window.__cspViolations), [], `${path}: no violation`);
+    assert.ok(await page.evaluate(() => /light|dark/.test(document.documentElement.className)), `${path}: the theme script ran`);
+    assert.deepEqual(page.errors.filter((text) => /Content Security Policy|hydrat/i.test(text)), [], path);
+    await page.context().close();
+  }
+});
+
+await step("csp: an injected inline script, a stale nonce and eval are really blocked in Chrome", async () => {
+  const page = await newPage({ signedIn: false });
+  await trapViolations(page);
+  const first = await page.goto("/panel/sign-in", { waitUntil: "networkidle" });
+  const staleNonce = /'nonce-([^']+)'/.exec(first.headers()["content-security-policy"])[1];
+  const second = await page.reload({ waitUntil: "networkidle" });
+  assert.notEqual(/'nonce-([^']+)'/.exec(second.headers()["content-security-policy"])[1], staleNonce, "a reload has a new nonce");
+  const outcome = await page.evaluate((stale) => {
+    const inject = (nonce, flag) => {
+      const script = document.createElement("script");
+      if (nonce) script.setAttribute("nonce", nonce);
+      script.textContent = `window.${flag} = true`;
+      document.head.appendChild(script);
+      return window[flag] === true;
+    };
+    return { plain: inject(null, "__plainRan"), stale: inject(stale, "__staleRan") };
+  }, staleNonce);
+  assert.deepEqual(outcome, { plain: false, stale: false });
+  // From a timer: code run directly by page.evaluate is exempt from the eval check, so it would prove nothing.
+  const evalRan = await page.evaluate(() => new Promise((resolve) => {
+    setTimeout(() => { try { resolve((0, eval)("1 + 1") === 2); } catch { resolve(false); } }, 0);
+  }));
+  assert.equal(evalRan, false);
+  const violations = await page.evaluate(() => window.__cspViolations);
+  assert.ok(violations.filter((entry) => entry.startsWith("script-src")).length >= 3, violations.join(" | "));
+  const framed = await newPage({ signedIn: false });
+  await framed.setContent(`<iframe id="f" src="${base}/panel/sign-in"></iframe>`);
+  await framed.waitForTimeout(800);
+  const child = framed.frames().find((frame) => frame !== framed.mainFrame());
+  assert.ok(!child || !child.url().includes("/panel/sign-in") || (await child.content().catch(() => "")).length < 200, "the panel does not render in a frame");
+  await framed.context().close();
+  await page.context().close();
+});
+
+await step("csp: signed-in pages hydrate, navigate on the client and mutate with no violation", async () => {
+  const page = await newPage();
+  await trapViolations(page);
+  for (const path of ["/", "/users", "/payments", "/products", "/broadcasts", "/tickets", "/analytics", "/settings", "/audit", "/recovery", "/system-health", "/custody", "/admins", "/referrals", "/vpns", "/mock-tests", "/sentinel", "/reliability"]) {
+    await go(page, path);
+    assert.deepEqual(await page.evaluate(() => window.__cspViolations), [], `${path}: no violation`);
+  }
+  await go(page, "/");
+  await page.getByRole("link", { name: "Users" }).first().click();
+  await page.waitForURL(/\/panel\/users/);
+  assert.deepEqual(await page.evaluate(() => window.__cspViolations), [], "client navigation");
+  assert.deepEqual(page.errors.filter((text) => /Content Security Policy/i.test(text)), []);
+  await page.context().close();
+});
+
+await step("settings: protections read as measured results in plain words, HSTS stays unconfirmed over HTTP, and no icon name leaks into text", async () => {
+  const page = await newPage();
+  await go(page, "/settings");
+  await page.getByRole("tab", { name: "Security" }).click();
+  const panel = page.getByRole("tabpanel");
+  await panel.getByText("Browser protections").waitFor();
+  const text = await panel.innerText();
+  const statusOf = async (label) => {
+    const row = panel.locator("div.border-b", { has: page.getByText(label, { exact: true }) });
+    return (await row.locator("div.font-medium").innerText()).trim();
+  };
+  assert.equal(await statusOf("CSRF tokens"), "Verified");
+  assert.equal(await statusOf("Trusted origins"), "Verified");
+  assert.equal(await statusOf("Cross-origin access (CORS)"), "Verified");
+  assert.equal(await statusOf("Security headers"), "Verified");
+  assert.equal(await statusOf("HTTPS enforcement (HSTS)"), "Not confirmed yet", "no HTTPS request has been seen");
+  assert.match(text, /\d+ of \d+ state-changing routes always need the session token/);
+  assert.doesNotMatch(text, /svg|Enabled|Disabled/);
+  await page.screenshot({ path: join(shots, "settings-security.png"), fullPage: true });
+  await page.context().close();
 });
 
 await step("customer support portal at /panel/support: one-time link signs in, own ticket is listed and opens live, cookies are /api/support + /panel, another customer's ticket is a 404", async () => {

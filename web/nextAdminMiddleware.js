@@ -1,5 +1,7 @@
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { applyAdminPageHeaders, buildPanelCsp } from "./webSecurity.js";
 
 /** Canonical public path of the admin panel (and of the customer support area under it). */
 export const ADMIN_PANEL_NEXT_BASE_PATH = "/panel";
@@ -39,18 +41,18 @@ function getHandler() {
 }
 
 /**
- * Anti-framing and sniffing protection for the admin UI, matching what the
- * legacy /panel shell already sends. Deliberately NOT a script-src policy:
- * Next.js and next-themes emit inline bootstrap scripts, so restricting
- * scripts would need per-request nonces. frame-ancestors alone closes
- * clickjacking, which is the relevant risk for a CSRF-protected admin UI.
+ * Next.js and next-themes need inline bootstrap scripts, so each response gets its own script nonce. Next reads it from the
+ * CSP on the REQUEST (app-render), and the root layout from x-nonce; both are overwritten here, so a client cannot choose
+ * them. Every page must render per request for this to hold, which reading x-nonce in the root layout forces: a prerendered
+ * page has no nonce and its scripts would be blocked.
  */
-export function applyNextPanelHeaders(res) {
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Referrer-Policy", "same-origin");
-  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+export function applyNextPanelHeaders(req, res) {
+  const nonce = randomBytes(16).toString("base64");
+  const csp = buildPanelCsp(nonce, { dev: process.env.NODE_ENV !== "production" });
+  applyAdminPageHeaders(req, res);
+  res.setHeader("Content-Security-Policy", csp);
+  req.headers["content-security-policy"] = csp;
+  req.headers["x-nonce"] = nonce;
 }
 
 /** `/next-panel/<rest>` or `/panel-next/<rest>` -> `/panel/<rest>`; null when the path is neither. */
@@ -79,7 +81,7 @@ export function nextAdminMiddleware(req, res, next) {
   if (req.path !== ADMIN_PANEL_NEXT_BASE_PATH && !req.path.startsWith(`${ADMIN_PANEL_NEXT_BASE_PATH}/`)) {
     return next();
   }
-  applyNextPanelHeaders(res);
+  applyNextPanelHeaders(req, res);
   getHandler().then((handle) => handle(req, res)).catch((error) => {
     console.error(JSON.stringify({
       ts: new Date().toISOString(),

@@ -146,6 +146,8 @@
         "web/adminRouter.js",
         "web/adminMiddleware.js",
         "web/nextAdminMiddleware.js",
+        "web/webSecurity.js",
+        "web/securityPosture.js",
         "utils/auth.js",
         "utils/adminStepSession.js",
         "handlers/admin/panel.js"

@@ -47,7 +47,7 @@ function nowPaymentsStatus(env) {
   }
 }
 
-export function getSettingsOverview({ actorId, env = process.env, now = new Date() } = {}) {
+export function getSettingsOverview({ actorId, env = process.env, now = new Date(), securityPosture = null } = {}) {
   const actor = assertAdminUser(actorId);
   const pkg = readPackage();
   const nowPayments = nowPaymentsStatus(env);
@@ -73,8 +73,8 @@ export function getSettingsOverview({ actorId, env = process.env, now = new Date
       loginCodeTtlSeconds: LOGIN_CODE_TTL,
       sessionStore: "redis",
       cookie: { httpOnly: cookie.httpOnly, secure: cookie.secure, sameSite: cookie.sameSite, paths: [SESSION_COOKIE_PATH, NEXT_PANEL_SESSION_COOKIE_PATH] },
-      csrfProtection: true,
-      originCheck: true,
+      // Measured by web/securityPosture.js for this request. null means it was not checked, which must never read as protected.
+      protection: securityPosture,
       // Mirrors rateLimitMiddleware({ limit }) on /auth/request-code and /auth/verify (60 s window).
       loginRateLimitPerMinute: 5,
       codeVerifyRateLimitPerMinute: 10,

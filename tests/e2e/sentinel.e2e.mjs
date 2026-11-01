@@ -103,6 +103,7 @@ const server = app.listen(0, "127.0.0.1");
 await new Promise((resolve) => server.once("listening", resolve));
 process.env.PORT = String(server.address().port);
 const base = `http://127.0.0.1:${server.address().port}`;
+process.env.ADMIN_ALLOWED_ORIGINS = base; // production trusts configured origins only, never the Host header
 const session = await auth.createAdminSession("424242");
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 

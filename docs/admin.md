@@ -28,11 +28,48 @@ flowchart TD
 1. Enter the Telegram ID of an account listed in `ADMINS` (or added by the owner in the Admins page).
 2. The bot sends a one-time code by direct message (valid 5 minutes, single use, stored as SHA-256).
 3. The server issues a Redis-backed session: `HttpOnly`, `Secure`, `SameSite=Lax` cookie, a
-   double-submit CSRF token, and a lifetime of `ADMIN_SESSION_TTL_SECONDS`.
+   CSRF token kept in that session, and a lifetime of `ADMIN_SESSION_TTL_SECONDS`.
    The cookie is scoped to `/api/admin` and `/panel` only (never `/`). Signing in again rotates the session. After the move from `/next-panel` to `/panel` a one-time re-login is expected: the old cookie is not sent to `/panel`, and sign-in/sign-out expire it explicitly.
 
-Mutating requests need the session, a valid CSRF token and a same-origin request, and are
+Mutating requests need the session, a valid CSRF token and a trusted origin, and are
 rate-limited. Sign-in requests are rate-limited per Telegram ID and per IP.
+
+### Browser protections
+
+These apply to `/api/admin` and `/api/support`. The policy lives in `web/webSecurity.js` and `web/adminMiddleware.js`.
+
+| Control | Rule |
+|---|---|
+| CSRF token | A random token held in the server-side session and sent as `x-csrf-token`. Every method not known to be safe needs it. It only works with its own session, so it ends with that session and a new sign-in issues another. It lasts the whole session on purpose: rotating per request would break a second tab, and `operationId` already stops replays. |
+| Sign-out | A live session needs its token, so another site cannot sign anyone out. A dead session only clears its own cookies. |
+| Sign-in | There is no session to hold a token yet, so the trusted-origin rule and the single-use code protect it. |
+| Trusted origin | An `Origin` header must exactly match `WEBHOOK_BASE_URL`, `RAILWAY_PUBLIC_DOMAIN` (`https`) or an `ADMIN_ALLOWED_ORIGINS` entry, on every method. Production never uses the `Host` header for this; outside production the address in use also counts, because nothing may be configured for it. With no `Origin`, `Sec-Fetch-Site: cross-site` or `same-site` is refused, which covers the GETs that record something (mark-read, CSV export). |
+| No trusted origin in production | Every browser request is refused, so the panel cannot be used. `WEBHOOK_BASE_URL` is required at startup, so this needs an invalid override. |
+| CORS | Off unless an origin is trusted. The answer is that exact origin with credentials, never `*`. Preflights are checked: methods `GET`, `HEAD`, `POST`, `PATCH`, `DELETE` and headers `content-type`, `x-csrf-token` only. An untrusted origin gets no CORS header. CORS is not authentication: a trusted origin still needs a session and a token. |
+| Content type | A request body must be `application/json`, so a form post is never a valid request. |
+
+Non-browser clients send neither `Origin` nor Fetch Metadata and are left to the session and token, which is correct:
+these controls stop a browser acting on a signed-in admin's behalf, and such a client has no admin cookie to borrow.
+
+**Response headers.** API responses send `no-store`, `nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`,
+`default-src 'none'`, a restrictive `Permissions-Policy` and `Cross-Origin-Resource-Policy: same-origin`. `server.js`
+mounts them ahead of the body parser as well, so parser errors carry them. Panel pages send a per-response script nonce
+(`script-src 'self' 'nonce-…'`), `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'none'`, `Referrer-Policy:
+same-origin`, the same `Permissions-Policy` and `Cross-Origin-Opener-Policy: same-origin`. HSTS (`max-age=15552000`) is
+sent only for a request that arrived over HTTPS.
+
+`style-src` keeps `'unsafe-inline'` because React server-renders style attributes, and a nonce there would turn that
+keyword off. Nothing in the panel may rely on `eval`; that is why `lib/form-schemas.ts` sets Zod to `jitless`.
+
+**The nonce needs per-request rendering.** Next reads it from the CSP on the request, which `web/nextAdminMiddleware.js`
+sets. The root layout reads `x-nonce`, which keeps every page dynamic. A page that became prerendered would have no nonce
+and its scripts would be blocked, so check that `npm run build` lists every route as `ƒ` apart from the icons.
+
+**Settings → Security → Browser protections** shows measured results, not stored flags. `web/securityPosture.js` walks the
+mounted router and runs the real middleware against synthetic requests each time the page loads. A route ahead of the
+guards, or a check that stopped refusing, reads as *Failed*. *Not checked* means no result came back. HSTS reads *Not
+confirmed yet* until an HTTPS request has reached this process. The check covers what this process generates, so a proxy
+in front of it can still change the headers a browser receives.
 
 ## What admins can do
 
@@ -51,7 +88,7 @@ rate-limited. Sign-in requests are rate-limited per Telegram ID and per IP.
 | Admins | Add or remove database admins (owner only) |
 | Audit log | Every mutating action with actor, target, reason and IP (web) |
 | Mock tests | Run the isolated [mock-test harness](#mock-tests) |
-| System health / Settings | Dependency checks; a read-only view of how the server is configured (booleans only — no secret value is ever returned) |
+| System health / Settings | Dependency checks; a read-only view of how the server is configured (booleans only — no secret value is ever returned); measured [browser protections](#browser-protections) |
 
 The Telegram panel follows the same sections with confirmations on sensitive actions and
 pagination. Long IDs are kept in the chat session and referenced by index so `callback_data`
@@ -105,7 +142,7 @@ HooshPay invoice lookup/forced re-fulfillment, API service purchase and messagin
 ## `/api/admin` reference
 
 All routes except sign-in require a session; mutations also require the CSRF token and are
-idempotent through `operationId`. `GET /api/admin/operations/new-id` returns a fresh one.
+idempotent through `operationId`. Sign-out needs the token only while its session is live. `GET /api/admin/operations/new-id` returns a fresh one.
 
 | Group | Routes |
 |---|---|

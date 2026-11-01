@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import express from "express";
 import { brotliCompressSync, gzipSync } from "node:zlib";
+import { applyAdminPageHeaders } from "./webSecurity.js";
 
 const webRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "public");
 
@@ -39,7 +40,8 @@ export const STATIC_OPTIONS = {
     if (!HTML_FILE.test(filePath)) return;
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("X-Robots-Tag", "noindex, nofollow");
-    securityHeaders(res, ADMIN_CSP);
+    applyAdminPageHeaders(res.req, res);
+    res.setHeader("Content-Security-Policy", ADMIN_CSP);
   },
 };
 
@@ -136,14 +138,14 @@ function servePublicFile(req, res, next) {
       // HTML shells requested by file name get exactly the headers of their
       // canonical route (/index.html is the admin sign-in page).
       const shell = HTML_SHELLS[relative.replace(/\\/g, "/").replace(/[.\s]+$/, "").toLowerCase()];
-      if (shell === "admin") return sendAdminShell(res, next);
+      if (shell === "admin") return sendAdminShell(req, res, next);
       if (shell === "store") return serveStorefront(req, res, next);
       if (shell === "notFound") return notFoundHandler(req, res);
       return ensureStatic()(req, res, next);
     }
     // Legacy-shell fallback for /panel and /admin; in practice nextAdminMiddleware answers those first (Next.js panel / 307), so only /index.html reaches the legacy dashboard.
     if (!ADMIN_PAGE.test(req.path)) return next();
-    sendAdminShell(res, next);
+    sendAdminShell(req, res, next);
   });
 }
 
@@ -154,11 +156,11 @@ function securityHeaders(res, csp) {
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
 }
 
-function sendAdminShell(res, next) {
+function sendAdminShell(req, res, next) {
   res.setHeader("Cache-Control", "no-store");
-  res.setHeader("Referrer-Policy", "same-origin");
   res.setHeader("X-Robots-Tag", "noindex, nofollow");
-  securityHeaders(res, ADMIN_CSP);
+  applyAdminPageHeaders(req, res);
+  res.setHeader("Content-Security-Policy", ADMIN_CSP);
   res.sendFile(path.join(webRoot, "index.html"), (sendError) => {
     if (sendError) next();
   });

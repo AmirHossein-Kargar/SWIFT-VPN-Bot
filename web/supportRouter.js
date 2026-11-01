@@ -4,7 +4,7 @@
  * Telegram id inside the service layer — a ticket id belonging to someone
  * else is indistinguishable from one that does not exist.
  */
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import express from "express";
 import { default as botInstance } from "../config/botInstance.js";
 import {
@@ -25,6 +25,8 @@ import { customerOpenTicket, customerReply, customerSetStatus } from "../service
 import { streamAttachment } from "../services/support/attachments.js";
 import {
   adminApiHeaders,
+  csrfTokensMatch,
+  requireJsonRequest,
   requireSameOrigin,
   adminRateLimit,
   clientIp,
@@ -34,12 +36,15 @@ import {
   NEXT_PANEL_SESSION_COOKIE_PATH,
   RETIRED_PANEL_COOKIE_PATH,
 } from "./adminMiddleware.js";
+import { SAFE_METHODS, apiCors } from "./webSecurity.js";
 
 export const CUSTOMER_API_COOKIE_PATH = "/api/support";
 
 const router = express.Router();
 router.use(adminApiHeaders);
+router.use(apiCors);
 router.use(requireSameOrigin);
+router.use(requireJsonRequest);
 
 const requireBody = () => express.json({ limit: "32kb" });
 
@@ -53,12 +58,6 @@ function limited({ limit, scope }) {
     }
     next();
   };
-}
-
-function safeEqual(a, b) {
-  const first = Buffer.from(String(a ?? ""));
-  const second = Buffer.from(String(b ?? ""));
-  return first.length === second.length && timingSafeEqual(first, second);
 }
 
 function parseOperationId(body) {
@@ -107,6 +106,10 @@ router.get("/auth/session", (req, res) => {
 
 router.post("/auth/logout", requireBody(), async (req, res, next) => {
   try {
+    // A dead session only clears its own cookies; a live one needs its token, so another site cannot sign a customer out.
+    if (req.customerSession && !csrfTokensMatch(req.get("x-csrf-token"), req.customerSession.csrfToken)) {
+      return res.status(403).json({ ok: false, error: "csrf_token_invalid" });
+    }
     if (req.customerSessionToken) await deleteCustomerSession(req.customerSessionToken).catch(() => {});
     res.clearCookie(CUSTOMER_SESSION_COOKIE, clearSessionCookieOptions(CUSTOMER_API_COOKIE_PATH));
     res.clearCookie(CUSTOMER_SESSION_COOKIE, clearSessionCookieOptions(NEXT_PANEL_SESSION_COOKIE_PATH));
@@ -119,7 +122,7 @@ router.post("/auth/logout", requireBody(), async (req, res, next) => {
 router.use((req, res, next) => {
   if (req.customerSessionError) return res.status(503).json({ ok: false, error: "session_store_unavailable" });
   if (!req.customerSession) return res.status(401).json({ ok: false, error: "unauthorized" });
-  if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method) && !safeEqual(req.get("x-csrf-token"), req.customerSession.csrfToken)) {
+  if (!SAFE_METHODS.has(req.method) && !csrfTokensMatch(req.get("x-csrf-token"), req.customerSession.csrfToken)) {
     return res.status(403).json({ ok: false, error: "csrf_token_invalid" });
   }
   next();

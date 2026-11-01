@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+// Zod otherwise probes `new Function` to enable its JIT, which the panel's CSP correctly blocks and reports as a violation.
+z.config({ jitless: true });
+
 /**
  * Validation schemas of the two admin forms that use zod. They run in the
  * browser (react-hook-form + zodResolver) and live here, away from the React

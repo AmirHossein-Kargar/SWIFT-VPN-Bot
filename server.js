@@ -15,6 +15,8 @@ import {
 } from "./services/hooshpay/paymentValidation.js";
 import { recordWebhookOutcome } from "./services/admin/monitoring.js";
 import adminRouter from "./web/adminRouter.js";
+import { adminApiHeaders, requireSameOrigin } from "./web/adminMiddleware.js";
+import { apiCors } from "./web/webSecurity.js";
 import supportRouter from "./web/supportRouter.js";
 import storeRouter from "./web/storeRouter.js";
 import { serveAdminSpa, notFoundHandler } from "./web/spa.js";
@@ -27,6 +29,8 @@ const app = express();
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
 app.use(observeRequests);
+// Ahead of the body parser: a refused origin is never parsed, and a parse error still carries these headers.
+app.use(["/api/admin", "/api/support"], adminApiHeaders, apiCors, requireSameOrigin);
 
 export const MAX_PAYLOAD_BYTES = 64 * 1024;
 const RATE_WINDOW_MS = 60_000;

@@ -27,7 +27,7 @@ here is read by the code (`config/env.js` and the modules named in the notes).
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `NODE_ENV` | unset (treated as non-production) | Set to `production` on every production host (Railway does **not** set this for you). It gates several production-only checks: rejecting a loopback MongoDB/Redis host, requiring HTTPS for `WIZARD_API_URL`/`HOOSHPAY_API_BASE_URL`, disabling Mongoose's per-boot `autoIndex`, and switching the admin dashboard's internal Next.js middleware out of dev-server mode. Leaving it unset does not stop the bot from starting; it silently skips those checks |
+| `NODE_ENV` | unset (treated as non-production) | Set to `production` on every production host (Railway does **not** set this for you). It gates several production-only checks: rejecting a loopback MongoDB/Redis host, requiring HTTPS for `WIZARD_API_URL`/`HOOSHPAY_API_BASE_URL`, disabling Mongoose's per-boot `autoIndex`, switching the admin dashboard's internal Next.js middleware out of dev-server mode, and making the admin APIs trust configured browser origins only (otherwise the request's own origin also counts, and Settings shows *Development mode*). Leaving it unset does not stop the bot from starting; it silently skips those checks |
 
 ## Required
 
@@ -47,7 +47,7 @@ malformed.
 | `HOOSHPAY_WEBHOOK_SECRET` | HMAC-SHA256 secret for HooshPay webhook signatures | ≥ 32 characters. If unset, every webhook is rejected |
 | `NOWPAYMENTS_API_KEY` | NOWPayments API key (sent only as `x-api-key`) | Not the public key |
 | `NOWPAYMENTS_IPN_SECRET` | NOWPayments HMAC-SHA512 IPN secret | ≥ 32 characters. If unset, every IPN is rejected |
-| `WEBHOOK_BASE_URL` | Public HTTPS origin of this server | **No trailing slash**, no path. Also used for the storefront canonical URL |
+| `WEBHOOK_BASE_URL` | Public HTTPS origin of this server | **No trailing slash**, no path. Also used for the storefront canonical URL and trusted as the panel's browser origin |
 | `TRX_WALLET` | TRON address that receives direct TRX deposits | Valid 34-character Base58 address |
 
 ## Optional
@@ -118,6 +118,7 @@ malformed.
 | `PORT` | `3000` | Express port. Railway injects it — do not hard-code it there |
 | `WEBHOOK_RATE_LIMIT_PER_MIN` | `600` | Per-IP webhook limit per 60 s window (`0` disables it; max 100000) |
 | `ADMIN_SESSION_TTL_SECONDS` | `28800` | Web admin session lifetime (900–86400) |
+| `ADMIN_ALLOWED_ORIGINS` | empty | Comma-separated exact origins, beyond `WEBHOOK_BASE_URL` and Railway's `RAILWAY_PUBLIC_DOMAIN`, that browsers may use for the admin and support APIs. Set it if you open the panel on a second domain, or sign-in is refused with `origin_not_allowed`. Wildcards, paths and (in production) plain HTTP except loopback are ignored; the settings page counts ignored entries. See [browser protections](admin.md#browser-protections) |
 | `WIZARD_STATUS_TTL_SECONDS` | `90` | Cache time for live WizardXray status in "My services" and admin views (`0` = always fresh) |
 | `COST_PER_DAY` / `COST_PER_GB` | `200` / `300` | Cost constants (Toman) used by the admin profit reports |
 

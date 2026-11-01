@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { headers } from "next/headers";
 
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
@@ -18,13 +19,16 @@ export const viewport: Viewport = {
   ],
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // Set per request by web/nextAdminMiddleware.js. Reading it also keeps every page out of prerendering, which the
+  // Content-Security-Policy needs: a prerendered page would have no nonce and its inline scripts would be blocked.
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
   return (
     // next-themes sets the class on <html> before hydration; the attribute
     // difference between server and client is expected there.
     <html lang="en" dir="ltr" suppressHydrationWarning>
       <body>
-        <ThemeProvider>
+        <ThemeProvider nonce={nonce}>
           <TooltipProvider delayDuration={200}>{children}</TooltipProvider>
           <Toaster position="bottom-right" />
         </ThemeProvider>
