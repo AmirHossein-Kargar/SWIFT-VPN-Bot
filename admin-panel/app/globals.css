@@ -91,6 +91,15 @@ main[data-pending] .page-enter { opacity: 0.6; transition: opacity 0.15s ease 0.
 .change-flash { animation: change-flash 1.4s ease-out; }
 @keyframes change-flash { from { box-shadow: 0 0 0 2px hsl(var(--brand) / 0.75); } to { box-shadow: 0 0 0 2px transparent; } }
 
+/* Dashboard. Only transform and opacity animate, so these stay off the main thread, and only the one live dot repeats: a page of
+   pulsing dots would suggest activity that nothing measured. */
+.dash-state-dot { width: 0.5rem; height: 0.5rem; flex: none; border-radius: 9999px; transition: background-color 0.6s ease; }
+.dash-live-dot { position: relative; width: 0.5rem; height: 0.5rem; flex: none; border-radius: 9999px; }
+.dash-live-dot-on { background: hsl(var(--success)); }
+.dash-live-dot-on::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: hsl(var(--success)); animation: dash-live 2.4s ease-out infinite; }
+@keyframes dash-live { from { opacity: 0.55; transform: scale(1); } 60%, to { opacity: 0; transform: scale(2.6); } }
+.dash-activity-row { animation: dash-row-in 0.3s ease-out; }
+@keyframes dash-row-in { from { opacity: 0; transform: translateY(-4px); } }
 .metric-card { transition: border-color 0.2s ease, box-shadow 0.2s ease; }
 .metric-card:hover { border-color: hsl(var(--brand) / 0.45); }
 

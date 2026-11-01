@@ -62,6 +62,7 @@ rerun with `TEST_CONCURRENCY=1` to isolate a concurrency-sensitive test from a g
 - `node tests/e2e/sentinel.e2e.mjs` is the `/panel/sentinel` suite: real app and a disposable `TEST_MONGO_URL`, needs
   `npx next build admin-panel`. Set `AXE_PATH` to the axe-core script or its accessibility step reports itself as skipped.
 - `node tests/e2e/adminDirectory.e2e.mjs` is the `/panel/admins` suite, with the same prerequisites and options as `sentinel.e2e.mjs`.
+- `node tests/e2e/dashboard.e2e.mjs` is the `/panel` dashboard suite, with the same prerequisites and `AXE_PATH` and `E2E_ONLY` options.
 - `node tests/e2e/reliability.e2e.mjs` is the `/panel/reliability` suite, with the same prerequisites and `AXE_PATH`, `E2E_ONLY` and
   `E2E_SHOTS` options. It takes several minutes.
 - Set `SHOTS` to a scratch folder for the storefront suite: without it, it overwrites the tracked `store-*.png` in the

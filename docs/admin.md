@@ -75,9 +75,9 @@ in front of it can still change the headers a browser receives.
 
 | Area | Capabilities |
 |---|---|
-| Dashboard / analytics | KPIs, revenue/orders/users charts, popular plans, provider and plan breakdowns, CSV export, live system health |
+| Dashboard / analytics | KPIs, revenue/orders/users charts, popular plans, provider and plan breakdowns, CSV export, live system health. The dashboard refreshes itself: see [Live dashboard](#live-dashboard) |
 | Users | Search, filters, profile with payments, orders and services. **Credit** or **debit** the wallet, **block / unblock**, **send a Telegram message**, **restore test-service eligibility** (see [User actions](#user-actions)) |
-| VPN services | Registry plus live WizardXray detail: change link, enable/disable, revoke, extend time, add traffic |
+| VPN services | Registry plus live WizardXray detail: change link, enable/disable, revoke, extend time, add traffic, renew. The renew dialog shows WizardXray's own quote before confirming. Remote clients lists the provider's services with its account, prices and locations ([WizardXray](wizardxray.md)) |
 | Payments | All providers, status tabs, full timeline (wallet debit/refund and webhook events), safe retry, mark for recovery, manual resolve, bank-receipt confirm/reject; NOWPayments orders with an unknown invoice outcome: read-only provider check and an audited, reason-and-confirmation-gated lock release |
 | Recovery | Queue of stuck payments and orders, safe retry-all |
 | Money Flow Sentinel | Read-only financial monitoring at `/panel/sentinel`: activity overview, live money paths, reconciliation findings with investigation and review, transaction explorer. It moves no money; see [Money Flow Sentinel](sentinel.md) |
@@ -113,6 +113,26 @@ HooshPay invoice lookup/forced re-fulfillment, API service purchase and messagin
   security boundary).
 - **Restore test eligibility** clears the "already received a test" state only when no test is
   in flight or awaiting delivery. It never provisions a service.
+
+## Live dashboard
+
+`/panel` is server-rendered once and then keeps itself current by asking `GET /dashboard/pulse` every 30 seconds while the tab is visible
+and as soon as it becomes visible again. All dashboards share one result for 15 seconds, so watching costs the same for one admin as for
+five, and the provider is read through the shared `me` cache.
+
+**Everything that moves does so because a server value changed.** Numbers count to the new figure, a changed value or status flashes once,
+and a new order slides into the list. The system strip is the monitor's own snapshot, read from memory, so a page view runs no check, and a
+failure never waits for the 15-second cache. The label says what can be claimed:
+
+| Label | Means |
+|---|---|
+| Live, updated … | The last refresh worked and is recent |
+| Last updated … | Two polls were missed |
+| Not updating. These figures are from … | The last refresh failed. The figures stay, and the dot stops |
+| Paused while hidden | The tab is hidden, so nothing is requested |
+
+A stopped monitor reads *Stale* and an unreported one *Unknown*, as on [the Reliability Center](reliability.md). Only the live dot repeats,
+and only `transform` and `opacity` animate. Reduced motion shows final figures at once and repeats nothing.
 
 ## Interaction rules
 
@@ -184,9 +204,10 @@ idempotent through `operationId`. Sign-out needs the token only while its sessio
 | Group | Routes |
 |---|---|
 | Auth | `POST /auth/request-code` · `POST /auth/verify` · `POST /auth/logout` · `GET /auth/session` |
-| Overview | `GET /dashboard` · `GET /analytics` · `GET /analytics/report` · `GET /analytics/export.csv` · `GET /system/health` · `GET /settings/overview` · `GET /audit` · `GET /referrals` |
+| Overview | `GET /dashboard` · `GET /dashboard/pulse` · `GET /analytics` · `GET /analytics/report` · `GET /analytics/export.csv` · `GET /system/health` · `GET /settings/overview` · `GET /audit` · `GET /referrals` |
 | Users | `GET /users` · `GET /users/:id` · `POST /users/:id/balance` · `/block` · `/unblock` · `/test-eligibility` · `/message` |
 | VPN | `GET /vpns` · `GET /vpns/:username` · `POST /vpns/:username/actions` · `GET /vpns-remote/clients` |
+| Provider (reads only) | `GET /provider/account` · `GET /provider/quote` · `GET /provider/candidates/:purchaseId` |
 | Payments | `GET /payments` · `GET /payments/:key` · `POST /payments/:key/retry` · `/recovery-required` · `/resolve` · `/release-creation-lock` (NOWPayments `creation_unknown` only) · `POST /payments/bank/:id/confirm` · `/reject` |
 | Recovery | `GET /recovery` · `POST /recovery/retry-safe` |
 | Sentinel | `GET /sentinel/overview` · `/sentinel/sync` · `/sentinel/flow` · `/sentinel/live` · `/sentinel/transactions[/:key]` · `/sentinel/findings[/:id]` · `POST /sentinel/findings/:id/review` · `POST /sentinel/reconcile` |

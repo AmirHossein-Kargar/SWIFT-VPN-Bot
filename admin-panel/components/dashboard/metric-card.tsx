@@ -11,7 +11,7 @@ export function MetricCard({
   tone = "default",
 }: {
   label: string;
-  value: string;
+  value: React.ReactNode;
   icon: LucideIcon;
   hint?: string;
   tone?: "default" | "warning" | "destructive" | "success";
@@ -21,8 +21,9 @@ export function MetricCard({
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
         <CardTitle>{label}</CardTitle>
         <Icon
+          aria-hidden="true"
           className={cn(
-            "h-4 w-4 text-muted-foreground",
+            "h-4 w-4 text-muted-foreground transition-colors duration-500",
             tone === "warning" && "text-warning",
             tone === "destructive" && "text-destructive",
             tone === "success" && "text-success"
