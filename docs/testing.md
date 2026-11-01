@@ -34,7 +34,7 @@ helper refuses any other name.
 Suites that need MongoDB: `adminBankConfirm`, `adminRegistryMutations`, `adminServices`,
 `adminTelegramPanel` (data screens), `adminWeb` (data tests), `catalogShop`,
 `hooshpayFulfillment`, `hooshpayIndexMigration`, `purchaseFlow`, `orderStatusMessage.mongo`, `trxScanner` and
-`webhookHttp`, `sentinel.mongo`, `reliability.mongo` under `tests/integration/`.
+`webhookHttp`, `sentinel.mongo`, `reliability.mongo`, `adminDirectory.mongo` under `tests/integration/`.
 
 ## What is covered
 
@@ -47,6 +47,7 @@ Suites that need MongoDB: `adminBankConfirm`, `adminRegistryMutations`, `adminSe
 | Admin services and panels | `tests/unit/admin*.test.js`, `tests/integration/admin*.test.js` | Audit idempotency, auth sessions, validation, registry, Telegram panel authorization, CSRF and session enforcement over HTTP |
 | Admin browser protections | `tests/integration/adminWebSecurity.test.js`, `tests/unit/webSecurity.test.js`, `nextPanelHeaders`, the `csp:` and `settings:` steps of `tests/e2e/nextPanel.e2e.mjs` | CSRF lifecycle, trusted origins, preflights, credentialed CORS, response headers, legitimate workflows; that the settings status reports a removed guard as failed; in Chrome, that nonces work on every route and injected scripts and `eval` are blocked. Needs no MongoDB |
 | Admin user actions | `adminUserMessaging`, `accessGate`, `adminSettings`, `adminTestEligibility`, `nextPanelHeaders` | Message delivery mapping, block enforcement, settings output never contains secret values, eligibility reset, anti-framing headers |
+| Admin directory | `tests/unit/adminDirectory.test.js`, `tests/integration/adminDirectoryHttp.test.js`, `adminDirectory.mongo.test.js`, `tests/e2e/adminDirectory.e2e.mjs` | The positive-evidence rule for presence; merging, filters and null handling; that presence cannot affect a request or reach authentication; access over real HTTP; real records, byte-identical reads and index plans; the page in Chrome |
 | Money Flow Sentinel | `tests/unit/sentinelRules.test.js`, `sentinelLedger`, `sentinelReadOnly`, `sentinelPanel`, `tests/integration/sentinelHttp.test.js`, `sentinel.mongo.test.js`, `tests/e2e/sentinel.e2e.mjs` | Every detection rule; reconstruction and exposure without double counting; the read-only guarantee, statically and as byte-identical money collections; real money flows, injected damage, idempotence, races, leases, keyset paging; auth, CSRF and input validation over HTTP; feed merging and backoff |
 | Service Reliability Center | `tests/unit/reliability*.test.js`, `tests/integration/reliabilityHttp.test.js`, `reliability.mongo.test.js`, `tests/e2e/reliability.e2e.mjs` | Every health state and the positive-evidence rule; incident rules, deduplication and recovery; windows, sample floors and coverage; outages of MongoDB and Redis; the static no-interference guarantees and byte-identical money collections; auth, validation and the event stream over real HTTP; index plans; the panel's Live rules. Listed in [Service Reliability Center](reliability.md#testing) |
 | Mock tests | `tests/unit/mockTests.test.js`, `mockTestsUi.test.js`, `tests/integration/adminTelegramMock.test.js` | Harness isolation and all scenarios against the real services; UI data contract |
@@ -67,6 +68,9 @@ Suites that need MongoDB: `adminBankConfirm`, `adminRegistryMutations`, `adminSe
 - `node tests/e2e/sentinel.e2e.mjs` (needs `npx next build admin-panel` and a disposable `TEST_MONGO_URL`; `AXE_PATH` adds accessibility
   checks, `E2E_ONLY=<regex>` runs matching steps, `E2E_SHOTS=<dir>` keeps screenshots) drives `/panel/sentinel` against the real app and
   database: themes and widths, live updates, reconnection, reduced motion, keyboard use and the review rules.
+- `node tests/e2e/adminDirectory.e2e.mjs` (same prerequisites and options as `sentinel.e2e.mjs`) drives `/panel/admins` against the real app and
+  database, with a stand-in bot for photos: themes and widths down to 320 px, labels for missing data, photos and fallbacks, search, filters, the drawer
+  and its loading and failure states, a broken presence store, keyboard use, signed-out access and accessibility.
 - `node tests/e2e/reliability.e2e.mjs` (same prerequisites and options as `sentinel.e2e.mjs`) drives `/panel/reliability` against the real app, a real
   event stream and a real database, with dependency probes the suite controls: themes and widths, topology interaction, live updates, deduplication,
   outages and recovery, reconnection, polling fallback, a stale monitor, signed-out sessions, order tracing, accessibility and main-thread cost.

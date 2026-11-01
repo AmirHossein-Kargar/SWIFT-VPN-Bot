@@ -85,7 +85,7 @@ in front of it can still change the headers a browser receives.
 | Service catalog | `AdminProduct` catalog (delete uses a lock + reference-count handshake with purchases, see `docs/payments.md`), the source of truth for the bot and storefront: paginated search/filter/sort, add, edit (optimistic concurrency via `revision`), duplicate, reorder, put on/off sale (`enabled`), show/hide on storefront (`published`), archive/restore, delete (only if unreferenced and not a shipped plan) |
 | Custody | NOWPayments custody balances, conversions, payouts and reconciliation (needs `NOWPAYMENTS_EMAIL` / `NOWPAYMENTS_PASSWORD`) |
 | Broadcasts | Preview, audience selection, rate-limited delivery, cancel, progress |
-| Admins | Add or remove database admins (owner only) |
+| Admins | [Directory](#admin-directory) of profiles with search, filters, activity and sign-in history. Add or remove database admins (owner only) |
 | Audit log | Every mutating action with actor, target, reason and IP (web) |
 | Mock tests | Run the isolated [mock-test harness](#mock-tests) |
 | System health / Settings | Dependency checks; a read-only view of how the server is configured (booleans only — no secret value is ever returned); measured [browser protections](#browser-protections) |
@@ -139,6 +139,43 @@ HooshPay invoice lookup/forced re-fulfillment, API service purchase and messagin
   (`started` → `succeeded` / `failed`), keyed by a unique `operationId`; the same `operationId`
   replays the stored result instead of repeating the action.
 
+## Admin directory
+
+`/panel/admins` shows one card per admin on record, removed admins included, with search and role and status filters held in
+the URL. A card opens a drawer with the profile, activity and security history. `services/admin/adminDirectory.js` only reads:
+adding and removing admins keep their own routes and rules, and the directory defines no role or permission. Any signed-in
+admin can read it, as with `/panel/audit`, which already shows the same actions and IP addresses.
+
+A field with no source stays `null` and the panel labels it; nothing is estimated.
+
+| Shown | Source | Limits |
+|---|---|---|
+| Who is an admin, role, source | `ADMINS`, `OWNER_TELEGRAM_ID`, `AdminAccount`, resolved as in `adminRegistry.js` | An entry deleted from `ADMINS` leaves no record, so it is not listed. Entries from `ADMINS` have no added date or added-by unless an `AdminAccount` row exists |
+| Name, username, join date | `User` | The bot refreshes names on each private message. There is no row until the admin messages the bot, which also rules out a photo |
+| Photo | `GET /users/:id/photo` | Telegram decides: a hidden or missing photo falls back to initials |
+| Account status | `AdminAccount.removedAt`, `User.isBanned` | *Blocked in bot* is a flag only. `accessGate.js` never gates an allow-listed admin, so it does not limit access. `blockedBy: "system"` means a Telegram delivery found the account had blocked the bot, which would also stop sign-in codes arriving |
+| Last sign-in, sign-out, sign-in history, IP | `ADMIN_LOGIN` and `ADMIN_LOGOUT` audit rows | Web panel only. The Telegram panel has no sign-in step. `ipAddress` is `req.ip` |
+| Activity, statistics, recent actions | `AdminAuditLog` rows by actor, sanitized as on the audit route | Audited actions only. Counts include sign-ins |
+| Last activity | The later of the last audit row and the last panel request | Reading pages in the Telegram panel leaves no trace |
+| Online | Presence record, below | Web panel only |
+
+**Presence.** A session cannot show who is there: it lasts for hours and is stored by token. So `trackAdminPresence`, mounted after
+the session and CSRF guards, stores the time of a signed-in API request in Redis as `admin:web:presence:<telegramId>`, at most once
+a minute per admin, kept for 90 days. It is not awaited and swallows every failure, so it cannot slow or fail a request, and no
+access decision reads it. *Online* means a request within 5 minutes and no later sign-out. Pages that poll, such as tickets, keep an
+idle tab online; the reliability stream counts only when it connects. With no record, or if Redis cannot answer, the state stays
+unknown, never offline.
+
+**Not recorded:** failed sign-ins (only successes are audited, and a wrong code cannot be tied to an admin), device, browser and
+location, open sessions per admin, read-only use of the Telegram panel, and email, phone or bio, which the bot never collects.
+
+**`User.lastActivityAt` is not used.** Production code writes it once, when the row is created, so it repeats the join date.
+*Open issue:* the Users page and the 30-day *active* counts in analytics and broadcast audiences read that field.
+
+**Query cost.** Each list load runs a fixed set of bounded queries. `idx_admin_audit_actor_action_recent` gives each admin's latest
+sign-in and sign-out from a distinct scan, so the cost does not grow with their history. Plans are asserted in
+`tests/integration/adminDirectory.mongo.test.js`. The list stops at the 500 most recently added accounts and says so.
+
 ## `/api/admin` reference
 
 All routes except sign-in require a session; mutations also require the CSRF token and are
@@ -157,7 +194,7 @@ idempotent through `operationId`. Sign-out needs the token only while its sessio
 | Service catalog | `GET /products?search&status&duration&sort&order&page&pageSize` · `POST /products` · `PATCH /products/:id` (send `expectedRevision`) · `DELETE /products/:id` · `POST /products/:id/{duplicate,archive,restore,move}` · `POST /products/reorder`. Audit actions: `PRODUCT_CREATED/UPDATED/AVAILABILITY_CHANGED/ARCHIVED/RESTORED/DELETED` |
 | Broadcast | `POST /broadcast/preview` · `POST /broadcast` · `GET /broadcast/status/:id` · `POST /broadcast/cancel/:id` · `GET /broadcasts` |
 | Custody | `GET /custody/overview` · `/assets` · `/conversions` · `/payouts` · `/payouts/fee` · `/transactions` · `POST /custody/conversions[/preview]` · `/payouts[/validate-address]` · `/payouts/:batchId/verify` · `/reconcile` |
-| Admins (owner) | `GET /admins` · `POST /admins` · `DELETE /admins/:telegramId` |
+| Admins | `GET /admins` · `GET /admins/directory?search&role&status` · `GET /admins/directory/:telegramId` · `POST /admins` and `DELETE /admins/:telegramId` (owner only) |
 | Mock tests | `GET /mock-tests` · `GET /mock-tests/:runId` · `POST /mock-tests/run` |
 
 ## Data stored

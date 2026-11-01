@@ -6,7 +6,8 @@ The repository is public; `docs/privacy.md` is the policy and `docs/configuratio
   the signature verifies. New endpoints follow the same default.
 - **Admin access.** Allow-list plus a one-time Telegram code, Redis-backed `HttpOnly` sessions, CSRF tokens, trusted-origin
   checks and rate limits. CORS and the origin check never authenticate: they must never replace or bypass the session or token. Every admin mutation writes its audit entry before acting. A new admin route must use the
-  existing middleware in `web/adminRouter.js` / `web/adminMiddleware.js`, not its own checks.
+  existing middleware in `web/adminRouter.js` / `web/adminMiddleware.js`, not its own checks. Admin presence is a record for the
+  directory: no access decision may read it, and it must never delay or fail a request (`docs/admin.md`).
 - **Long-lived responses.** Access can end while a response is open, so a stream re-checks its session on a timer and fails closed;
   it is capped, drops a slow reader, and closes before `http.Server.close()`, which would otherwise wait for it. See
   `docs/reliability.md`.

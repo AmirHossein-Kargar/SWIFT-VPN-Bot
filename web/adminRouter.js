@@ -31,6 +31,8 @@ import { getAnalyticsReport, reportToCsv } from "../services/admin/analyticsRepo
 import { getSystemHealth } from "../services/admin/monitoring.js";
 import { listAuditLogs } from "../services/admin/audit.js";
 import { listAdmins, addAdmin, removeAdmin } from "../services/admin/adminRegistry.js";
+import { getAdminDirectory, getAdminDirectoryProfile } from "../services/admin/adminDirectory.js";
+import { trackAdminPresence } from "../services/admin/adminPresence.js";
 import { getUserProfilePhoto } from "../services/admin/userPhoto.js";
 import { sendUserMessage } from "../services/admin/userMessaging.js";
 import { getSettingsOverview } from "../services/admin/settings.js";
@@ -184,10 +186,23 @@ router.use(requireCsrfToken);
 router.use(rateLimitMiddleware({ limit: 300, scope: "admin-api" }));
 // Mutations are rarer and riskier than reads: a much lower per-admin ceiling.
 router.use(rateLimitMiddleware({ limit: 60, scope: "admin-mutations", methods: ["POST", "PUT", "PATCH", "DELETE"] }));
+router.use(trackAdminPresence);
 
 // Admin management (owner-only mutations, audited; owner is resolved from env)
 router.get("/admins", async (req, res, next) => {
   try { res.json({ ok: true, data: await listAdmins({ actorId: req.adminActorId }) }); }
+  catch (error) { next(error); }
+});
+
+router.get("/admins/directory", async (req, res, next) => {
+  try {
+    const { search, role, status } = req.query;
+    res.json({ ok: true, data: await getAdminDirectory({ actorId: req.adminActorId, search, role, status }) });
+  } catch (error) { next(error); }
+});
+
+router.get("/admins/directory/:telegramId", async (req, res, next) => {
+  try { res.json({ ok: true, data: await getAdminDirectoryProfile({ actorId: req.adminActorId, telegramId: req.params.telegramId }) }); }
   catch (error) { next(error); }
 });
 

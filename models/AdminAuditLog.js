@@ -18,5 +18,7 @@ const adminAuditLogSchema = new mongoose.Schema({
 
 adminAuditLogSchema.index({ actorTelegramId: 1, createdAt: -1 }, { name: "idx_admin_audit_actor_recent" });
 adminAuditLogSchema.index({ targetType: 1, targetId: 1, createdAt: -1 }, { name: "idx_admin_audit_target_recent" });
+// Finds each admin's latest sign-in and sign-out for the directory without walking their whole audit history.
+adminAuditLogSchema.index({ actorTelegramId: 1, action: 1, createdAt: -1 }, { name: "idx_admin_audit_actor_action_recent" });
 
 export default mongoose.models.AdminAuditLog || mongoose.model("AdminAuditLog", adminAuditLogSchema);

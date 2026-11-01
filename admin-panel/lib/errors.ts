@@ -18,6 +18,7 @@ const MESSAGES: Record<string, string> = {
   admin_from_environment: "This admin is defined in the ADMINS environment variable and can only be removed there.",
   invalid_admin_id: "Enter a valid positive Telegram ID.",
   admin_already_owner: "That ID is the primary owner and already has full access.",
+  admin_not_found: "This admin is no longer in the directory.",
   idempotency_conflict: "This request was already used for a different action. Try again.",
   action_in_progress: "This action is already in progress or needs manual review. Check the audit log before retrying.",
   audit_unavailable: "The audit log is unavailable, so the action was not performed.",

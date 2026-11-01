@@ -8,10 +8,11 @@ import { UserRound } from "lucide-react";
  * never reaches the browser). Many users have no photo or hide it, so a failed
  * or 404 load quietly falls back to initials, or a person icon when the label
  * is only an ID. A server-rendered image can fail before hydration attaches
- * onError, so the mount effect checks for that too.
+ * onError, so the mount effect checks for that too. `noPhoto` skips the request
+ * when the caller already knows the bot has never met this account.
  */
-export function UserAvatar({ telegramId, label, size = 56 }: { telegramId: string; label: string; size?: number }) {
-  const [failed, setFailed] = useState(false);
+export function UserAvatar({ telegramId, label, size = 56, noPhoto = false }: { telegramId: string; label: string; size?: number; noPhoto?: boolean }) {
+  const [failed, setFailed] = useState(noPhoto);
   const image = useRef<HTMLImageElement>(null);
   useEffect(() => {
     if (image.current?.complete && image.current.naturalWidth === 0) setFailed(true);

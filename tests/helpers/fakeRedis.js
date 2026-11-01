@@ -1,7 +1,7 @@
 /**
  * Minimal in-memory Redis stub for admin-session and idempotency tests.
  * Supports exactly the command surface used by services/admin/*:
- * set (NX/EX), get, del, eval(CONSUME_ONCE), ping.
+ * set (NX/EX), get, mGet, del, eval(CONSUME_ONCE), ping.
  */
 export function makeFakeRedis() {
   const map = new Map();
@@ -26,6 +26,9 @@ export function makeFakeRedis() {
         return null;
       }
       return map.get(key);
+    },
+    async mGet(keys) {
+      return Promise.all(keys.map((key) => redis.get(key)));
     },
     async del(key) {
       const existed = map.has(key);

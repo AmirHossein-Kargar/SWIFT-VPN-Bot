@@ -142,6 +142,8 @@
         "services/admin/audit.js",
         "services/admin/throttle.js",
         "services/admin/adminRegistry.js",
+        "services/admin/adminDirectory.js",
+        "services/admin/adminPresence.js",
         "services/admin/validation.js",
         "web/adminRouter.js",
         "web/adminMiddleware.js",

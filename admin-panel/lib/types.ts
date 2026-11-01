@@ -266,15 +266,6 @@ export interface RecoveryQueue extends PagedResult<RecoveryItem> {
   counts: Record<string, number>;
 }
 
-export interface AdminAccountRow {
-  telegramId: string;
-  source: "environment" | "database";
-  role: "owner" | "admin";
-  displayName: string | null;
-  addedBy: string | null;
-  addedAt: string | null;
-}
-
 export interface SystemHealthService {
   name: string;
   status: "healthy" | "degraded" | "down" | "unknown";
