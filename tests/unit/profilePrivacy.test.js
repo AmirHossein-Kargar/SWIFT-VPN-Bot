@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import handleProfile, { EMPTY_RECENT_ORDERS, loadRecentProfileOrders } from "../../handlers/message/handleProfile.js";
+import handleProfile, { loadRecentProfileOrders } from "../../handlers/message/handleProfile.js";
 import { ensureTelegramUser } from "../../services/users/ensureTelegramUser.js";
 
 function historyModel(rows, capture = []) {
@@ -42,11 +42,9 @@ describe("profile history and privacy", () => {
     assert.ok(nowQueries[0].status.$nin.includes("creation_failed"));
   });
 
-  test("profile keeps required account fields, active services, and a Persian empty state without phone data", async () => {
+  test("profile shows balance, membership date and referral code, and no identity or phone data", async () => {
     const sent = [];
     const bot = { async sendMessage(...args) { sent.push(args); } };
-    const future = new Date(Date.now() + 86_400_000);
-    const past = new Date(Date.now() - 86_400_000);
     const user = {
       telegramId: "123",
       firstName: "علی",
@@ -56,32 +54,20 @@ describe("profile history and privacy", () => {
       balance: 125_000,
       successfulPayments: 4,
       referralCode: "SWIFT-TEST",
-      createdAt: new Date("2025-01-01"),
-      services: [
-        { username: "active", expiresAt: future },
-        { username: "expired", expiresAt: past },
-        { username: "revoked", revokedAt: new Date(), expiresAt: future },
-      ],
+      createdAt: new Date("2025-01-01T12:00:00Z"),
     };
-    const empty = historyModel([]);
     await handleProfile(bot, 123, 123, {
       userModel: { async findOne() { return user; } },
-      hooshModel: empty,
-      nowPaymentsModel: empty,
-      cryptoModel: empty,
-      bankModel: empty,
     });
 
     assert.equal(sent.length, 1);
     const message = sent[0][1];
-    assert.match(message, /شناسه کاربری: <code>123<\/code>/);
-    assert.match(message, /علی &lt;تست&gt;/);
-    assert.match(message, /@ali_user/);
     assert.match(message, /۱۲۵٬۰۰۰ تومان/);
-    assert.match(message, /سرویس‌های فعال: <b>۱<[/]b>/);
-    assert.match(message, /پرداخت‌های موفق: <b>۴<[/]b>/);
-    assert.match(message, /SWIFT-TEST/);
-    assert.ok(message.includes(EMPTY_RECENT_ORDERS));
+    assert.match(message, /تاریخ عضویت: <b>۱۴۰۳\/۱۰\/۱۲<[/]b>/);
+    assert.match(message, /<code>SWIFT-TEST<\/code>/);
+    assert.doesNotMatch(message, /123/);
+    assert.doesNotMatch(message, /علی|تست|ali_user/);
+    assert.doesNotMatch(message, /پرداخت/);
     assert.equal(message.includes(user.phoneNumber), false);
     assert.doesNotMatch(message, /شماره (?:تلفن|موبایل)/);
   });

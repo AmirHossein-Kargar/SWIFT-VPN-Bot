@@ -1,7 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import handleProfile, {
-  EMPTY_RECENT_ORDERS,
   formatJalaliDate,
   formatToman,
   loadRecentProfileOrders,
@@ -127,45 +126,55 @@ describe("profile recent orders: which statuses are shown", () => {
 });
 
 describe("profile layout", () => {
-  const baseUser = { telegramId: "42", firstName: "سارا", lastName: null, username: null, balance: 1_250_000, successfulPayments: 3, referralCode: "SW-ABC", createdAt: new Date("2025-03-21T00:00:00Z") };
+  const baseUser = { telegramId: "42", firstName: "سارا", lastName: null, username: null, balance: 1_250_000, successfulPayments: 3, referralCode: "SW-ABC", createdAt: new Date("2025-03-21T12:00:00Z") };
 
-  test("renders the sections with Persian digits and tap-to-copy identifiers", () => {
-    const text = renderProfileMessage({ user: baseUser, activeServices: 2, orders: [] });
-    for (const heading of ["پروفایل من", "اطلاعات حساب", "کیف پول", "سرویس‌های من", "دعوت از دوستان", "آخرین سفارش‌ها"]) {
-      assert.ok(text.includes(heading), heading);
-    }
-    assert.ok(text.includes("<code>42</code>"));
-    assert.ok(text.includes("<code>SW-ABC</code>"));
-    assert.ok(text.includes("<b>۱٬۲۵۰٬۰۰۰ تومان</b>"));
-    assert.ok(text.includes(EMPTY_RECENT_ORDERS));
+  test("shows the wallet balance, membership date and a tap-to-copy referral code with Persian digits", () => {
+    const text = renderProfileMessage({ user: baseUser });
+    assert.ok(text.includes("👤 <b>پروفایل من</b>"));
+    assert.ok(text.includes("💰 موجودی کیف پول: <b>۱٬۲۵۰٬۰۰۰ تومان</b>"));
+    assert.ok(text.includes("📅 تاریخ عضویت: <b>۱۴۰۴/۰۱/۰۱</b>"));
+    assert.ok(text.includes("🎁 <b>دعوت از دوستان</b>"));
+    assert.ok(text.includes("کد معرف شما: <code>SW-ABC</code>"));
+    assert.ok(text.includes("<i>برای کپی، روی کد بزنید.</i>"));
     assert.equal(/\d/.test(text.replace(/<code>[^<]*<\/code>/g, "")), false, "no Latin digits outside code spans");
   });
 
-  test("missing username and name use fallbacks, and the referral block is omitted without a code", () => {
-    const text = renderProfileMessage({ user: { ...baseUser, firstName: null, referralCode: null }, activeServices: 0, orders: [] });
-    assert.equal((text.match(/ثبت نشده/g) || []).length, 2);
+  test("account details, active services, successful payments and recent orders are not shown", () => {
+    const text = renderProfileMessage({ user: { ...baseUser, lastName: "رضایی", username: "sara_user", services: [{ username: "svc" }] } });
+    for (const removed of ["اطلاعات حساب", "نام:", "شناسه کاربری", "نام کاربری", "سارا", "رضایی", "sara_user", "<code>42</code>", "سرویس", "پرداخت", "سفارش"]) {
+      assert.equal(text.includes(removed), false, removed);
+    }
+  });
+
+  test("the referral block is omitted without a code", () => {
+    const text = renderProfileMessage({ user: { ...baseUser, referralCode: null } });
     assert.equal(text.includes("دعوت از دوستان"), false);
+    assert.equal(text.includes("کد معرف"), false);
+    assert.equal(text.includes("<code>"), false);
     assert.equal(text.includes("undefined") || text.includes("null"), false);
   });
 
-  test("order lines show status, amount, provider and Jalali date", async () => {
-    const orders = await load({ nowPaymentsModel: model([{ orderId: "NP-1", status: "finished", balanceCredited: true, amountToman: 50_000, createdAt: new Date("2026-10-18T10:00:00Z") }]) });
-    const text = renderProfileMessage({ user: baseUser, activeServices: 1, orders });
-    assert.ok(text.includes("✅ موفق · ۵۰٬۰۰۰ تومان"));
-    assert.ok(text.includes("پرداخت با کریپتو · ۱۴۰۵/۰۷/۲۶"));
+  test("display formatters fall back on missing values", () => {
     assert.equal(formatJalaliDate(null), "—");
     assert.equal(formatToman("abc"), "۰ تومان");
   });
 
-  test("handleProfile sends one HTML message and escapes user-controlled text", async () => {
+  test("handleProfile sends one HTML message, escapes the code and queries only the user", async () => {
     const sent = [];
+    const noQuery = { find() { throw new Error("orders must not be loaded"); } };
     await handleProfile({ async sendMessage(...a) { sent.push(a); } }, 5, 42, {
-      userModel: { async findOne() { return { ...baseUser, firstName: "<b>x</b>", services: [] }; } },
-      hooshModel: empty, nowPaymentsModel: empty, cryptoModel: empty, bankModel: empty,
+      userModel: { async findOne() { return { ...baseUser, referralCode: "<b>x</b>" }; } },
+      hooshModel: noQuery, nowPaymentsModel: noQuery, cryptoModel: noQuery, bankModel: noQuery,
     });
     assert.equal(sent.length, 1);
     assert.equal(sent[0][2].parse_mode, "HTML");
-    assert.ok(sent[0][1].includes("&lt;b&gt;x&lt;/b&gt;"));
+    assert.ok(sent[0][1].includes("<code>&lt;b&gt;x&lt;/b&gt;</code>"));
+    assert.deepEqual(sent[0][2].reply_markup.inline_keyboard.flat().map((button) => button.callback_data), [
+      "topup_from_profile",
+      "my_services_from_profile",
+      "alert_discount_code_disabled",
+      "menu:home",
+    ]);
   });
 
   // Regression: both error paths below used to call bot.sendMessage()
