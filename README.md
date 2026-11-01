@@ -14,7 +14,7 @@ over to the bot.
 |---|---|
 | **Customers (Telegram)** | Buy a plan from a live catalog, top up the wallet, manage services (usage, link, QR, extend time/data, enable/disable, delete), one free trial per account, profile, guide, support relay |
 | **Payments** | **HooshPay** online card-to-card, **NOWPayments** hosted TRON invoices. Every credit is signature-verified, idempotent and crash-safe ([details](docs/payments.md)) |
-| **Provisioning** | WizardXray API v1: create, status, change link, extend time/data, delete. Ambiguous results are never replayed; definitive failures refund exactly once |
+| **Provisioning** | WizardXray API v1, including unlimited services where the provider account allows them ([WizardXray](docs/wizardxray.md)). Ambiguous results are never replayed; definitive failures refund exactly once |
 | **Admin** | Telegram panel and two web dashboards over one audited service layer: users, wallet credit/debit, block, per-user messages, VPN services, payments and recovery, plans, broadcasts, analytics, audit log ([details](docs/admin.md)) |
 | **Money Flow Sentinel** | Traces money from payment to service, reconciles every wallet against its ledger and explains each inconsistency. It never changes money ([details](docs/sentinel.md)) |
 | **Service Reliability Center** | Live command center: component health from real evidence, incidents, an interactive topology, an event timeline and end-to-end order tracing. It reads and reports only ([details](docs/reliability.md)) |

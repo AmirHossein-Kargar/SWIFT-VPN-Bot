@@ -824,7 +824,7 @@
       "change-link": { title: "Change subscription link", text: "WizardXray will issue a new subscription link for this service. The user's old link stops working.", confirm: "Change link", danger: false, reason: false },
       disable: { title: "Disable VPN service", text: "The service will be deactivated on WizardXray. It can be re-enabled later.", confirm: "Disable service", danger: true, reason: true },
       "extend-time": { title: "Extend service time", text: "Adds days to the service on WizardXray (upg_time). The change is verified against the panel before it is reported as done.", confirm: "Extend time", danger: false, reason: true, field: ["days", "DAYS TO ADD", "e.g. 30"] },
-      "increase-traffic": { title: "Increase service traffic", text: "Adds traffic on WizardXray (upg_size, minimum 0.5 GB). The change is verified against the panel before it is reported as done.", confirm: "Add traffic", danger: false, reason: true, field: ["gig", "GB TO ADD", "e.g. 10"] },
+      "increase-traffic": { title: "Increase service traffic", text: "Adds traffic on WizardXray (upg_size, minimum 1 GB). The change is verified against the panel before it is reported as done.", confirm: "Add traffic", danger: false, reason: true, field: ["gig", "GB TO ADD", "e.g. 10"] },
       revoke: { title: "Revoke VPN service", text: "The service is permanently deleted from WizardXray and removed from the user's account. This cannot be undone.", confirm: "Revoke permanently", danger: true, reason: true },
     };
     const config = labels[action];

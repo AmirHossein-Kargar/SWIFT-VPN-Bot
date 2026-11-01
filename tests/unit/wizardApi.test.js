@@ -49,7 +49,7 @@ describe("centralized WizardXray client safety contract", () => {
     const result = await createVpnService(5, 7, 0);
     assert.equal(result.ok, true);
     assert.equal(result.result.username, "api_unit");
-    await assert.rejects(() => createVpnService(0, 7, 0), /(at least 0.5|positive integer)/);
+    await assert.rejects(() => createVpnService(0.1, 7, 0), /(at least 0.5|positive integer)/);
     await assert.rejects(() => createVpnService(5, 0, 0), /(at least 0.5|positive integer)/);
   });
 

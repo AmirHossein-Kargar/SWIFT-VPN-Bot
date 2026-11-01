@@ -36,9 +36,13 @@ export function durationTitle(catalog: Pick<StoreCatalog, "durations">, days: nu
   return catalog.durations.find((entry) => entry.days === days)?.title ?? fallback(days);
 }
 
-/** Plans for one duration, smallest volume first. */
+/** The provider's mark for unlimited traffic. The service still ends after its days. */
+export const isUnlimited = (plan: Pick<StorePlan, "gig">): boolean => plan.gig === 0;
+
+/** Plans for one duration, smallest volume first, then unlimited. */
 export function plansFor(catalog: Pick<StoreCatalog, "plans">, days: number | null): StorePlan[] {
-  return catalog.plans.filter((plan) => plan.days === days).sort((a, b) => a.gig - b.gig);
+  const rank = (plan: StorePlan) => (isUnlimited(plan) ? Number.POSITIVE_INFINITY : plan.gig);
+  return catalog.plans.filter((plan) => plan.days === days).sort((a, b) => rank(a) - rank(b));
 }
 
 export function pricePerGb(plan: Pick<StorePlan, "gig" | "price">): number | null {

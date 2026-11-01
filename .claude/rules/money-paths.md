@@ -25,7 +25,10 @@ change must never break. If a change needs to break one, stop and ask the owner.
 - **Redis is never authoritative.** Locks may fail open; MongoDB guards must still guarantee a single credit or debit.
 - **Provisioning.** Ambiguous WizardXray results are never replayed (its `create` has no idempotency key); they are held
   for admin review. Definitive failures refund exactly once. A proven provider balance shortage parks the order as
-  `awaiting_provider` with the debit kept; it is never auto-refunded.
+  `awaiting_provider` with the debit kept; it is never auto-refunded. A 5xx is definite only when `api/wizardErrors.js` lists
+  its exact text for that method, because there the provider's document states the outcome.
+- **Unlimited.** `gig = 0` means unlimited, and only a literal zero may say so: `Number("")`, `Number(null)` and `Number(false)`
+  are all 0. It stays off sale until `me` says yes (`services/plans.js`), and not knowing is a no. See `docs/wizardxray.md`.
 - **Trust persisted data, not callbacks.** Telegram callback data carries opaque ids only; price, plan and user always
   come from the stored record.
 - **Units.** Amounts are stored and shown in Toman and are never divided by 10 (Gheymat's `IRT` is already Toman).

@@ -64,7 +64,7 @@ describe("purchaseService.purchasePlan", () => {
     assert.equal(models.purchases.get("unit-valid-plan").walletDebitStatus, "finalized");
     assert.deepEqual(result.service, {
       username: "unit_service_1",
-      subscriptionUrl: "https://iranisystem.com/bot/sub/?hash=unit-hash_123",
+      subscriptionUrl: "https://panel.example.test/sub/unit-hash_123",
       singleLink: "vless://unit@example.test:443",
       expiresAt: models.purchases.get("unit-valid-plan").expiresAt,
     });

@@ -173,8 +173,11 @@ describe("create", () => {
       [{ priceToman: 1.5 }, "invalid_price"],
       [{ priceToman: "abc" }, "invalid_price"],
       [{ costToman: -1 }, "invalid_cost"],
-      [{ trafficGb: 0 }, "invalid_traffic_gb"],
-      [{ trafficGb: 100_001 }, "invalid_traffic_gb"],
+      // 0 is a real choice now (unlimited), so a blank must not slip in as one. 10,000 GB is the provider's limit.
+      [{ trafficGb: "" }, "invalid_traffic_gb"],
+      [{ trafficGb: null }, "invalid_traffic_gb"],
+      [{ trafficGb: -1 }, "invalid_traffic_gb"],
+      [{ trafficGb: 10_001 }, "invalid_traffic_gb"],
       [{ durationDays: 0 }, "invalid_duration_days"],
       [{ durationDays: 45 }, "unsupported_duration"],
       [{ durationDays: 60 }, "unsupported_duration"],

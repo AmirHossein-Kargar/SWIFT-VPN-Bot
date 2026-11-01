@@ -14,6 +14,7 @@ Architecture, features and the repository layout are in `README.md`; do not repe
 | Money paths and their guarantees | `docs/payments.md`, `docs/reserved-orders.md` |
 | Financial monitoring and reconciliation | `docs/sentinel.md` |
 | Service health, incidents, telemetry and order tracing | `docs/reliability.md` |
+| WizardXray methods, errors, unlimited and renewal rules | `docs/wizardxray.md` |
 | Admin surfaces and `/api/admin` | `docs/admin.md` |
 | Support tickets | `docs/support.md` |
 | Storefront build, routes, CSP | `docs/storefront.md` |

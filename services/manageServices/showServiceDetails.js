@@ -3,8 +3,16 @@ import { getServiceView } from "../../services/wizardServiceStatus.js";
 import formatDate from "../../utils/formatDate.js";
 import escapeHtml from "../../utils/escapeHtml.js";
 import { renderInterface } from "../messaging/messageManager.js";
+import { trafficTextFa } from "../../utils/serviceTerms.js";
 
 const HOME_BUTTON = [{ text: "🔙 بازگشت به منوی اصلی", callback_data: "buy_service_back_to_main" }];
+/** The on/off switch only exists for these: the others stopped for a reason a switch cannot undo honestly. */
+const SWITCHABLE = new Set(["active", "disabled"]);
+
+function formatDaysLeft(daysLeft) {
+  if (daysLeft <= 0) return "منقضی شده";
+  return `${Math.ceil(daysLeft)} روز دیگر`;
+}
 
 function progressBar(percent) {
   if (percent == null || !Number.isFinite(percent)) return "";
@@ -55,14 +63,17 @@ const showServiceDetails = async (bot, chatId, username, messageId) => {
       return;
     }
 
-    // ── Live panel view ──────────────────────────────────────────────────────
-    if (view.source === "live") {
+    // ── The panel's answer, live or from its own stored copy ─────────────────
+    if (view.source === "live" || view.source === "stale") {
       const d = data;
       const expiry = d.expireDate
-        ? `${d.expireDate}${d.daysLeft != null ? ` | ${d.daysLeft} روز دیگر` : ""}`
+        ? `${d.expireDate}${d.daysLeft != null ? ` | ${formatDaysLeft(d.daysLeft)}` : ""}`
         : "نامشخص";
 
       const trafficLines = [];
+      // Unlimited traffic has no total and no remainder to show: a "0" here would read as an exhausted service. It can
+      // still expire, so the expiry line below stays.
+      if (d.unlimited) trafficLines.push("📦 حجم کل: <code>نامحدود ♾</code>");
       if (d.totalGbText != null) trafficLines.push(`📦 حجم کل: <code>${d.totalGbText} گیگابایت</code>`);
       if (d.usedGbText != null) trafficLines.push(`📥 حجم مصرفی: <code>${d.usedGbText} گیگابایت</code>`);
       if (d.remainingGbText != null) trafficLines.push(`📤 حجم باقی‌مانده: <code>${d.remainingGbText} گیگابایت</code>`);
@@ -79,7 +90,7 @@ ${trafficLines.join("\n") || "📦 حجم: نامشخص"}
 🔗 لینک اتصال (Subscription):
 <code>${escapeHtml(d.smartLink || "—")}</code>
 
-🟢 اطلاعات لحظه‌ای از پنل
+${view.source === "live" ? "🟢 اطلاعات لحظه‌ای از پنل" : "🟡 سرور لحظه‌ای پاسخ نداد؛ آخرین اطلاعات ذخیره‌شده نمایش داده می‌شود."}
 ▫️ یکی از گزینه‌های زیر را انتخاب کنید.`;
       await sendDetailsMessage(bot, chatId, messageId, message, d.username, d.status);
       return;
@@ -95,7 +106,7 @@ ${trafficLines.join("\n") || "📦 حجم: نامشخص"}
 
 ▫️ وضعیت سرویس: <code>نامشخص</code>
 
-${record.trafficGb != null ? `📦 حجم کل: <code>${record.trafficGb} گیگابایت</code>\n` : ""}📅 تاریخ انقضا: <code>${expiry}</code>
+${record.trafficGb != null ? `📦 حجم کل: <code>${trafficTextFa(record.trafficGb)}</code>\n` : ""}📅 تاریخ انقضا: <code>${expiry}</code>
 
 ${record.sub_link ? `🔗 لینک اتصال (Subscription):\n<code>${escapeHtml(record.sub_link)}</code>\n\n` : ""}🟡 اطلاعات لحظه‌ای پنل در دسترس نیست؛ اطلاعات ذخیره‌شده نمایش داده می‌شود.
 ▫️ یکی از گزینه‌های زیر را انتخاب کنید.`;
@@ -137,7 +148,7 @@ async function sendDetailsMessage(bot, chatId, messageId, message, username, sta
     { text: "◽️دریافت QRCode", callback_data: `qrcode_${username}` },
   ]);
 
-  if (status !== "limited") {
+  if (SWITCHABLE.has(status)) {
     inlineKeyboard.push([
       {
         text: status === "active" ? "🚫 غیر فعال کردن سرویس" : "✅ فعال کردن سرویس",

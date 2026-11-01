@@ -34,6 +34,88 @@ export interface DashboardMetrics {
   };
 }
 
+export type PulseComponentState = "healthy" | "degraded" | "failed" | "stale" | "unknown";
+
+export interface DashboardActivity {
+  id: string;
+  kind: "payment" | "order";
+  title: string;
+  userId: string;
+  amount: number | null;
+  status: string;
+  at: string;
+}
+
+export interface DashboardPulse {
+  generatedAt: string;
+  metrics: DashboardMetrics["metrics"];
+  charts: Pick<DashboardMetrics["charts"], "revenue">;
+  health: {
+    state: PulseComponentState;
+    reason: string;
+    openIncidents: number;
+    components: { id: string; label: string; state: PulseComponentState; reason: string }[];
+  };
+  activity: DashboardActivity[];
+}
+
+export interface ProviderAccount {
+  balance: number | null;
+  currency: string | null;
+  prices: { perGb: number; perDay: number; unlimitedPerDay: number; test: number | null; custom: boolean };
+  limits: { minGig: number; maxGig: number; minDay: number; maxDay: number; minAddGig: number; minAddDay: number; unlimitedEnabled: boolean; testEnabled: boolean; testsUsed: number | null; maxTests: number | null };
+  services: { total: number | null; active: number | null };
+}
+
+export interface ProviderOverview {
+  fetchedAt: string;
+  available: boolean;
+  account: ProviderAccount | null;
+  hosts: { inbound: string; remark: string | null; disabled: boolean }[] | null;
+}
+
+export interface ProviderQuote {
+  gig: number;
+  day: number;
+  unlimited: boolean;
+  price: number;
+  balance: number | null;
+  enough: boolean;
+}
+
+export interface RemoteClient {
+  username: string | null;
+  status: string | null;
+  test: boolean;
+  unlimited: boolean;
+  trafficGb: number | null;
+  usedGb: number | null;
+  remainingGb: number | null;
+  days: number | null;
+  daysLeft: number | null;
+  expiresAt: string | null;
+  createdAt: string | null;
+  knownLocally: boolean;
+}
+
+export interface RemoteClients {
+  source: string;
+  fetchedAt: string;
+  page: number;
+  pageSize: number;
+  total: number | null;
+  pages: number | null;
+  count: number;
+  items: RemoteClient[];
+}
+
+export interface ProviderCandidates {
+  candidates: RemoteClient[];
+  scanned: number;
+  complete: boolean;
+  settled: boolean;
+}
+
 export interface AdminUser {
   telegramId: string;
   username: string | null;
@@ -175,6 +257,7 @@ export interface AdminProduct {
   name: string;
   durationDays: number;
   trafficGb: number;
+  unlimited: boolean;
   priceToman: number;
   costToman: number;
   profitToman: number;
@@ -227,20 +310,25 @@ export interface VpnDetail {
   createdAt: string | null;
   expiresAt: string | null;
   panelExpiry: string | null;
+  daysLeft: number | null;
   durationDays: number | null;
+  unlimited: boolean;
   trafficGb: number | null;
   trafficUsed: string | null;
   trafficRemainingGb: number | null;
+  lastClient: string | null;
   status: string;
-  wizardXray: { status: "connected" | "unavailable"; latencyMs: number | null; error: string | null };
+  wizardXray: { status: "connected" | "stale" | "unavailable"; latencyMs: number | null; error: string | null };
   wizardStatus: string | null;
   purchaseStatus: string | null;
   availableActions: {
     changeLink: boolean;
     disable: boolean;
+    enable: boolean;
     revoke: boolean;
     extendTime: boolean;
     increaseTraffic: boolean;
+    renew: boolean;
     regenerateConfig: boolean;
   };
   unavailableActions: Record<string, string>;

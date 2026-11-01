@@ -527,7 +527,7 @@ export async function getTransaction({ key, sources = defaultSources(), findingM
     userId,
     user: maskId(userId),
     identifiers: isOrder
-      ? { orderId: subject.purchaseId, planName: subject.planName, planId: subject.planId, serviceUsername: subject.serviceUsername, days: subject.days, trafficGb: subject.gig }
+      ? { orderId: subject.purchaseId, planName: subject.planName, planId: subject.planId, serviceUsername: subject.serviceUsername, days: subject.days, trafficGb: subject.gig === 0 ? "Unlimited" : subject.gig }
       : { reference: subject.ref, invoiceId: subject.invoiceId, paymentId: subject.paymentId, trackingCode: subject.trackingCode, transactionHash: subject.transactionHash, payCurrency: subject.payCurrency, payAmount: subject.payAmount, actuallyPaid: subject.actuallyPaid },
     verification: isOrder ? null : {
       providerStatus: subject.status,

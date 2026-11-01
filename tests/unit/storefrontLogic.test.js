@@ -41,7 +41,8 @@ describe("duration selection", () => {
 describe("plans", () => {
   test("a duration shows only its own plans, smallest volume first, without mutating the catalog", () => {
     const before = catalog.plans.map((plan) => plan.id).join();
-    assert.deepEqual(store.plansFor(catalog, 30).map((plan) => plan.id), ["free", "p30-10", "p30-50"]);
+    // `gig: 0` is the provider's mark for unlimited, so it follows every volume instead of leading as the smallest.
+    assert.deepEqual(store.plansFor(catalog, 30).map((plan) => plan.id), ["p30-10", "p30-50", "free"]);
     assert.deepEqual(store.plansFor(catalog, 90).map((plan) => plan.id), ["p90-10"]);
     assert.deepEqual(store.plansFor(catalog, 365), []);
     assert.deepEqual(store.plansFor(catalog, null), []);

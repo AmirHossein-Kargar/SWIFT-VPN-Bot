@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Container, SectionHeading } from "@/components/site-chrome";
 import { fa } from "@/lib/format";
-import { durationTitle, lowestPerGbPlanId, plansFor, pricePerGb, type StoreCatalog, type StorePlan } from "@/lib/store";
+import { durationTitle, isUnlimited, lowestPerGbPlanId, plansFor, pricePerGb, type StoreCatalog, type StorePlan } from "@/lib/store";
 import type { CatalogState } from "@/lib/use-catalog";
 import { cn } from "@/lib/utils";
 
@@ -38,6 +38,7 @@ function Notice({ tone = "info", children, action }: { tone?: "info" | "error"; 
 
 function PlanCard({ plan, catalog, index, selected, bestValue, onSelect }: { plan: StorePlan; catalog: StoreCatalog; index: number; selected: boolean; bestValue: boolean; onSelect: (plan: StorePlan, opener: HTMLElement) => void }) {
   const perGb = pricePerGb(plan);
+  const unlimited = isUnlimited(plan);
   const title = titleFor(catalog, plan.days);
   return (
     <Card
@@ -53,10 +54,10 @@ function PlanCard({ plan, catalog, index, selected, bestValue, onSelect }: { pla
         <span className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-2.5 py-1 text-muted-foreground"><CalendarClock className="size-[14px]" aria-hidden="true" />{title}</span>
         {bestValue ? <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-brand/10 px-2.5 py-1 text-brand"><Tag className="size-[13px]" aria-hidden="true" />کمترین قیمت هر گیگ</span> : null}
       </div>
-      <div className="text-[42px] font-extrabold leading-[1.1] tracking-tight">{fa(plan.gig)}<small className="ms-1 text-base font-bold tracking-normal text-muted-foreground">گیگابایت</small></div>
+      <div className="text-[42px] font-extrabold leading-[1.1] tracking-tight">{unlimited ? "نامحدود" : <>{fa(plan.gig)}<small className="ms-1 text-base font-bold tracking-normal text-muted-foreground">گیگابایت</small></>}</div>
       <div className="mt-1.5 text-sm font-semibold text-faint">اعتبار {fa(plan.days)} روز</div>
       <div className="mb-1 mt-[18px] text-2xl font-extrabold">{fa(plan.price)}<small className="ms-1 text-sm font-semibold text-muted-foreground">تومان</small></div>
-      <div className="min-h-5 text-[12.5px] text-faint">{perGb ? `هر گیگابایت حدود ${fa(perGb)} تومان` : ""}</div>
+      <div className="min-h-5 text-[12.5px] text-faint">{unlimited ? "بدون سقف حجم، در مدت اعتبار" : perGb ? `هر گیگابایت حدود ${fa(perGb)} تومان` : ""}</div>
       <ul className="mb-[22px] mt-[18px] grid gap-2 border-t border-dashed border-border-strong pt-4 text-start text-sm text-muted-foreground">
         <li className="flex items-center gap-2"><InfinityIcon className="size-4 shrink-0 text-success" aria-hidden="true" />اتصال نامحدود کاربر</li>
         <li className="flex items-center gap-2"><Check className="size-4 shrink-0 text-success" aria-hidden="true" />{fa(plan.days)} روز اعتبار</li>
@@ -64,7 +65,7 @@ function PlanCard({ plan, catalog, index, selected, bestValue, onSelect }: { pla
       </ul>
       <Button
         className="mt-auto w-full"
-        aria-label={`انتخاب پلن ${fa(plan.gig)} گیگابایت ${title}`}
+        aria-label={`انتخاب پلن ${unlimited ? "نامحدود" : `${fa(plan.gig)} گیگابایت`} ${title}`}
         onPointerEnter={() => void loadOrderDialog()}
         onFocus={() => void loadOrderDialog()}
         onTouchStart={() => void loadOrderDialog()}

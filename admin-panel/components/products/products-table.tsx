@@ -196,7 +196,7 @@ export function ProductsTable({
                       <div className="font-mono text-xs text-muted-foreground">{product.id}</div>
                     </TableCell>
                     <TableCell>{formatNumber(product.durationDays)} days</TableCell>
-                    <TableCell>{formatNumber(product.trafficGb)} GB</TableCell>
+                    <TableCell>{product.unlimited ? "Unlimited" : `${formatNumber(product.trafficGb)} GB`}</TableCell>
                     <TableCell>{formatToman(product.priceToman)}</TableCell>
                     <TableCell className="text-muted-foreground">{formatToman(product.profitToman)}</TableCell>
                     <TableCell><StatusBadges product={product} /></TableCell>

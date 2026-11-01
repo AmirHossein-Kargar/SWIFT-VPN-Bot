@@ -1,5 +1,7 @@
 import mongoose from "mongoose";
 import AdminProduct from "../models/AdminProduct.js";
+import { unlimitedAvailability } from "./wizardAccount.js";
+import { isUnlimitedTraffic, volumeNumber } from "../utils/serviceTerms.js";
 
 export const SUBSCRIPTION_DURATION_OPTIONS = Object.freeze([
   { days: 30, months: 1, title: "یک‌ماهه", label: "🗓️ یک‌ماهه" },
@@ -244,7 +246,7 @@ function productToPlan(product) {
     id: String(product.productId ?? product.id),
     name: String(product.name),
     days: Number(product.durationDays ?? product.days),
-    gig: Number(product.trafficGb ?? product.gig),
+    gig: volumeNumber(product.trafficGb ?? product.gig),
     price: Number(product.priceToman ?? product.price),
   };
 }
@@ -254,6 +256,17 @@ function productToCustomerPlan(product) {
   const plan = productToPlan(product);
   const duration = DURATION_OPTION_BY_DAYS.get(plan.days);
   return { ...plan, ...(duration ? { durationLabel: duration.title } : {}) };
+}
+
+/**
+ * Unlimited is the provider's to give and differs per account, so a product marked unlimited is offered only while `me` says
+ * yes. Not knowing counts as no: the alternative is taking the customer's money for something the panel refuses. The admin's
+ * product row is untouched, so it comes back by itself when the provider switches unlimited on.
+ */
+async function withoutUnfulfillable(plans) {
+  if (!plans.some((plan) => isUnlimitedTraffic(plan.gig))) return plans;
+  const { enabled } = await unlimitedAvailability();
+  return enabled ? plans : plans.filter((plan) => !isUnlimitedTraffic(plan.gig));
 }
 
 /** A permanent delete holds this lock only for milliseconds; a lock older than this is a crashed delete and is ignored. */
@@ -338,7 +351,7 @@ export async function getSellablePlans({ durationDays, storefront = false, requi
       productModel().find(query).sort({ displayOrder: 1, productId: 1 }).lean(),
       productModel().countDocuments({}),
     ]);
-    if (catalogSize > 0) return products.filter((product) => isProductSellable(product, { storefront })).map(productToCustomerPlan);
+    if (catalogSize > 0) return await withoutUnfulfillable(products.filter((product) => isProductSellable(product, { storefront })).map(productToCustomerPlan));
   } catch (error) {
     // Display listings fall back to the shipped catalog; authorization callers pass requireDatabase and fail closed.
     if (requireDatabase) throw error;
@@ -360,7 +373,11 @@ export async function getSellablePlanById(productId, { storefront = false, requi
     return shippedPlan(productId, storefront);
   }
   const product = await productModel().findOne({ productId }).lean();
-  if (product) return isProductSellable(product, { storefront }) ? productToCustomerPlan(product) : null;
+  if (product) {
+    if (!isProductSellable(product, { storefront })) return null;
+    const [plan] = await withoutUnfulfillable([productToCustomerPlan(product)]);
+    return plan ?? null;
+  }
   return shippedPlan(productId, storefront);
 }
 

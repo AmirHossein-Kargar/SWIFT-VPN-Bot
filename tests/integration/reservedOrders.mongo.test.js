@@ -376,6 +376,18 @@ describe("failure and recovery paths under real MongoDB", () => {
     assert.equal(provider.calls, 1);
   });
 
+  dbTest("when only the picture fails, the customer still gets the link, once", async () => {
+    const telegramId = await seed();
+    const provider = makeProvider({ funded: true });
+    const purchaseId = `text-${telegramId}`;
+    await purchasePlan(telegramId, "mini", { purchaseId, createService: provider.createService });
+    const bot = makeBotStub();
+    bot.sendPhoto = async () => { throw new Error("ETELEGRAM: 400 Bad Request: failed to get HTTP URL content"); };
+    assert.equal(await ledger.deliverPurchaseNotificationById(purchaseId, bot), true);
+    assert.equal((await order(purchaseId)).notificationPending, false);
+    assert.equal(bot.sent.filter((entry) => entry.kind !== "photo").length, 1);
+  });
+
   dbTest("delivery failure keeps the service, retries are deduplicated, bounded and backed off", async () => {
     const telegramId = await seed();
     const provider = makeProvider({ funded: true });

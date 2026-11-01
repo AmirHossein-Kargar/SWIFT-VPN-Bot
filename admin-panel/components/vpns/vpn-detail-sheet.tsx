@@ -88,8 +88,9 @@ export function VpnDetailSheet({ clientId, open, onOpenChange }: { clientId: str
               <div>
                 <p className="text-muted-foreground">Traffic</p>
                 <p className="font-medium">
-                  {detail.trafficUsed ?? "—"} {detail.trafficGb != null ? `/ ${formatNumber(detail.trafficGb)} GB` : ""}
+                  {detail.trafficUsed ?? "—"} {detail.unlimited ? "/ Unlimited" : detail.trafficGb != null ? `/ ${formatNumber(detail.trafficGb)} GB` : ""}
                 </p>
+                {detail.trafficRemainingGb != null ? <p className="text-xs text-muted-foreground">{formatNumber(detail.trafficRemainingGb)} GB left</p> : null}
               </div>
               <div>
                 <p className="text-muted-foreground">Status</p>
@@ -102,7 +103,7 @@ export function VpnDetailSheet({ clientId, open, onOpenChange }: { clientId: str
               <div>
                 <p className="text-muted-foreground">WizardXray panel</p>
                 <p className="font-medium">
-                  <Badge variant={detail.wizardXray.status === "connected" ? "success" : "destructive"}>
+                  <Badge variant={detail.wizardXray.status === "connected" ? "success" : detail.wizardXray.status === "stale" ? "warning" : "destructive"}>
                     {detail.wizardXray.status}
                   </Badge>
                 </p>
@@ -124,9 +125,18 @@ export function VpnDetailSheet({ clientId, open, onOpenChange }: { clientId: str
               <Button variant="outline" size="sm" disabled={!detail.availableActions.increaseTraffic} onClick={() => setActionDialog("increase-traffic")}>
                 Add traffic
               </Button>
-              <Button variant="outline" size="sm" disabled={!detail.availableActions.disable} onClick={() => setActionDialog("disable")}>
-                Disable
+              <Button variant="outline" size="sm" disabled={!detail.availableActions.renew} onClick={() => setActionDialog("renew")}>
+                Renew
               </Button>
+              {detail.availableActions.enable ? (
+                <Button variant="outline" size="sm" onClick={() => setActionDialog("enable")}>
+                  Enable
+                </Button>
+              ) : (
+                <Button variant="outline" size="sm" disabled={!detail.availableActions.disable} onClick={() => setActionDialog("disable")}>
+                  Disable
+                </Button>
+              )}
               <Button variant="destructive" size="sm" disabled={!detail.availableActions.revoke} onClick={() => setActionDialog("revoke")}>
                 Revoke
               </Button>
@@ -141,6 +151,7 @@ export function VpnDetailSheet({ clientId, open, onOpenChange }: { clientId: str
         <VpnActionDialog
           clientId={clientId}
           action={actionDialog}
+          unlimited={detail?.unlimited ?? false}
           open={Boolean(actionDialog)}
           onOpenChange={(nextOpen) => !nextOpen && setActionDialog(null)}
           onDone={afterAction}

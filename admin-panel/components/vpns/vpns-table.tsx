@@ -54,7 +54,7 @@ export function VpnsTable({ items }: { items: AdminVpn[] }) {
                 <p className="text-xs text-muted-foreground">{vpn.telegramId}</p>
               </TableCell>
               <TableCell className="max-w-44 truncate">{vpn.product ?? "—"}</TableCell>
-              <TableCell>{vpn.trafficGb != null ? `${formatNumber(vpn.trafficGb)} GB` : "—"}</TableCell>
+              <TableCell>{vpn.trafficGb === 0 ? "Unlimited" : vpn.trafficGb != null ? `${formatNumber(vpn.trafficGb)} GB` : "—"}</TableCell>
               <TableCell className="text-muted-foreground">{formatDateTime(vpn.expiresAt)}</TableCell>
               <TableCell>
                 <Badge variant={STATUS_VARIANT[vpn.status]}>{vpn.status}</Badge>

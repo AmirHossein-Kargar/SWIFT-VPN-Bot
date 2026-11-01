@@ -702,6 +702,27 @@ await step("no-JavaScript visitors still get the Persian content, the heading st
   await context.close();
 });
 
+await step("an unlimited plan reads as unlimited, comes last, and never shows 0 GB", async () => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await context.newPage();
+  const durations = [...new Set(catalog.plans.map((plan) => plan.days))];
+  const unlimited = durations.map((days) => ({ id: `unl${days}`, name: "Unlimited", days, durationLabel: null, gig: 0, price: 900_000 }));
+  await page.route("**/api/store/catalog*", (route) => route.fulfill({ json: { ok: true, data: { ...catalog, plans: [...unlimited, ...catalog.plans] } } }));
+  await page.goto(base, { waitUntil: "networkidle" });
+  const choices = page.locator("#plans").getByRole("button", { name: /انتخاب پلن/ });
+  await choices.first().waitFor();
+  const labels = await choices.evaluateAll((items) => items.map((item) => item.getAttribute("aria-label")));
+  assert.match(labels.at(-1), /انتخاب پلن نامحدود/, "unlimited follows every volume");
+  assert.equal(labels.filter((label) => /نامحدود/.test(label)).length, 1);
+  const text = await page.locator("#plans").innerText();
+  assert.doesNotMatch(text, /(?<![۰-۹])۰\s*گیگابایت/, "a standalone zero, not the end of 10 or 50");
+  assert.match(text, /بدون سقف حجم، در مدت اعتبار/, "it says the limit that does apply");
+  await choices.last().click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByText("حجم نامحدود").waitFor();
+  await context.close();
+});
+
 await browser.close();
 server.close();
 auth.setAdminSessionRedisForTests(null);

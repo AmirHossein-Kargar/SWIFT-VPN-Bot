@@ -226,10 +226,11 @@ sequenceDiagram
   `User.refundedPurchaseIds` and the atomic increment prevent duplicate refunds. The purchase
   row records the original price, refund amount and reason, timestamps, customer, plan and
   provider service.
-- **Definitive failures** (explicit API rejections) refund the customer. A proven provider wallet
+- **Definitive failures** (explicit API rejections, and the server-side failures the provider's document
+  states the outcome of, such as `cant create service`) refund the customer. A proven provider wallet
   shortage is the exception: the order is parked with the debit kept ([reserved orders](reserved-orders.md)).
   The raw provider response is not stored or shown to customers; only a coarse internal error code
-  is kept.
+  is kept. [WizardXray](wizardxray.md#which-answers-are-final) has the full rule.
 - **One status message.** `services/buyService/orderService.js` turns the tapped confirmation
   message into `⏳` processing and edits it to the outcome, which the bot states only after the
   database and wallet writes for that outcome finished. A failed edit falls back to one new

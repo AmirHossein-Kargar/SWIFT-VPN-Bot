@@ -20,7 +20,8 @@ webhook endpoints and the read-only store API from one process.
 ## Checkout hand-off
 
 - Plans, prices (stored Toman, never divided by 10) and durations come from `customerPlans` in
-  [`services/plans.js`](../services/plans.js): the same catalog the Telegram shop charges from.
+  [`services/plans.js`](../services/plans.js): the same catalog the Telegram shop charges from. An unlimited product appears only
+  while the provider has unlimited switched on for this account ([WizardXray](wizardxray.md#unlimited)).
   The API returns only `id, name, days, durationLabel, gig, price`.
 - Selecting a plan opens an order review that re-validates the plan on the server
   (`/api/store/plans/:id`) and offers a Telegram link of the form

@@ -1,4 +1,4 @@
-import { StatusApi } from "../../api/wizardApi.js";
+import { StatusApi, panelPingMs } from "../../api/wizardApi.js";
 import { isAdmin, isAdminGroup } from "../../utils/auth.js";
 
 const showStatusApi = async (bot, msg) => {
@@ -35,7 +35,7 @@ const showStatusApi = async (bot, msg) => {
 🔗 وضعیت سیستم: <code>${
         result.system === "connected" ? "🟢 متصل" : "🔴 قطع"
       }</code>
-⚡ پینگ: <code>${result.ping}ms</code>
+⚡ پینگ: <code>${panelPingMs(result) ?? "—"}ms</code>
 
 🕐 آخرین بروزرسانی: <code>${new Date().toLocaleString("fa-IR")}</code>`;
 

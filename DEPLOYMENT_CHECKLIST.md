@@ -37,8 +37,8 @@ not duplicate it here. Points that most often go wrong on a VPS:
 - **`GROUP_ID`** is the admin group's chat ID (a negative number). Read it from the `chat.id`
   field of a bot update (for example from `getUpdates` after posting in the group). Do **not**
   add unknown third-party bots to the admin group to discover it.
-- **`WIZARD_API_URL`** is the WizardXray **API v1 base URL** with no trailing slash (the method
-  name is appended), not the panel's web address.
+- **`WIZARD_API_URL`** is the WizardXray **API v1 base URL** shown in the provider's bot (a trailing
+  slash makes no difference; the method name is appended), not the panel's web address.
 - **`WEBHOOK_BASE_URL`** is the public HTTPS origin only: no trailing slash, no path.
 - **`CARD_NUMBER`** is optional and legacy (the manual card-to-card flow is no longer offered); it is
   validated only if set.

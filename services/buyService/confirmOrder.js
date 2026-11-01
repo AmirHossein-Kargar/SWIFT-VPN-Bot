@@ -1,3 +1,5 @@
+import { isUnlimitedTraffic } from "../../utils/serviceTerms.js";
+
 const confirmOrder = (plan) => {
   const durationDisplay = plan.durationLabel
     ? `${plan.durationLabel} (${plan.days} روز)`
@@ -7,7 +9,7 @@ const confirmOrder = (plan) => {
 🛍 <b>آیا خرید سرویس با این مشخصات را تایید میکنید !؟</b>
 
 📅 <b>زمان: </b> <code>${durationDisplay}</code>
-<b>حجم سرویس :</b> <code>${plan.gig} گیگ</code>
+<b>حجم سرویس :</b> <code>${isUnlimitedTraffic(plan.gig) ? "نامحدود ♾" : `${plan.gig} گیگ`}</code>
 🌐 <b>حداکثر اتصال :</b> <code>نامحدود ♾</code>
 
 💸 <b>قیمت نهایی: </b> <code>${plan.price.toLocaleString("en-US")} تومان</code>

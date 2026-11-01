@@ -45,7 +45,8 @@ import HooshPayInvoice from "../models/HooshPayInvoice.js";
 import showServiceDetails from "../services/manageServices/showServiceDetails.js";
 import changeServiceLink from "../services/manageServices/changeServiceLink.js";
 import generateQRCode from "../services/manageServices/generateQRCode.js";
-import { deleteService, StatusApi } from "../api/wizardApi.js";
+import { StatusApi, panelPingMs } from "../api/wizardApi.js";
+import { deleteCustomerService } from "../services/manageServices/deleteCustomerService.js";
 import deactivateServiceButton from "../services/manageServices/deactiveServiceButton.js";
 import handleProfile from "./message/handleProfile.js";
 import { sendTrxWallet } from "../paymentHandlers/handleTrxAmount.js";
@@ -563,7 +564,7 @@ const handleCallbackQueryInner = async (bot, query) => {
             : 0;
           await bot.editMessageText(
             `📊 <b>وضعیت سیستم</b>\n\n` +
-            `🔗 سیستم: <code>${r.system === "connected" ? "🟢 متصل" : "🔴 قطع"}</code> | پینگ: <code>${r.ping}ms</code>\n` +
+            `🔗 سیستم: <code>${r.system === "connected" ? "🟢 متصل" : "🔴 قطع"}</code> | پینگ: <code>${panelPingMs(r) ?? "—"}ms</code>\n` +
             `💰 موجودی: <code>${r.balance} تومان</code>\n` +
             `📦 کل سرویس‌ها: <code>${r.count_services}</code> | فعال: <code>${r.count_active_services}</code> (<code>${pct}%</code>)\n` +
             `💵 هر گیگ: <code>${r.per_gb}</code> | هر روز: <code>${r.per_day}</code> تومان\n\n` +
@@ -1001,7 +1002,7 @@ const handleCallbackQueryInner = async (bot, query) => {
   if (data.startsWith("delete_service_")) {
     const username = data.split("delete_service_")[1];
     if (!(await userOwnsService(userId, username))) { await denyOwnership(bot, query.id); return; }
-    await bot.editMessageText("آیا می خواهید این سرویس را حذف کنید؟", {
+    await bot.editMessageText("آیا می خواهید این سرویس را حذف کنید؟\n\n⚠️ این کار برگشت‌پذیر نیست و مبلغی به کیف پول شما برنمی‌گردد.", {
       chat_id: chatId,
       message_id: messageId,
       reply_markup: {
@@ -1017,18 +1018,7 @@ const handleCallbackQueryInner = async (bot, query) => {
   if (data.startsWith("confirm_delete_service_")) {
     const username = data.split("confirm_delete_service_")[1];
     if (!(await userOwnsService(userId, username))) { await denyOwnership(bot, query.id); return; }
-    const res = await deleteService(username);
-    const user = await User.findOne({ telegramId: userId });
-    if (user) {
-      await User.updateOne(
-        { telegramId: userId },
-        { $pull: { services: { username } }, $set: { totalServices: Math.max(0, (user.totalServices || 0) - 1) } }
-      );
-    }
-    await bot.editMessageText(res.result ? "✅ سرویس با موفقیت حذف شد." : "❌ خطا در حذف سرویس.", {
-      chat_id: chatId,
-      message_id: messageId,
-    });
+    await deleteCustomerService(bot, { chatId, messageId, userId, username });
     return;
   }
 

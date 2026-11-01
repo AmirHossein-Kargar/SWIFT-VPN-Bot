@@ -27,7 +27,14 @@ export const broadcastSchema = z.object({
 export const productSchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(120, "Name must be at most 120 characters"),
   durationDays: z.coerce.number<number>().int().min(1, "Must be at least 1 day").max(3650, "Must be at most 3650 days"),
-  trafficGb: z.coerce.number<number>().int().min(1, "Must be at least 1 GB").max(100_000, "Must be at most 100,000 GB"),
+  /**
+   * 0 means unlimited, set by the form's own switch. z.coerce turns a blank input into 0, so a cleared field would become an
+   * unlimited product and reach the server as a real zero: blank has to fail here, before it is coerced.
+   */
+  trafficGb: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? Number.NaN : value),
+    z.coerce.number<number>({ error: "Enter the traffic in GB" }).int().min(0, "Cannot be negative").max(10_000, "Must be at most 10,000 GB"),
+  ) as unknown as z.ZodType<number, number>,
   priceToman: z.coerce.number<number>().int().min(1, "Price must be positive").max(2_000_000_000, "Price is too large"),
   costToman: z.coerce.number<number>().int().min(0, "Cost cannot be negative").max(2_000_000_000, "Cost is too large"),
   enabled: z.boolean(),

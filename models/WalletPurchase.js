@@ -56,7 +56,8 @@ const walletPurchaseSchema = new mongoose.Schema({
   telegramId: { type: String, required: true, index: true, maxlength: 32 },
   planId: { type: String, required: true, maxlength: 64 },
   planName: { type: String, default: "", maxlength: 120 },
-  gig: { type: Number, required: true, min: 1, validate: safeInteger },
+  // 0 is the provider's mark for unlimited traffic (utils/serviceTerms.js), never "no volume".
+  gig: { type: Number, required: true, min: 0, validate: safeInteger },
   days: { type: Number, required: true, min: 1, validate: safeInteger },
   amount: { type: Number, required: true, min: 1, validate: safeInteger },
   status: {

@@ -4,6 +4,7 @@ import { getTestServiceMessage, guideButtons } from "../messages/staticMessages.
 import { createTestService as createTestServiceApi } from "../api/wizardApi.js";
 import escapeHtml from "../utils/escapeHtml.js";
 import { isNotModifiedError } from "./messaging/messageManager.js";
+import { subscriptionLink } from "./subscriptionLink.js";
 
 const NOTIFICATION_CLAIM_MS = 5 * 60_000;
 const RECOVERY_STALE_MS = 5 * 60_000;
@@ -67,9 +68,7 @@ async function notifyTestServiceOnce(user, bot, userModel = User) {
   if (!claimed) return false;
 
   try {
-    const smartLink = claimed.testServiceHash
-      ? `https://iranisystem.com/bot/sub/?hash=${encodeURIComponent(claimed.testServiceHash)}`
-      : claimed.testServiceLink || "";
+    const smartLink = subscriptionLink({ link: claimed.testServiceLink, hash: claimed.testServiceHash }) || "";
     const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(smartLink)}&size=200x200&margin=20`;
     const message = getTestServiceMessage({
       maxUser: 1,
@@ -214,7 +213,7 @@ const createTestService = async (bot, msg, { userModel = User, createApi = creat
           testServiceSingleLink: singleLink,
           testServiceNotificationPending: true,
         },
-        $push: { services: { username: result.username, purchaseId: attemptId } },
+        $push: { services: { username: result.username, sub_link: serviceLink, purchaseId: attemptId, expiresAt: testServiceExpiry(result) } },
         $addToSet: { completedPurchaseIds: attemptId },
         $inc: { totalServices: 1 },
       },
@@ -256,8 +255,12 @@ const createTestService = async (bot, msg, { userModel = User, createApi = creat
         attemptId,
         errorType: error?.name || "PanelError",
         code: error?.code || "TEST_SERVICE_FAILED",
+        reason: error?.reason ?? undefined,
       });
-      await editOrSend(bot, chatId, screenId, "❌ ساخت سرویس تست انجام نشد. لطفاً بعداً دوباره تلاش کنید.");
+      // `Maximum test is N`: the account's tests are switched off or used up, so asking again later will not help.
+      await editOrSend(bot, chatId, screenId, error?.reason === "test_unavailable"
+        ? "❌ ساخت سرویس تست در حال حاضر فعال نیست."
+        : "❌ ساخت سرویس تست انجام نشد. لطفاً بعداً دوباره تلاش کنید.");
     } else {
       log("error", "Test service attempt state could not be recovered", {
         attemptId,
@@ -268,6 +271,12 @@ const createTestService = async (bot, msg, { userModel = User, createApi = creat
     }
   }
 };
+
+/** The provider's own expiry when it gave one. A service with no date stored would read as unknown forever. */
+function testServiceExpiry(result) {
+  const seconds = Number(result?.service?.expire ?? result?.expiryTime);
+  return Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000) : null;
+}
 
 export async function recoverTestServiceAttempts(bot) {
   const stale = new Date(Date.now() - RECOVERY_STALE_MS);

@@ -1,34 +1,96 @@
 import { ProgressLink } from "@/components/shared/progress-link";
+import { PaginationNav } from "@/components/shared/pagination-nav";
 
 import { adminApiGet } from "@/lib/adminApi.server";
-import { AdminApiError } from "@/lib/types";
+import { AdminApiError, type ProviderOverview, type RemoteClients } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { buttonVariants } from "@/components/ui/button";
-import { formatDateTime } from "@/lib/utils";
+import { formatDateTime, formatNumber, formatToman } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
-interface RemoteClients {
-  source: string;
-  fetchedAt: string;
-  count: number;
-  items: ({ username?: string; knownLocally: boolean } & Record<string, string | number | boolean | undefined>)[];
+const STATUS_VARIANT: Record<string, "success" | "warning" | "destructive" | "outline"> = {
+  active: "success",
+  on_hold: "outline",
+  disabled: "warning",
+  limited: "destructive",
+  expired: "destructive",
+};
+
+function ProviderAccountCard({ overview }: { overview: ProviderOverview | null }) {
+  const account = overview?.account ?? null;
+  if (!account) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Provider account</CardTitle>
+          <CardDescription>WizardXray did not answer, so nothing is shown rather than an old figure.</CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+  const locations = overview?.hosts ?? null;
+  const enabled = locations?.filter((host) => !host.disabled) ?? [];
+  const facts: [string, string][] = [
+    ["Balance", account.balance != null ? formatToman(account.balance) : "—"],
+    ["Per GB", formatToman(account.prices.perGb)],
+    ["Per day", formatToman(account.prices.perDay)],
+    ["Unlimited per day", account.limits.unlimitedEnabled ? formatToman(account.prices.unlimitedPerDay) : "Off for this account"],
+    ["Test service", account.limits.testEnabled ? `${formatNumber(account.limits.testsUsed ?? 0)} of ${formatNumber(account.limits.maxTests ?? 0)} used` : "Off for this account"],
+    ["Services", `${formatNumber(account.services.active ?? 0)} active of ${formatNumber(account.services.total ?? 0)}`],
+  ];
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Provider account</CardTitle>
+        <CardDescription>Read from WizardXray {overview ? formatDateTime(overview.fetchedAt) : ""}. Prices{account.prices.custom ? " are custom to this account and" : ""} apply to what the provider charges this bot, not to what customers pay.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm lg:grid-cols-3">
+          {facts.map(([label, value]) => (
+            <div key={label}>
+              <dt className="text-muted-foreground">{label}</dt>
+              <dd className="font-medium">{value}</dd>
+            </div>
+          ))}
+        </dl>
+        <div className="text-sm">
+          <p className="text-muted-foreground">Locations in every subscription link</p>
+          {locations === null ? (
+            <p>Could not be read.</p>
+          ) : enabled.length ? (
+            <ul className="mt-1 flex flex-wrap gap-1.5">
+              {enabled.map((host, index) => <li key={`${host.inbound}-${index}`}><Badge variant="outline">{host.remark ?? host.inbound}</Badge></li>)}
+            </ul>
+          ) : (
+            <p className="text-warning">WizardXray lists no enabled location.</p>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
-// The provider payload shape is not fixed, so only a few well-known columns are
-// promoted; everything else the API already deemed safe is shown as key/value.
-const PRIMARY = ["username", "status", "traffic", "usage", "expire", "expires_at", "days"];
+function traffic(row: RemoteClients["items"][number]): string {
+  if (row.unlimited) return row.usedGb != null ? `${formatNumber(row.usedGb)} GB used · Unlimited` : "Unlimited";
+  if (row.trafficGb == null) return "—";
+  return `${row.usedGb != null ? `${formatNumber(row.usedGb)} / ` : ""}${formatNumber(row.trafficGb)} GB`;
+}
 
-export default async function RemoteClientsPage() {
+export default async function RemoteClientsPage({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
+  const { page } = await searchParams;
   let data: RemoteClients | null = null;
   let failure: string | null = null;
-  try {
-    data = await adminApiGet<RemoteClients>("/vpns-remote/clients", { limit: 200 });
-  } catch (error) {
-    failure = error instanceof AdminApiError ? error.message : "The provider could not be reached.";
-  }
+  const [overview] = await Promise.all([
+    adminApiGet<ProviderOverview>("/provider/account").catch(() => null),
+    adminApiGet<RemoteClients>("/vpns-remote/clients", { page: page ?? 1, pageSize: 50 }).then(
+      (value) => { data = value; },
+      (error) => { failure = error instanceof AdminApiError ? error.message : "The provider could not be reached."; },
+    ),
+  ]);
+  const clients = data as RemoteClients | null;
 
   return (
     <div className="space-y-4">
@@ -37,12 +99,13 @@ export default async function RemoteClientsPage() {
         <ProgressLink href="/vpns/remote" aria-current="page" className={buttonVariants({ variant: "default", size: "sm" })}>Remote clients</ProgressLink>
         <ProgressLink href="/products" className={buttonVariants({ variant: "outline", size: "sm" })}>Service catalog</ProgressLink>
       </nav>
+      <ProviderAccountCard overview={overview} />
       <Card>
         <CardHeader>
           <CardTitle>Remote clients (WizardXray)</CardTitle>
           <CardDescription>
-            Live provider data, read-only. Fetched {data ? formatDateTime(data.fetchedAt) : "—"}; it is a snapshot and can be out of date
-            the moment it loads. Manage a service from the Local services tab, which audits every action.
+            Read-only, nearest expiry first{clients?.total != null ? `, ${formatNumber(clients.total)} in all` : ""}. Fetched {clients ? formatDateTime(clients.fetchedAt) : "—"}. This is the provider&apos;s stored
+            copy, so usage can be minutes old; open a service from Local services for its live state and to act on it.
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
@@ -51,26 +114,21 @@ export default async function RemoteClientsPage() {
               <p className="text-destructive">{failure}</p>
               <p className="text-muted-foreground">Nothing is shown rather than showing possibly stale provider state. Reload to retry.</p>
             </div>
-          ) : !data?.items.length ? (
+          ) : !clients?.items.length ? (
             <p className="p-6 text-center text-sm text-muted-foreground">The provider returned no clients.</p>
           ) : (
             <Table>
               <TableHeader>
-                <TableRow><TableHead>Client</TableHead><TableHead>Local account</TableHead><TableHead>Details</TableHead></TableRow>
+                <TableRow><TableHead>Client</TableHead><TableHead>Status</TableHead><TableHead>Traffic</TableHead><TableHead>Expires</TableHead><TableHead>Local account</TableHead></TableRow>
               </TableHeader>
               <TableBody>
-                {data.items.map((row, index) => (
+                {clients.items.map((row, index) => (
                   <TableRow key={`${row.username ?? "client"}-${index}`}>
-                    <TableCell className="break-all font-mono text-xs">{row.username ?? "—"}</TableCell>
+                    <TableCell className="break-all font-mono text-xs">{row.username ?? "—"}{row.test ? <Badge variant="muted" className="ms-2">test</Badge> : null}</TableCell>
+                    <TableCell><Badge variant={STATUS_VARIANT[row.status ?? ""] ?? "outline"}>{row.status ?? "unknown"}</Badge></TableCell>
+                    <TableCell className="whitespace-nowrap text-muted-foreground">{traffic(row)}</TableCell>
+                    <TableCell className="whitespace-nowrap text-muted-foreground">{formatDateTime(row.expiresAt)}</TableCell>
                     <TableCell>{row.knownLocally ? <Badge variant="success">linked</Badge> : <Badge variant="warning">not in bot database</Badge>}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {Object.entries(row)
-                        .filter(([key]) => key !== "username" && key !== "knownLocally")
-                        .sort(([a], [b]) => Number(PRIMARY.includes(b)) - Number(PRIMARY.includes(a)))
-                        .slice(0, 8)
-                        .map(([key, value]) => `${key}: ${String(value)}`)
-                        .join(" · ") || "—"}
-                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -78,6 +136,7 @@ export default async function RemoteClientsPage() {
           )}
         </CardContent>
       </Card>
+      {clients?.pages ? <PaginationNav page={clients.page} pages={clients.pages} /> : null}
     </div>
   );
 }

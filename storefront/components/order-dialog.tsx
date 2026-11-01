@@ -5,7 +5,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { StoreApiError, getStoreJson } from "@/lib/api";
 import { fa } from "@/lib/format";
-import { classifyPlanCheckFailure, durationTitle, handoffUrl, safeExternalUrl, type PlanCheck, type StoreCatalog, type StorePlan } from "@/lib/store";
+import { classifyPlanCheckFailure, durationTitle, handoffUrl, isUnlimited, safeExternalUrl, type PlanCheck, type StoreCatalog, type StorePlan } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 const titleFor = (catalog: StoreCatalog, days: number) => durationTitle(catalog, days, (d) => `${fa(d)} روزه`);
@@ -64,7 +64,7 @@ export function OrderDialog({ plan, catalog, onClose, onGone }: { plan: StorePla
         </div>
         {shown ? (
           <dl className="mx-5 mt-4 overflow-hidden rounded-[10px] border">
-            <SummaryRow label="پلن" value={`${fa(shown.gig)} گیگابایت`} />
+            <SummaryRow label="پلن" value={isUnlimited(shown) ? "حجم نامحدود" : `${fa(shown.gig)} گیگابایت`} />
             <SummaryRow label="مدت" value={`${titleFor(catalog, shown.days)} (${fa(shown.days)} روز)`} />
             <SummaryRow label="حداکثر اتصال" value="نامحدود" />
             <SummaryRow total label="مبلغ قابل پرداخت" value={`${fa(shown.price)} تومان`} />

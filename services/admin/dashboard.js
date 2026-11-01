@@ -4,7 +4,9 @@ import HooshPayInvoice from "../../models/HooshPayInvoice.js";
 import NowPaymentsInvoice from "../../models/NowPaymentsInvoice.js";
 import CryptoInvoice from "../../models/CryptoInvoice.js";
 import bankInvoice from "../../models/invoice.js";
-import { StatusApi } from "../../api/wizardApi.js";
+import { getProviderAccount } from "../wizardAccount.js";
+import { assertAdminUser } from "./authorization.js";
+import { listPayments } from "./payments.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PENDING_ORDER_STATES = ["reserving", "reserved", "provisioning", "provisioned", "refund_pending"];
@@ -188,7 +190,7 @@ export async function getDashboardMetrics({ now = new Date() } = {}) {
     failedCrypto,
     failedProvisioning,
     vpnCounts,
-    panelStatus,
+    providerAccount,
     charts,
     completedOrders,
   ] = await Promise.all([
@@ -213,13 +215,13 @@ export async function getDashboardMetrics({ now = new Date() } = {}) {
     CryptoInvoice.countDocuments({ status: "rejected" }),
     WalletPurchase.countDocuments({ status: { $in: FAILED_PROVISION_STATES } }),
     knownVpnCounts(now),
-    StatusApi().catch(() => null),
+    getProviderAccount(),
     dashboardCharts(now),
     sumModel(WalletPurchase, { status: "completed", completedAt: { $gte: startMonth } }),
   ]);
 
-  const activeVpnCount = Number(panelStatus?.result?.count_active_services);
-  const totalPanelVpns = Number(panelStatus?.result?.count_services);
+  const activeVpnCount = providerAccount?.services.active ?? Number.NaN;
+  const totalPanelVpns = providerAccount?.services.total ?? Number.NaN;
   const failedPayments = failedHoosh + failedNowPayments + failedBank + failedCrypto;
   const pendingPayments = pendingHoosh + pendingNowPayments + pendingBank + pendingCrypto;
   const failedPaymentDenominator = failedPayments + pendingPayments + revenueMonth.count;
@@ -228,7 +230,7 @@ export async function getDashboardMetrics({ now = new Date() } = {}) {
     generatedAt: now.toISOString(),
     definitions: {
       activeUsers: "Non-blocked accounts seen by the bot in the last 30 days; tracking starts with this release.",
-      activeVpns: panelStatus ? "WizardXray active-service count." : "Unavailable while WizardXray status cannot be checked.",
+      activeVpns: providerAccount ? "WizardXray active-service count." : "Unavailable while WizardXray status cannot be checked.",
       expiredVpns: "Expired, non-revoked VPN orders with a tracked expiry date.",
       revenue: "Wallet top-ups actually credited to user wallets; product purchases are counted separately as orders.",
     },
@@ -252,6 +254,65 @@ export async function getDashboardMetrics({ now = new Date() } = {}) {
     revenueByProviderMonth: revenueMonth.byProvider,
     charts,
   };
+}
+
+const PULSE_ACTIVITY = 8;
+const PULSE_TTL_MS = 15_000;
+let pulseCache = null;
+let pulseInFlight = null;
+
+/** The latest payments and orders in one list. Amounts, statuses and ids only: service links never leave the database here. */
+async function recentActivity(actorId) {
+  const [payments, orders] = await Promise.all([
+    listPayments({ actorId, query: { page: 1, pageSize: PULSE_ACTIVITY } }),
+    WalletPurchase.find({}).sort({ createdAt: -1 }).limit(PULSE_ACTIVITY).select("purchaseId telegramId planName planId amount status createdAt").lean(),
+  ]);
+  const rows = [
+    // The payments list includes wallet orders as a provider of their own. They are listed below by plan name, once.
+    ...payments.items.filter((payment) => payment.provider !== "wallet").map((payment) => ({ id: `payment:${payment.key}`, kind: "payment", title: payment.providerLabel, userId: String(payment.userId), amount: payment.amount, status: payment.status, at: payment.createdAt })),
+    ...orders.map((order) => ({ id: `order:${order.purchaseId}`, kind: "order", title: order.planName || order.planId, userId: String(order.telegramId), amount: order.amount, status: order.status, at: order.createdAt })),
+  ];
+  return rows.sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, PULSE_ACTIVITY);
+}
+
+function healthSummary(snapshot) {
+  if (!snapshot?.components?.length) return { state: "unknown", reason: "The monitor has not reported yet.", openIncidents: 0, components: [] };
+  return {
+    state: snapshot.overall.state,
+    reason: snapshot.overall.reason,
+    openIncidents: snapshot.incidents?.openCount ?? 0,
+    components: snapshot.components.map(({ id, label, state, reason }) => ({ id, label, state, reason })),
+  };
+}
+
+async function buildPulse({ actorId, readHealth }) {
+  const [dashboard, activity] = await Promise.all([getDashboardMetrics(), recentActivity(actorId)]);
+  return {
+    generatedAt: new Date().toISOString(),
+    metrics: dashboard.metrics,
+    charts: { revenue: dashboard.charts.revenue },
+    health: healthSummary(readHealth()),
+    activity,
+  };
+}
+
+/**
+ * What the live dashboard polls. Every open dashboard shares one result for a few seconds, so watching costs the same whether one
+ * admin has it open or five, and the provider is read through the shared account cache rather than once per viewer. The health
+ * part comes from the monitor's snapshot in memory: the page never runs a check itself.
+ */
+export async function getDashboardPulse({ actorId, readHealth = () => null, now = Date.now() } = {}) {
+  assertAdminUser(actorId);
+  if (pulseCache && now - pulseCache.at < PULSE_TTL_MS) return { ...pulseCache.value, health: healthSummary(readHealth()) };
+  pulseInFlight ||= buildPulse({ actorId, readHealth })
+    .then((value) => { pulseCache = { at: Date.now(), value }; return value; })
+    .finally(() => { pulseInFlight = null; });
+  return pulseInFlight;
+}
+
+export function resetDashboardPulseForTests() {
+  pulseCache = null;
+  pulseInFlight = null;
 }
 
 export { knownVpnCounts, revenueForPeriod, DAY_MS, PENDING_ORDER_STATES, FAILED_PROVISION_STATES };

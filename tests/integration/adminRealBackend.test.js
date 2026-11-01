@@ -28,10 +28,12 @@ const provider = http.createServer((req, res) => {
   res.setHeader("content-type", "application/json");
   if (providerMode === "error") { res.statusCode = 500; return res.end(JSON.stringify({ ok: false, error: "boom secret-internal-detail" })); }
   if (providerMode === "garbage") return res.end("<html>not json</html>");
-  return res.end(JSON.stringify({ ok: true, result: [
-    { username: "svc_known_1", status: "active", traffic: 5, sub_link: "https://secret.example/sub/abc", hash: "h4sh", uuid: "u-u-i-d", token: "tkn" },
-    { username: "svc_orphan_2", status: "expired", traffic: 1 },
-  ] }));
+  // The documented shape: `result.list`. This fixture used to answer a bare array, which is why a parser that could not read the
+  // real answer passed.
+  return res.end(JSON.stringify({ ok: true, error: "", http_code: 200, result: { count: 2, total: 2, list: [
+    { username: "svc_known_1", status: "active", data_limit_gb: 5, sub_link: "https://secret.example/sub/abc", hash: "h4sh", uuid: "u-u-i-d", token: "tkn" },
+    { username: "svc_orphan_2", status: "expired", data_limit_gb: 1 },
+  ] } }));
 });
 await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
 process.env.WIZARD_API_URL = `http://127.0.0.1:${provider.address().port}`;
@@ -244,7 +246,7 @@ describe("users, dashboard and analytics on real aggregations", () => {
 describe("remote VPN clients against a local fake provider", () => {
   skip("lists clients, strips link/hash/uuid/token fields, and flags clients unknown to the bot database", async () => {
     await User.create({ telegramId: "800001", services: [{ username: "svc_known_1" }] });
-    const result = await vpns.listRemoteClients({ actorId: ADMIN, limit: 50 });
+    const result = await vpns.listRemoteClients({ actorId: ADMIN, pageSize: 50 });
     assert.equal(result.count, 2);
     const known = result.items.find((item) => item.username === "svc_known_1");
     const orphan = result.items.find((item) => item.username === "svc_orphan_2");

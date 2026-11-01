@@ -14,6 +14,7 @@ import { getSellablePlanById, getSellablePlans } from "../plans.js";
 import { getUsdtTomanQuote, gheymatCacheTtlMs, gheymatMaxAgeMs } from "./gheymatClient.js";
 import { logQuoteFailure } from "./quoteLog.js";
 import { makeRoom, pruneExpired } from "../../utils/boundedMap.js";
+import { volumeNumber } from "../../utils/serviceTerms.js";
 
 // One entry per distinct (rate, amount, currency): amounts are user-entered, so the cache is capped.
 const ESTIMATE_CACHE_MAX = 500;
@@ -307,7 +308,7 @@ export async function quoteCryptoPayment({
       : await getSellablePlanById(planSelection.planId || planSelection.id, { requireDatabase: true })
         || await findSellablePlanByDurationAndVolume(
           Number(planSelection.durationDays ?? planSelection.days),
-          Number(planSelection.gig ?? planSelection.trafficGb),
+          volumeNumber(planSelection.gig ?? planSelection.trafficGb),
         );
     if (!plan) {
       throw new NowPaymentsFlowError("invalid_plan");

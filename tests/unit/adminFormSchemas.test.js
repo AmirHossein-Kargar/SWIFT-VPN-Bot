@@ -104,6 +104,10 @@ describe("plan form schema", () => {
   });
 
   test("number inputs arrive as strings from the form and are coerced to numbers", () => {
+    const blank = productSchema.safeParse({ ...validProduct, trafficGb: "" });
+    assert.equal(blank.success, false, "z.coerce reads a cleared field as 0, and 0 is an unlimited product");
+    assert.equal(productSchema.safeParse({ ...validProduct, trafficGb: "   " }).success, false);
+    assert.equal(productSchema.safeParse({ ...validProduct, trafficGb: 0 }).data?.trafficGb, 0);
     const result = productSchema.safeParse({ ...validProduct, durationDays: "30", trafficGb: "10", priceToman: "150000", costToman: "90000" });
     assert.equal(result.success, true);
     assert.deepEqual([result.data.durationDays, result.data.trafficGb, result.data.priceToman, result.data.costToman], [30, 10, 150000, 90000]);
@@ -119,7 +123,7 @@ describe("plan form schema", () => {
   test("each numeric field enforces its own bounds, inclusive at both ends", () => {
     const bounds = [
       ["durationDays", 1, 3650, "Must be at least 1 day", "Must be at most 3650 days"],
-      ["trafficGb", 1, 100_000, "Must be at least 1 GB", "Must be at most 100,000 GB"],
+      ["trafficGb", 0, 10_000, "Cannot be negative", "Must be at most 10,000 GB"],
       ["priceToman", 1, 2_000_000_000, "Price must be positive", "Price is too large"],
       ["costToman", 0, 2_000_000_000, "Cost cannot be negative", "Cost is too large"],
     ];

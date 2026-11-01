@@ -4,7 +4,8 @@ const adminProductSchema = new mongoose.Schema({
   productId: { type: String, required: true, unique: true, maxlength: 64 },
   name: { type: String, required: true, trim: true, maxlength: 120 },
   durationDays: { type: Number, required: true, min: 1, max: 3650 },
-  trafficGb: { type: Number, required: true, min: 1, max: 100_000 },
+  // 0 is unlimited traffic, which the provider must have switched on for this account (services/plans.js gates the sale).
+  trafficGb: { type: Number, required: true, min: 0, max: 10_000 },
   priceToman: { type: Number, required: true, min: 1, max: 2_000_000_000 },
   costToman: { type: Number, required: true, min: 0, max: 2_000_000_000 },
   // enabled: available for NEW purchases (bot + storefront checkout).

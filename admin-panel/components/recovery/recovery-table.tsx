@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAdminSession } from "@/components/session-provider";
 import { adminMutate, newOperationId } from "@/lib/adminApi.client";
+import { ProviderCandidatesCheck } from "@/components/recovery/provider-candidates";
 import { AdminApiError } from "@/lib/types";
 import type { RecoveryItem } from "@/lib/types";
 import { formatDateTime, formatToman } from "@/lib/utils";
@@ -106,6 +107,7 @@ export function RecoveryTable({ items }: { items: RecoveryItem[] }) {
               <TableCell>{formatToman(item.amount)}</TableCell>
               <TableCell>
                 <Badge variant={item.retrySafe ? "warning" : "destructive"}>{item.kind.replace(/-/g, " ")}</Badge>
+                {item.kind === "provisioning-uncertain" ? <ProviderCandidatesCheck purchaseId={item.key.slice("wallet:".length)} /> : null}
               </TableCell>
               <TableCell className="text-muted-foreground">{formatDateTime(item.lastEventAt)}</TableCell>
               <TableCell className="text-muted-foreground">

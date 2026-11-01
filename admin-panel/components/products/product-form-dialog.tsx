@@ -8,6 +8,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
@@ -182,8 +183,16 @@ export function ProductFormDialog({
                   <FormItem>
                     <FormLabel>Traffic (GB)</FormLabel>
                     <FormControl>
-                      <Input type="number" inputMode="numeric" {...field} />
+                      <Input type="number" inputMode="numeric" disabled={String(field.value) === "0"} {...field} />
                     </FormControl>
+                    <div className="flex items-center gap-2 pt-1">
+                      <Switch
+                        id="product-unlimited"
+                        checked={String(field.value) === "0"}
+                        onCheckedChange={(on) => field.onChange(on ? 0 : 50)}
+                      />
+                      <Label htmlFor="product-unlimited" className="text-xs font-normal text-muted-foreground">Unlimited traffic</Label>
+                    </div>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -252,13 +261,14 @@ export function ProductFormDialog({
             <section aria-label="Review" className="space-y-1 rounded-md border border-border bg-muted/40 p-3 text-sm">
               <p className="font-medium">Review</p>
               <p className="text-muted-foreground">
-                Customers pay {formatToman(price)} for {formatNumber(Number(watched.trafficGb) || 0)} GB over {watched.durationDays} days
+                Customers pay {formatToman(price)} for {String(watched.trafficGb) === "0" ? "unlimited traffic" : `${formatNumber(Number(watched.trafficGb) || 0)} GB`} over {watched.durationDays} days
                 {price > 0 ? ` · estimated profit ${formatToman(price - cost)}` : ""}.
               </p>
               <p className="text-muted-foreground">
                 {watched.enabled ? (watched.published ? "Sold in the bot and shown on the storefront." : "Sold in the bot only.") : "Not for sale."}
               </p>
               {price > 0 && price < cost ? <p className="text-warning">Price is below cost — this plan sells at a loss.</p> : null}
+              {String(watched.trafficGb) === "0" ? <p className="text-muted-foreground">Unlimited traffic still ends after the plan&apos;s days. It is offered only while WizardXray has unlimited switched on for this account, and is hidden from customers otherwise.</p> : null}
               {isEditing && changes.length > 0 ? (
                 <ul className="mt-1 list-disc space-y-0.5 pl-5">
                   {changes.map(({ field, from, to }) => (

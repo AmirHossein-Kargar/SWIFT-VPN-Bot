@@ -1,26 +1,31 @@
 /**
  * Cached real-time WizardXray service status.
  *
- * The WizardXray panel is the source of truth for live service state
- * (status, usage, expiry). MongoDB records are the fallback for identity
- * data (traffic plan, purchase date, expiry estimate) and for whenever the
- * panel is unreachable.
+ * The WizardXray panel is the source of truth for live service state (status, usage, expiry). MongoDB records are the fallback
+ * for identity data and for whenever the panel is unreachable.
+ *
+ * Three kinds of answer, kept apart because they mean different things to a customer:
+ *   live    `info` with source "panel"
+ *   stale   `info` with source "cache": the panel answered from its own stored copy, so usage may be old
+ *   cached  our own record, because the panel could not be reached at all
  *
  * Behavior:
- *   - Live results are cached per username for WIZARD_STATUS_TTL_SECONDS
- *     (default 90) so rapid taps / menu browsing cannot hammer the panel.
+ *   - Live results are cached per username for WIZARD_STATUS_TTL_SECONDS (default 90) so rapid taps / menu browsing cannot
+ *     hammer the panel. A stale answer is not cached: the next look should try again.
+ *   - Anything that changes a service calls invalidateServiceStatus, or the customer would be shown the link they just revoked.
  *   - Concurrent requests for the same username share one in-flight promise.
- *   - Panel failures never throw to the caller: the caller receives a
- *     fallback record with `live: false` plus the safe error code.
+ *   - Panel failures never throw to the caller: the caller receives a non-live record plus a safe error code.
  *   - Nothing is ever deleted or mutated here; this module is read-only.
  */
-import { findService } from "../api/wizardApi.js";
+import { getServiceInfo, normalizeService } from "../api/wizardApi.js";
 import User from "../models/User.js";
+import { subscriptionLink } from "./subscriptionLink.js";
+import { isUnlimitedTraffic } from "../utils/serviceTerms.js";
 
 const DEFAULT_TTL_MS = 90_000;
 const MAX_CACHE_ENTRIES = 500;
 
-const cache = new Map(); // username -> { expiresAt, promise }
+const cache = new Map(); // username -> { expiresAt, data, fetchedAt }
 const inFlight = new Map(); // username -> Promise
 
 function ttlMs() {
@@ -35,23 +40,13 @@ export function resetWizardStatusCacheForTests() {
   inFlight.clear();
 }
 
-// ── Parsing helpers (pure, defensive) ───────────────────────────────────────
-
-/** Parse a size like "1.5", "1.5 GB", "700 MB" into gigabytes. */
-export function parseSizeToGb(value) {
-  if (value == null) return null;
-  if (typeof value === "number" && Number.isFinite(value)) return value; // already GB
-  const text = String(value).trim();
-  const match = text.match(/^([\d.,]+)\s*(TB|GB|MB|KB)?/i);
-  if (!match) return null;
-  const number = Number.parseFloat(match[1].replace(/,/g, ""));
-  if (!Number.isFinite(number)) return null;
-  const unit = (match[2] || "GB").toUpperCase();
-  if (unit === "TB") return number * 1024;
-  if (unit === "GB") return number;
-  if (unit === "MB") return number / 1024;
-  if (unit === "KB") return number / (1024 * 1024);
-  return number;
+/**
+ * Forget one service after a change. A lookup already on its way may have read the old state, so it is disowned too: it still
+ * answers whoever asked, but it no longer fills the cache.
+ */
+export function invalidateServiceStatus(username) {
+  cache.delete(username);
+  inFlight.delete(username);
 }
 
 function formatGb(value) {
@@ -65,7 +60,9 @@ export const STATUS_LABELS = {
   active: "🟢 فعال",
   disabled: "⚪️ غیرفعال",
   inactive: "⚪️ غیرفعال",
-  limited: "🔴 منقضی/محدود شده",
+  limited: "🔴 حجم تمام شده (محدود)",
+  expired: "⛔️ منقضی شده",
+  on_hold: "🕓 در انتظار اولین اتصال",
 };
 
 export function statusLabel(status) {
@@ -73,42 +70,32 @@ export function statusLabel(status) {
 }
 
 /**
- * Normalize a WizardXray /find result into display-safe fields.
- * Returns null when the payload does not describe a service.
+ * A provider service object as display-safe fields, or null when it does not describe a service. Accepts the raw object or one
+ * already normalized. For an unlimited service there is no total, no remainder and no percentage: those fields are null, never
+ * zero, so nothing downstream can show an exhausted quota.
  */
-export function normalizeServiceResult(result) {
-  if (!result || typeof result !== "object") return null;
-  const username = typeof result.username === "string" && result.username.trim() ? result.username : null;
-  if (!username) return null; // a payload without a username does not describe a service
-  const online = result.online_info && typeof result.online_info === "object" ? result.online_info : {};
-  const latest = result.latest_info && typeof result.latest_info === "object" ? result.latest_info : {};
-
-  const status = typeof online.status === "string" ? online.status.toLowerCase() : (typeof latest.status === "string" ? latest.status.toLowerCase() : null);
-  const totalGb = parseSizeToGb(latest.gig);
-  const usedGb = parseSizeToGb(online.usage_converted ?? online.usage ?? latest.usage_converted);
-  const remainingGb = totalGb != null && usedGb != null ? Math.max(0, Number((totalGb - usedGb).toFixed(3))) : null;
-  const usagePercent = totalGb != null && usedGb != null && totalGb > 0
-    ? Math.min(100, Math.max(0, Math.round((usedGb / totalGb) * 100)))
-    : null;
-  const daysLeft = Number.isFinite(Number(latest.day)) ? Number(latest.day) : null;
-  const expireDate = typeof latest.expire_date === "string" && latest.expire_date ? latest.expire_date : null;
-
-  const smartLink = result.hash
-    ? `https://iranisystem.com/bot/sub/?hash=${encodeURIComponent(result.hash)}`
-    : (typeof result.sub_link === "string" && result.sub_link.length <= 4096 ? result.sub_link : null);
-
+export function normalizeServiceResult(input) {
+  const service = input && typeof input === "object" && "subLink" in input ? input : normalizeService(input);
+  if (!service) return null;
+  const { unlimited } = service;
+  const total = unlimited ? null : service.dataLimitGb;
+  const used = service.usedGb;
+  const remaining = unlimited ? null : service.remainingGb ?? (total != null && used != null ? Math.max(0, total - used) : null);
+  const usagePercent = !unlimited && total > 0 && used != null ? Math.min(100, Math.max(0, Math.round((used / total) * 100))) : null;
   return {
-    username,
-    status,
-    statusLabel: statusLabel(status),
-    totalGbText: formatGb(totalGb),
-    usedGbText: formatGb(usedGb),
-    remainingGbText: formatGb(remainingGb),
+    username: service.username,
+    status: service.status,
+    statusLabel: statusLabel(service.status),
+    unlimited,
+    test: service.test,
+    totalGbText: formatGb(total),
+    usedGbText: formatGb(used),
+    remainingGbText: formatGb(remaining),
     usagePercent,
-    expireDate,
-    daysLeft,
-    smartLink,
-    live: true,
+    expireDate: service.expireJalali,
+    daysLeft: service.daysLeft,
+    smartLink: service.subLink,
+    live: service.live,
   };
 }
 
@@ -119,17 +106,19 @@ export function fallbackFromDbRecord(record, { reason } = {}) {
   const daysLeft = expiresAt
     ? Math.ceil((expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000))
     : null;
+  const unlimited = isUnlimitedTraffic(record.trafficGb);
   return {
     username: record.username || null,
     status: null,
     statusLabel: null,
-    totalGbText: record.trafficGb != null ? String(record.trafficGb) : null,
+    unlimited,
+    totalGbText: record.trafficGb != null && !unlimited ? String(record.trafficGb) : null,
     usedGbText: null,
     remainingGbText: null,
     usagePercent: null,
     expireDate: expiresAt ? expiresAt.toLocaleDateString("fa-IR") : null,
     daysLeft,
-    smartLink: record.sub_link || null,
+    smartLink: subscriptionLink({ link: record.sub_link }),
     createdAt: record.createdAt || null,
     live: false,
     fallbackReason: reason || "panel_unreachable",
@@ -150,29 +139,29 @@ function pruneCache() {
 }
 
 async function fetchLive(username) {
-  const response = await findService(username);
-  // The panel signals a missing service with an explicit rejection; the
-  // request() helper translates that into a thrown WizardApiError.
-  const normalized = normalizeServiceResult(response?.result);
-  if (!normalized?.username) {
-    const error = new Error("service_not_found_on_panel");
-    error.code = "service_not_found_on_panel";
+  try {
+    return normalizeServiceResult(await getServiceInfo(username));
+  } catch (error) {
+    if (error?.reason === "service_not_found") {
+      const missing = new Error("service_not_found_on_panel");
+      missing.code = "service_not_found_on_panel";
+      throw missing;
+    }
     throw error;
   }
-  return normalized;
 }
 
 /**
- * Live status with caching. NEVER throws; callers get
- * { ok, live, data, fetchedAt, errorCode } and decide how to display.
+ * Live status with caching. NEVER throws; callers get { ok, live, data, fetchedAt, errorCode } and decide how to display.
+ * `live` is false for the panel's stored copy, even though `ok` and `data` are present.
  */
-export async function getServiceLiveStatus(username, { maxAgeMs } = {}) {
+export async function getServiceLiveStatus(username, { maxAgeMs, fresh = false } = {}) {
   if (typeof username !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(username)) {
     return { ok: false, live: false, data: null, errorCode: "invalid_username" };
   }
   const now = Date.now();
   const entry = cache.get(username);
-  if (entry && entry.expiresAt > now) {
+  if (!fresh && entry && entry.expiresAt > now) {
     return { ok: true, live: true, data: entry.data, fetchedAt: entry.fetchedAt, cached: true };
   }
 
@@ -180,20 +169,23 @@ export async function getServiceLiveStatus(username, { maxAgeMs } = {}) {
   if (!promise) {
     promise = fetchLive(username)
       .then((data) => {
-        cache.set(username, { data, fetchedAt: Date.now(), expiresAt: Date.now() + (maxAgeMs ?? ttlMs()) });
-        pruneCache();
-        return { ok: true, live: true, data, fetchedAt: Date.now(), cached: false };
+        const fetchedAt = Date.now();
+        if (data.live && inFlight.get(username) === promise) {
+          cache.set(username, { data, fetchedAt, expiresAt: fetchedAt + (maxAgeMs ?? ttlMs()) });
+          pruneCache();
+        }
+        return { ok: true, live: data.live, data, fetchedAt, cached: false };
       })
       .catch((error) => ({ ok: false, live: false, data: null, errorCode: error?.code || "panel_unreachable" }))
-      .finally(() => { inFlight.delete(username); });
+      .finally(() => { if (inFlight.get(username) === promise) inFlight.delete(username); });
     inFlight.set(username, promise);
   }
   return promise;
 }
 
 /**
- * Full view for "My Services": live panel data when available, otherwise the
- * user's stored record. Also returns the DB record for identity fields.
+ * Full view for "My Services": live panel data when available, otherwise the panel's stored copy, otherwise the user's own
+ * record. Also returns the DB record for identity fields.
  */
 export async function getServiceView(username, telegramId) {
   const [status, user] = await Promise.all([
@@ -205,8 +197,9 @@ export async function getServiceView(username, telegramId) {
       : User.findOne({ "services.username": username }).select("services.$ telegramId").lean(),
   ]);
   const record = user?.services?.[0] || null;
-  if (status.ok && status.live) {
-    return { source: "live", data: status.data, record, fetchedAt: status.fetchedAt };
+  if (status.ok) {
+    const data = status.data.smartLink ? status.data : { ...status.data, smartLink: subscriptionLink({ link: record?.sub_link }) };
+    return { source: status.live ? "live" : "stale", data, record, fetchedAt: status.fetchedAt };
   }
   if (status.errorCode === "service_not_found_on_panel") {
     return { source: "missing", data: null, record, errorCode: status.errorCode };

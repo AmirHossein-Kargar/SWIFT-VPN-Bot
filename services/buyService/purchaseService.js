@@ -3,6 +3,8 @@ import User from "../../models/User.js";
 import WalletPurchase from "../../models/WalletPurchase.js";
 import { getSellablePlanById, isProductReferencable } from "../plans.js";
 import { createVpnService } from "../../api/wizardApi.js";
+import { subscriptionLink, validSubscriptionLink } from "../subscriptionLink.js";
+import { isValidCatalogTraffic } from "../../utils/serviceTerms.js";
 import {
   commitProvisionedPurchase,
   refundPurchaseReservation,
@@ -51,17 +53,6 @@ function safeErrorCode(error, fallback = "PROVIDER_ERROR") {
   return code.toUpperCase().slice(0, 80);
 }
 
-function validHttpsUrl(value) {
-  if (typeof value !== "string" || value.length < 9 || value.length > 4096 || !/^https:\/\//i.test(value)) return null;
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "https:" || parsed.username || parsed.password) return null;
-    return value;
-  } catch {
-    return null;
-  }
-}
-
 function validSingleLink(value) {
   if (typeof value !== "string" || value.length > 4096) return "";
   return /^(?:https|vless|vmess|trojan|ss):\/\//i.test(value) ? value : "";
@@ -73,9 +64,10 @@ function validSingleLink(value) {
  */
 function normalizeProvisioningResponse(response) {
   const result = response?.result;
+  const service = result?.service && typeof result.service === "object" ? result.service : null;
   const username = result?.username;
   const hash = typeof result?.hash === "string" && HASH_PATTERN.test(result.hash) ? result.hash : null;
-  const serviceLink = validHttpsUrl(result?.sub_link);
+  const serviceLink = validSubscriptionLink(result?.sub_link) ?? validSubscriptionLink(service?.sub_link);
   if (response?.ok !== true || !result || typeof result !== "object" || Array.isArray(result)
       || typeof username !== "string" || !USERNAME_PATTERN.test(username)
       || (!hash && !serviceLink)) {
@@ -88,22 +80,17 @@ function normalizeProvisioningResponse(response) {
     throw error;
   }
 
-  const links = Array.isArray(result.tak_links) ? result.tak_links : [];
+  const links = Array.isArray(result.tak_links) ? result.tak_links : Array.isArray(service?.links) ? service.links : [];
   const singleLink = links.length ? validSingleLink(links[0]) : "";
-  return { username, hash, serviceLink, singleLink };
+  const expirySeconds = Number(service?.expire ?? result.expiryTime);
+  return { username, hash, serviceLink, singleLink, expiresAt: Number.isFinite(expirySeconds) && expirySeconds > 0 ? new Date(expirySeconds * 1000) : null };
 }
 
 function customerServiceInfo(purchase) {
   if (purchase?.status !== "completed") return null;
-  const hash = typeof purchase.serviceHash === "string" && HASH_PATTERN.test(purchase.serviceHash)
-    ? purchase.serviceHash
-    : null;
-  const serviceLink = validHttpsUrl(purchase.serviceLink);
   return {
     username: purchase.serviceUsername,
-    subscriptionUrl: hash
-      ? `https://iranisystem.com/bot/sub/?hash=${encodeURIComponent(hash)}`
-      : serviceLink,
+    subscriptionUrl: subscriptionLink({ link: purchase.serviceLink, hash: purchase.serviceHash }),
     singleLink: validSingleLink(purchase.singleLink),
     expiresAt: purchase.expiresAt || null,
   };
@@ -236,7 +223,8 @@ async function markAmbiguousProviderResult(purchaseModel, purchaseId, errorCode)
 
 async function recordProvisionedService(purchaseModel, purchaseId, providerService, plan) {
   const provisionedAt = new Date();
-  const expiresAt = new Date(provisionedAt.getTime() + plan.days * 24 * 60 * 60 * 1000);
+  // The provider's own date, because it is the one that will cut the service off. Local arithmetic is the fallback.
+  const expiresAt = providerService.expiresAt ?? new Date(provisionedAt.getTime() + plan.days * 24 * 60 * 60 * 1000);
   const serviceFields = {
     status: "provisioned",
     walletDebitStatus: "reserved",
@@ -298,7 +286,7 @@ export async function purchasePlan(
     throw new PurchaseServiceError("Product catalog is temporarily unavailable", "CATALOG_UNAVAILABLE");
   }
   if (!plan) throw new PurchaseServiceError("Requested customer plan is not available", "INVALID_PLAN");
-  if (![plan.days, plan.gig, plan.price].every((value) => Number.isSafeInteger(value) && value > 0)) {
+  if (![plan.days, plan.price].every((value) => Number.isSafeInteger(value) && value > 0) || !isValidCatalogTraffic(plan.gig)) {
     throw new PurchaseServiceError("Customer plan configuration is invalid", "INVALID_PLAN_CONFIGURATION");
   }
   if (typeof createService !== "function") throw new TypeError("createService must be a function");

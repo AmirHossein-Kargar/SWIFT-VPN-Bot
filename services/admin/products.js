@@ -7,6 +7,8 @@ import { assertAdminUser, AdminServiceError } from "./authorization.js";
 import { runAuditedAction } from "./audit.js";
 import { parsePositiveInteger, parsePagination, escapeRegex } from "./validation.js";
 import { SUBSCRIPTION_DURATIONS, DELETE_LOCK_MS, isShippedPlanId } from "../plans.js";
+import { getProviderAccount } from "../wizardAccount.js";
+import { UNLIMITED_GB, isUnlimitedTraffic } from "../../utils/serviceTerms.js";
 
 const PRODUCT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 /** Optional admin-chosen identifier for new products; lowercase so it also works inside bot deep links. */
@@ -40,6 +42,15 @@ function parseExpectedRevision(input) {
   return parsePositiveInteger(input.expectedRevision, { name: "expected revision", min: 0, max: 2_000_000_000 });
 }
 
+/**
+ * A blank volume must never become unlimited. parsePositiveInteger reads null and "" as 0, and with a minimum of 0 that would
+ * sell unlimited traffic by leaving a field empty, so 0 has to arrive as a real zero.
+ */
+function parseTraffic(value) {
+  if (value == null || (typeof value === "string" && value.trim() === "")) throw badProduct("حجم محصول لازم است.", "invalid_traffic_gb");
+  return parsePositiveInteger(value, { name: "traffic GB", min: UNLIMITED_GB, max: 10_000 });
+}
+
 /** Validates field values. Business rules that need other rows (duplicates, sellability) live in assertSellable. */
 function validateProductInput(input, { partial = false } = {}) {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw badProduct("اطلاعات محصول لازم است.", "invalid_product");
@@ -50,7 +61,7 @@ function validateProductInput(input, { partial = false } = {}) {
     output.name = name;
   }
   if (!partial || Object.hasOwn(input, "durationDays")) output.durationDays = parsePositiveInteger(input.durationDays, { name: "duration days", min: 1, max: 3650 });
-  if (!partial || Object.hasOwn(input, "trafficGb")) output.trafficGb = parsePositiveInteger(input.trafficGb, { name: "traffic GB", min: 1, max: 100_000 });
+  if (!partial || Object.hasOwn(input, "trafficGb")) output.trafficGb = parseTraffic(input.trafficGb);
   if (!partial || Object.hasOwn(input, "priceToman")) output.priceToman = parsePositiveInteger(input.priceToman, { name: "price", min: 1, max: 2_000_000_000 });
   if (!partial || Object.hasOwn(input, "costToman")) output.costToman = parsePositiveInteger(input.costToman, { name: "cost", min: 0, max: 2_000_000_000 });
   if (!partial || Object.hasOwn(input, "enabled")) {
@@ -74,6 +85,7 @@ function present(product, { references = null } = {}) {
     name: item.name,
     durationDays: Number(item.durationDays),
     trafficGb: Number(item.trafficGb),
+    unlimited: isUnlimitedTraffic(item.trafficGb),
     priceToman: Number(item.priceToman),
     costToman: Number(item.costToman),
     profitToman: Number(item.priceToman) - Number(item.costToman),
@@ -104,6 +116,13 @@ function assertSupportedDuration(days) {
 
 async function assertSellable(candidate, { selfId = null } = {}) {
   assertSupportedDuration(candidate.durationDays);
+  if (isUnlimitedTraffic(candidate.trafficGb)) {
+    // A known no stops here. Not knowing does not: the checkout hides the product until the provider confirms it anyway.
+    const account = await getProviderAccount();
+    if (account && !account.limits.unlimitedEnabled) {
+      throw badProduct("سرویس نامحدود برای این حساب WizardXray فعال نیست.", "unlimited_not_enabled", 409);
+    }
+  }
   const clash = await AdminProduct.findOne({
     durationDays: candidate.durationDays,
     trafficGb: candidate.trafficGb,

@@ -1,6 +1,7 @@
 import WalletPurchase from "../../models/WalletPurchase.js";
 import escapeHtml from "../../utils/escapeHtml.js";
 import { getDurationOptionByDays } from "../plans.js";
+import { trafficTextFa } from "../../utils/serviceTerms.js";
 import { updateStatusMessage } from "../messaging/messageManager.js";
 
 /**
@@ -57,13 +58,13 @@ export function reservedOrderText(purchase) {
     `شناسه سفارش: <code>${escapeHtml(purchase.purchaseId)}</code>`,
     `شناسه کاربر: <code>${escapeHtml(purchase.telegramId)}</code>`,
     `پلن: <code>${escapeHtml(purchase.planName || purchase.planId)}</code>`,
-    `حجم: <code>${escapeHtml(purchase.gig)} گیگابایت</code>`,
+    `حجم: <code>${escapeHtml(trafficTextFa(purchase.gig))}</code>`,
     `مدت: <code>${escapeHtml(durationLabel(Number(purchase.days)))}</code>`,
     `مبلغ سفارش: <code>${Number(purchase.amount).toLocaleString("en-US")} تومان</code>`,
     `وضعیت: ${STATUS_LABELS[purchase.status] || escapeHtml(purchase.status)}`,
   ];
   if (awaiting) {
-    lines.push("ℹ️ موجودی کیف پول WizardXray از طریق ربات قابل بررسی نیست؛ پس از شارژ، «تأیید» را بزنید. اگر هنوز ناکافی باشد سفارش رزرو می‌ماند.");
+    lines.push("ℹ️ موجودی کیف پول WizardXray را در پنل وب (سرویس‌ها ← ارائه‌دهنده) ببینید؛ پس از شارژ، «تأیید» را بزنید. اگر هنوز ناکافی باشد سفارش رزرو می‌ماند.");
   }
   if (purchase.status === "completed" && purchase.notificationPending) {
     lines.push("ℹ️ سرویس ساخته شده؛ ارسال به کاربر در صف تلاش مجدد است.");

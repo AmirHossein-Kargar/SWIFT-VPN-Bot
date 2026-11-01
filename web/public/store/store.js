@@ -159,7 +159,7 @@
     var grid = $("#plan-grid");
     var plans = state.catalog.plans
       .filter(function (plan) { return plan.days === state.duration; })
-      .sort(function (a, b) { return a.gig - b.gig; });
+      .sort(function (a, b) { return (a.gig === 0 ? Infinity : a.gig) - (b.gig === 0 ? Infinity : b.gig); });
     grid.setAttribute("aria-busy", "false");
     if (!plans.length) {
       grid.innerHTML = "";
@@ -170,7 +170,7 @@
     grid.innerHTML = plans.map(function (plan, index) {
       var perGb = plan.gig > 0 ? Math.round(plan.price / plan.gig) : null;
       return '<article class="plan-card" style="animation-delay:' + Math.min(index * 40, 240) + 'ms">' +
-        '<div class="plan-volume">' + toman(plan.gig) + "<small>گیگابایت</small></div>" +
+        '<div class="plan-volume">' + (plan.gig === 0 ? "نامحدود" : toman(plan.gig) + "<small>گیگابایت</small>") + "</div>" +
         '<div class="plan-duration">' + esc(durationTitle(plan.days)) + " · " + toman(plan.days) + " روز</div>" +
         '<div class="plan-price">' + toman(plan.price) + "<small>تومان</small></div>" +
         '<div class="plan-unit">' + (perGb ? "هر گیگابایت حدود " + toman(perGb) + " تومان" : "") + "</div>" +
@@ -180,7 +180,7 @@
           "<li>" + icon("check") + " تحویل خودکار در تلگرام</li>" +
         "</ul>" +
         '<button type="button" class="btn btn-primary btn-block" data-plan="' + esc(plan.id) + '" aria-label="انتخاب پلن ' +
-          esc(toman(plan.gig) + " گیگابایت " + durationTitle(plan.days)) + '">انتخاب این پلن</button>' +
+          esc((plan.gig === 0 ? "نامحدود" : toman(plan.gig) + " گیگابایت") + " " + durationTitle(plan.days)) + '">انتخاب این پلن</button>' +
         "</article>";
     }).join("");
   }
@@ -221,7 +221,7 @@
   // ── Review sheet (dialog) ──────────────────────────────────────────────────
   function summaryHtml(plan) {
     return '<dl class="summary">' +
-      "<div><dt>پلن</dt><dd>" + esc(toman(plan.gig) + " گیگابایت") + "</dd></div>" +
+      "<div><dt>پلن</dt><dd>" + esc(plan.gig === 0 ? "حجم نامحدود" : toman(plan.gig) + " گیگابایت") + "</dd></div>" +
       "<div><dt>مدت</dt><dd>" + esc(durationTitle(plan.days) + " (" + toman(plan.days) + " روز)") + "</dd></div>" +
       "<div><dt>حداکثر اتصال</dt><dd>نامحدود</dd></div>" +
       '<div class="total"><dt>مبلغ قابل پرداخت</dt><dd>' + toman(plan.price) + " تومان</dd></div>" +

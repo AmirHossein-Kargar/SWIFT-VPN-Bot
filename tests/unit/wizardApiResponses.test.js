@@ -22,7 +22,7 @@ import { makeFakeWalletModels } from "../helpers/fakeWalletModels.js";
 process.env.ADMINS = "9001";
 process.env.GROUP_ID = "-100777";
 
-const { createVpnService, StatusApi, WizardApiError, WIZARD_REJECTION_CODES } = await import("../../api/wizardApi.js");
+const { createVpnService, StatusApi, WizardApiError, WIZARD_REJECTION_CODES, setWizardTimeoutsForTests } = await import("../../api/wizardApi.js");
 const { purchasePlan } = await import("../../services/buyService/purchaseService.js");
 const { getCustomerPlans } = await import("../../services/plans.js");
 const { setSessionClientForTests, clearSessionClientForTests, setSession } = await import("../../config/sessionStore.js");
@@ -112,7 +112,7 @@ before(async () => {
     seen.push(`${req.method} ${req.url}`);
     if (req.url === "/follow-ok") return json(res, 200, { ok: true, result: VALID });
     if (req.url === "/follow-reject") return json(res, 200, { ok: false, error: "rejected", http_code: 400 });
-    if (mode === "hang") return; // never answers: the client's own 15 s timeout fires
+    if (mode === "hang") return; // never answers: the client's own timeout fires
     const entry = CASES[mode];
     return entry ? entry[0](res) : json(res, 500, "unknown mode");
   });
@@ -166,7 +166,7 @@ describe("client classification over a real HTTP exchange", () => {
   }
 
   test("input validation fails before any request and stays a plain TypeError", async () => {
-    await assert.rejects(() => createVpnService(0, 30, 0), (error) => error instanceof TypeError && !(error instanceof WizardApiError));
+    await assert.rejects(() => createVpnService(0.1, 30, 0), (error) => error instanceof TypeError && !(error instanceof WizardApiError));
     await assert.rejects(() => createVpnService(5, 0, 0), TypeError);
     await assert.rejects(() => createVpnService(5, 30, 7), TypeError);
     assert.deepEqual(seen, []);
@@ -178,8 +178,10 @@ describe("client classification over a real HTTP exchange", () => {
     assert.ok(!seen.includes("GET /follow-ok"));
   });
 
-  test("a request that gets no answer times out as ambiguous (15 s client timeout), for the client, a customer and an admin purchase", async () => {
+  test("a request that gets no answer times out as ambiguous, for the client, a customer and an admin purchase", async (t) => {
     mode = "hang";
+    setWizardTimeoutsForTests({ mutation: 150 });
+    t.after(() => setWizardTimeoutsForTests(null));
     const plan = getCustomerPlans()[0];
     const models = makeFakeWalletModels([{ telegramId: "8801", balance: 500_000 }]);
     const admin = adminHarness();

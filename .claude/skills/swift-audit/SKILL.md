@@ -21,7 +21,7 @@ is the audit procedure and the inventory it checks against.
 | Money Flow Sentinel | `/api/admin/sentinel/*`, `services/sentinel/` | Read-only over money collections (`readOnly.js`); writes only `SentinelFinding` and its checkpoint; no provider or money module imported; mutations audited; "resolved" refused while a problem reproduces |
 | Customer support portal | `/api/support` (`web/supportRouter.js`), `/panel/support` | Customer session scoped to own tickets and attachments |
 | Public storefront API | `/api/store` (`web/storeRouter.js`): `/catalog`, `/plans/:planId` | Read-only, no customer data, strict CSP on the page |
-| Outbound providers | `api/wizardApi.js`, `services/hooshpay/`, `services/nowpayments/`, `services/pricing/` | Timeouts; ambiguous results never replayed; no secrets in logs |
+| Outbound providers | `api/wizardApi.js`, `api/wizardErrors.js`, `services/hooshpay/`, `services/nowpayments/`, `services/pricing/` | Timeouts; ambiguous results never replayed; a blank value never becomes `gig = 0`; no secrets in logs |
 | NOWPayments custody and payouts (optional) | `services/admin/custody.js` | Credentials only from env; admin-only; audited |
 | Datastores | MongoDB, Redis | MongoDB authoritative for money; Redis never trusted for balances |
 

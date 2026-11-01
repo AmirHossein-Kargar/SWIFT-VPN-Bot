@@ -331,7 +331,7 @@ async function screenVpnDetail(bot, chatId, messageId, session, rowIndex) {
     `📦 محصول: ${esc(data.product || "—")}\n` +
     `📅 ایجاد: ${when(data.createdAt)}\n` +
     `⏳ انقضا: ${when(data.expiresAt)}${data.panelExpiry ? ` (پنل: ${esc(data.panelExpiry)})` : ""}\n` +
-    `📦 حجم: ${data.trafficGb != null ? num(data.trafficGb) + " گیگابایت" : "—"} (مصرف: ${esc(data.trafficUsed || "—")})\n` +
+    `📦 حجم: ${data.unlimited ? "نامحدود ♾" : data.trafficGb != null ? num(data.trafficGb) + " گیگابایت" : "—"} (مصرف: ${esc(data.trafficUsed || "—")})\n` +
     `📊 WizardXray: ${data.wizardXray.status === "connected" ? "🟢" : "🔴"} ${esc(data.wizardXray.status)}${data.wizardXray.latencyMs != null ? ` · ${data.wizardXray.latencyMs}ms` : ""}\n` +
     `📌 وضعیت: <b>${esc(data.status)}</b>`;
   const keyboard = { inline_keyboard: [
@@ -356,7 +356,7 @@ async function screenProducts(bot, chatId, messageId, page = 1) {
     (slice.length
       ? slice.map((product, index) => {
           const globalIndex = (safePage - 1) * pageSize + index;
-          return `${globalIndex + 1}. <b>${esc(product.name)}</b>\n    ${num(product.durationDays)} روز · ${num(product.trafficGb)} گیگ · ${money(product.priceToman)} · ${product.enabled ? "🟢 فعال" : "⚪️ غیرفعال"}`;
+          return `${globalIndex + 1}. <b>${esc(product.name)}</b>\n    ${num(product.durationDays)} روز · ${product.unlimited ? "نامحدود ♾" : `${num(product.trafficGb)} گیگ`} · ${money(product.priceToman)} · ${product.enabled ? "🟢 فعال" : "⚪️ غیرفعال"}`;
         }).join("\n")
       : "محصولی ثبت نشده است.");
   const pager = [];
@@ -381,7 +381,7 @@ async function screenProductDetail(bot, chatId, messageId, session, rowIndex) {
     `📛 نام: <b>${esc(product.name)}</b>\n` +
     `🆔 شناسه: <code>${esc(product.id)}</code>\n` +
     `📅 مدت: ${num(product.durationDays)} روز\n` +
-    `📦 حجم: ${num(product.trafficGb)} گیگابایت\n` +
+    `📦 حجم: ${product.unlimited ? "نامحدود ♾" : `${num(product.trafficGb)} گیگابایت`}\n` +
     `💰 قیمت: <b>${money(product.priceToman)}</b>\n` +
     `💸 هزینه: ${money(product.costToman)}\n` +
     `📈 سود: <b>${money(product.profitToman)}</b>\n` +

@@ -1,5 +1,7 @@
 import { escapeErrorMessage } from "../../utils/escapeHtml.js";
-import { createVpnService, StatusApi, WizardApiError, WIZARD_REJECTION_CODES } from "../../api/wizardApi.js";
+import { createVpnService, StatusApi, WizardApiError, WIZARD_REJECTION_CODES, UNLIMITED_GIG } from "../../api/wizardApi.js";
+import { getProviderAccount, invalidateProviderAccount } from "../../services/wizardAccount.js";
+import { subscriptionLink } from "../../services/subscriptionLink.js";
 import { getSession, setSession } from "../../config/sessionStore.js";
 import { isAdmin } from "../../utils/auth.js";
 import { adminOwnerFields, canContinueAdminStep, isActiveForeignAdminPrompt, API_PURCHASE_IN_PROGRESS } from "../../utils/adminStepSession.js";
@@ -76,14 +78,18 @@ const apiServicePurchase = async (bot, query, session) => {
     }
 
     const { per_gb, per_day } = statusData.result;
+    const account = await getProviderAccount({ maxAgeMs: 0 });
+    const unlimitedPerDay = account?.limits.unlimitedEnabled ? account.prices.unlimitedPerDay : null;
 
     const message =
       `🛒 <b>خرید سرویس از API</b>\n\n` +
       `💰 <b>قیمت‌های فعلی:</b>\n` +
       `• هر گیگ: <code>${per_gb.toLocaleString()}</code> تومان\n` +
-      `• هر روز: <code>${per_day.toLocaleString()}</code> تومان\n\n` +
-      `📝 <b>لطفاً مشخصات سرویس را وارد کنید:</b>\n\n` +
-      `برای شروع، تعداد گیگ مورد نیاز را ارسال کنید (مثال: 10)`;
+      `• هر روز: <code>${per_day.toLocaleString()}</code> تومان\n` +
+      (unlimitedPerDay ? `• هر روز نامحدود: <code>${unlimitedPerDay.toLocaleString()}</code> تومان\n` : "") +
+      `\n📝 <b>لطفاً مشخصات سرویس را وارد کنید:</b>\n\n` +
+      `برای شروع، تعداد گیگ مورد نیاز را ارسال کنید (مثال: 10)` +
+      (unlimitedPerDay ? `\nبرای سرویس نامحدود عدد 0 را بفرستید.` : "");
 
     await bot.editMessageText(message, {
       chat_id: chatId,
@@ -104,6 +110,7 @@ const apiServicePurchase = async (bot, query, session) => {
       step: "waiting_for_api_gig",
       per_gb,
       per_day,
+      unlimitedPerDay,
       messageId,
       ...adminOwnerFields(userId),
     });
@@ -127,15 +134,20 @@ const handleApiGigInput = async (bot, msg, session) => {
   if (!canContinueAdminStep({ session, chatId, userId: msg.from?.id })) return;
   const gigText = msg.text?.trim();
   const messageId = session.messageId;
+  const retry = { reply_markup: { inline_keyboard: [[{ text: "❌ لغو", callback_data: "admin_cancel_api_purchase" }]] } };
 
-  if (!gigText || isNaN(gigText) || parseInt(gigText) <= 0) {
-    await editOrSend(bot, chatId, messageId, "❌ لطفاً یک عدد معتبر برای گیگ وارد کنید (مثال: 10)", {
-      reply_markup: { inline_keyboard: [[{ text: "❌ لغو", callback_data: "admin_cancel_api_purchase" }]] },
-    });
+  // Provider rules: at least 0.5 GB with two decimals at most, and exactly 0 for unlimited. Nothing is rounded silently.
+  const gig = /^\d+(\.\d{1,2})?$/.test(gigText || "") ? Number(gigText) : Number.NaN;
+  const unlimited = gig === UNLIMITED_GIG;
+  if (!Number.isFinite(gig) || (!unlimited && (gig < 0.5 || gig > 10_000))) {
+    await editOrSend(bot, chatId, messageId, "❌ لطفاً یک عدد معتبر برای گیگ وارد کنید (مثال: 10)", retry);
+    return;
+  }
+  if (unlimited && !session.unlimitedPerDay) {
+    await editOrSend(bot, chatId, messageId, "❌ سرویس نامحدود برای این حساب فعال نیست. تعداد گیگ را وارد کنید.", retry);
     return;
   }
 
-  const gig = parseInt(gigText);
   const per_gb = session.per_gb;
   const per_day = session.per_day;
 
@@ -143,8 +155,9 @@ const handleApiGigInput = async (bot, msg, session) => {
 
   const message =
     `📊 <b>مشخصات سرویس:</b>\n\n` +
-    `💾 حجم: <code>${gig}</code> گیگ\n` +
-    `💰 قیمت حجم: <code>${gigPrice.toLocaleString()}</code> تومان\n\n` +
+    (unlimited
+      ? `💾 حجم: <code>نامحدود ♾</code>\n💰 قیمت هر روز: <code>${session.unlimitedPerDay.toLocaleString()}</code> تومان\n\n`
+      : `💾 حجم: <code>${gig}</code> گیگ\n💰 قیمت حجم: <code>${gigPrice.toLocaleString()}</code> تومان\n\n`) +
     `📝 حالا تعداد روز مورد نیاز را وارد کنید (مثال: 30)`;
 
   try {
@@ -167,6 +180,7 @@ const handleApiGigInput = async (bot, msg, session) => {
       step: "waiting_for_api_days",
       per_gb,
       per_day,
+      unlimitedPerDay: session.unlimitedPerDay ?? null,
       gig,
       gigPrice,
       messageId,
@@ -188,25 +202,26 @@ const handleApiDaysInput = async (bot, msg, session) => {
   const daysText = msg.text?.trim();
   const messageId = session.messageId;
 
-  if (!daysText || isNaN(daysText) || parseInt(daysText) <= 0) {
+  const days = /^\d+$/.test(daysText || "") ? Number(daysText) : Number.NaN;
+  if (!Number.isSafeInteger(days) || days < 1 || days > 3650) {
     await editOrSend(bot, chatId, messageId, "❌ لطفاً یک عدد معتبر برای روز وارد کنید (مثال: 30)", {
       reply_markup: { inline_keyboard: [[{ text: "❌ لغو", callback_data: "admin_cancel_api_purchase" }]] },
     });
     return;
   }
 
-  const days = parseInt(daysText);
-  const { per_gb, per_day, gig, gigPrice } = session;
+  const { per_gb, per_day, unlimitedPerDay, gig, gigPrice } = session;
+  const unlimited = gig === UNLIMITED_GIG;
 
-  const daysPrice = days * per_day;
+  const daysPrice = days * (unlimited ? unlimitedPerDay : per_day);
   const totalPrice = gigPrice + daysPrice;
 
   const message =
     `📋 <b>خلاصه سفارش:</b>\n\n` +
-    `💾 حجم: <code>${gig}</code> گیگ\n` +
+    `💾 حجم: <code>${unlimited ? "نامحدود ♾" : `${gig} گیگ`}</code>\n` +
     `📅 مدت: <code>${days}</code> روز\n\n` +
     `💰 <b>محاسبه قیمت:</b>\n` +
-    `• قیمت حجم: <code>${gigPrice.toLocaleString()}</code> تومان\n` +
+    (unlimited ? "" : `• قیمت حجم: <code>${gigPrice.toLocaleString()}</code> تومان\n`) +
     `• قیمت زمان: <code>${daysPrice.toLocaleString()}</code> تومان\n` +
     `• <b>مجموع: <code>${totalPrice.toLocaleString()}</code> تومان</b>\n\n` +
     `✅ آیا می‌خواهید این سرویس را ایجاد کنید؟`;
@@ -351,8 +366,7 @@ async function showUnresolvedNotice(bot, query, { chatId, messageId, unresolved 
 
 async function deliverCreatedService(bot, chatId, result) {
   const username = result.username || "نامشخص";
-  const hash = result.hash;
-  const smartLink = hash ? `https://iranisystem.com/bot/sub/?hash=${hash}` : "";
+  const smartLink = subscriptionLink({ link: result.sub_link, hash: result.hash }) || "";
   const singleLink =
     Array.isArray(result.tak_links) && result.tak_links.length > 0
       ? result.tak_links[0]
@@ -375,18 +389,8 @@ async function deliverCreatedService(bot, chatId, result) {
     `📌 برای کپی لینک، روی آن لمس طولانی کنید یا راست‌ کلیک کنید.\n\n` +
     `⚠️ این سرویس از نوع Subscription است. برای اتصال، از راهنمای زیر استفاده کنید.`;
 
-  const reply_markup = {
-    inline_keyboard: [
-      [
-        { text: "📱 راهنمای اتصال", callback_data: "admin_show_connection_guide" },
-        { text: "🔄 تغییر لینک", callback_data: `admin_change_link_${username}` },
-      ],
-      [
-        { text: "❌ حذف سرویس", callback_data: `admin_delete_service_${username}` },
-        { text: "🏠 بازگشت", callback_data: "admin_panel" },
-      ],
-    ],
-  };
+  // This service belongs to no customer, so only the panel's Remote clients list and WizardXray itself can manage it.
+  const reply_markup = { inline_keyboard: [[{ text: "🏠 بازگشت", callback_data: "admin_panel" }]] };
 
   // The service already exists and is paid for: a delivery problem must never read as a failed purchase.
   try {
@@ -426,9 +430,10 @@ const createApiService = async (bot, query, session) => {
     // The passed session may be stale; only the stored one decides, and it must be the same confirmation.
     const stored = await getSession(chatId);
     if (!mayConfirm(stored) || stored.purchaseId !== session.purchaseId) return;
-    const gig = Number(stored.gig);
+    // Number(null) is 0, which is unlimited to the provider: only a stored number may reach it.
+    const gig = typeof stored.gig === "number" ? stored.gig : Number.NaN;
     const days = Number(stored.days);
-    if (!Number.isFinite(gig) || gig <= 0 || !Number.isSafeInteger(days) || days < 1) return;
+    if (!Number.isFinite(gig) || gig < 0 || !Number.isSafeInteger(days) || days < 1) return;
     const purchaseId = stored.purchaseId;
 
     // An unsettled earlier purchase blocks this one. If the ledger cannot be read, nothing is bought.
@@ -493,6 +498,7 @@ const createApiService = async (bot, query, session) => {
             run.kind = "uncertain";
             throw new AdminServiceError("The provider outcome is unknown.", { status: 502, code: API_PURCHASE_UNKNOWN_CODE });
           }
+          invalidateProviderAccount();
           run.kind = "created";
           run.result = response.result;
           return { ok: true, auditSummary: { username: response.result.username } };

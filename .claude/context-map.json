@@ -40,11 +40,18 @@
         "services/trxWalletScanner.js",
         "services/createTestService.js",
         "services/manualFulfillment.js",
+        "services/manageServices/**",
+        "services/plans.js",
+        "services/subscriptionLink.js",
+        "services/wizardAccount.js",
+        "services/wizardServiceStatus.js",
+        "utils/serviceTerms.js",
         "paymentHandlers/**",
         "api/**",
         "handlers/reservedOrderCallbacks.js"
       ],
       "review": [
+        "docs/wizardxray.md",
         "docs/payments.md",
         "docs/reserved-orders.md",
         ".claude/rules/money-paths.md",
@@ -67,6 +74,7 @@
         "services/redisLease.js"
       ],
       "review": [
+        "docs/wizardxray.md",
         "docs/payments.md",
         "docs/operations.md",
         ".claude/rules/money-paths.md",

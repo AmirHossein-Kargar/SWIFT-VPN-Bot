@@ -3,9 +3,10 @@ import express from "express";
 import { ADMIN_SESSION_COOKIE, issueAdminLoginCode, consumeAdminLoginCode, createAdminSession, deleteAdminSession } from "../services/admin/auth.js";
 import { AdminServiceError, assertAdminUser } from "../services/admin/authorization.js";
 import { runAuditedAction } from "../services/admin/audit.js";
-import { getDashboardMetrics } from "../services/admin/dashboard.js";
+import { getDashboardMetrics, getDashboardPulse } from "../services/admin/dashboard.js";
+import { readSnapshot } from "../services/reliability/queries.js";
 import { listUsers, getUserDetail, changeUserBalance, setUserBlocked, getReferralOverview, resetTestServiceEligibility } from "../services/admin/users.js";
-import { listVpns, getVpnDetail, performVpnAction, listRemoteClients } from "../services/admin/vpns.js";
+import { listVpns, getVpnDetail, performVpnAction, listRemoteClients, findProviderCandidates, getProviderOverview, getProviderQuote } from "../services/admin/vpns.js";
 import { listProductsPage, createProduct, updateProduct, duplicateProduct, reorderProducts, moveProduct, archiveProduct, restoreProduct, deleteProduct } from "../services/admin/products.js";
 import { releaseCreationUnknownLock } from "../services/admin/creationUnknown.js";
 import { listPayments, getPaymentDetail, retryPayment, markPaymentRecoveryRequired, resolvePaymentRecovery, confirmBankInvoice, rejectBankInvoice } from "../services/admin/payments.js";
@@ -260,6 +261,11 @@ router.get("/dashboard", async (req, res, next) => {
   catch (error) { next(error); }
 });
 
+router.get("/dashboard/pulse", async (req, res, next) => {
+  try { res.json({ ok: true, data: await getDashboardPulse({ actorId: req.adminActorId, readHealth: readSnapshot }) }); }
+  catch (error) { next(error); }
+});
+
 // Users
 router.get("/users", async (req, res, next) => {
   try {
@@ -384,7 +390,23 @@ router.get("/vpns", async (req, res, next) => {
 });
 
 router.get("/vpns-remote/clients", async (req, res, next) => {
-  try { res.json({ ok: true, data: await listRemoteClients({ actorId: req.adminActorId, limit: req.query.limit }) }); }
+  try { res.json({ ok: true, data: await listRemoteClients({ actorId: req.adminActorId, page: req.query.page, pageSize: req.query.pageSize }) }); }
+  catch (error) { next(error); }
+});
+
+// The provider account (documented `me`, `get_hosts`, `price`, `clients`). All reads: nothing here moves money.
+router.get("/provider/account", async (req, res, next) => {
+  try { res.json({ ok: true, data: await getProviderOverview({ actorId: req.adminActorId }) }); }
+  catch (error) { next(error); }
+});
+
+router.get("/provider/quote", async (req, res, next) => {
+  try { res.json({ ok: true, data: await getProviderQuote({ actorId: req.adminActorId, gig: req.query.gig, days: req.query.days, unlimited: req.query.unlimited === "1" }) }); }
+  catch (error) { next(error); }
+});
+
+router.get("/provider/candidates/:purchaseId", async (req, res, next) => {
+  try { res.json({ ok: true, data: await findProviderCandidates({ actorId: req.adminActorId, purchaseId: req.params.purchaseId }) }); }
   catch (error) { next(error); }
 });
 
@@ -403,6 +425,7 @@ router.post("/vpns/:username/actions", requireBody(), async (req, res, next) => 
       reason: req.body.reason,
       days: req.body.days,
       gig: req.body.gig,
+      unlimited: req.body.unlimited,
       ipAddress: clientIp(req),
     });
     res.json({ ok: true, data: result });

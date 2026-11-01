@@ -303,7 +303,7 @@ api.post("/custody/payouts/:batch/verify", json, guard((req, res) => { calls.ver
 api.get("/vpns", guard((req, res) => ok(res, { items: [], page: 1, pages: 1, pageSize: 25, total: 0 })));
 api.get("/vpns-remote/clients", guard((req, res) => {
   if (remoteFails) throw new (await_import_AdminServiceError())("The VPN provider did not answer.", { status: 502, code: "wizard_api_failed" });
-  ok(res, { source: "wizardxray", fetchedAt: NOW.toISOString(), count: 2, items: [{ username: "client_alpha_0123456789abcdef0123456789abcdef", status: "active", traffic: 5, knownLocally: true }, { username: "orphan_client", status: "expired", knownLocally: false }] });
+  ok(res, { source: "wizardxray", fetchedAt: NOW.toISOString(), page: 1, pageSize: 50, total: 2, pages: 1, count: 2, items: [{ username: "client_alpha_0123456789abcdef0123456789abcdef", status: "active", test: false, unlimited: false, trafficGb: 5, usedGb: 1, knownLocally: true }, { username: "orphan_client", status: "expired", knownLocally: false }] });
 }));
 
 api.get("/tickets", guard(async (req, res) => ok(res, await adminTickets.listSupportTickets({ actorId: actor(req), status: req.query.status, query: req.query.q, unreadOnly: req.query.unread, page: req.query.page, pageSize: req.query.pageSize }))));
@@ -1480,17 +1480,29 @@ await step("plan form: schema messages, coerced numbers, no request while invali
   assert.equal(calls.product.length, 0, "an invalid form sends nothing");
 
   await dialog.getByLabel("Name", { exact: true }).fill("x".repeat(121));
-  await dialog.getByLabel("Traffic (GB)").fill("100001");
+  await dialog.getByLabel("Traffic (GB)").fill("10001");
   await dialog.getByLabel("Price (Toman)").fill("2000000001");
   await dialog.getByLabel("Cost (Toman)").fill("-1");
   await dialog.getByLabel("ID (optional)").fill("Bad Id");
   await dialog.getByRole("button", { name: "Add service" }).click();
   await dialog.getByText("Cost cannot be negative").waitFor();
   assert.deepEqual((await formMessages(dialog)).sort(), [
-    "Cost cannot be negative", "Must be at most 100,000 GB", "Name must be at most 120 characters", "Price is too large",
+    "Cost cannot be negative", "Must be at most 10,000 GB", "Name must be at most 120 characters", "Price is too large",
     "Use 3–32 lowercase letters, digits or _, starting with a letter",
   ].sort());
   assert.equal(calls.product.length, 0);
+
+  // A cleared field must stay an error. Coerced, it would be 0, which is an unlimited product.
+  await dialog.getByLabel("Traffic (GB)").fill("");
+  await dialog.getByRole("button", { name: "Add service" }).click();
+  await dialog.getByText("Enter the traffic in GB").waitFor();
+  assert.equal(calls.product.length, 0);
+  // Unlimited is its own switch: it locks the field to 0 and the review says what it means.
+  await dialog.getByLabel("Unlimited traffic").click();
+  assert.equal(await dialog.getByLabel("Traffic (GB)").isDisabled(), true);
+  await dialog.getByText(/still ends after the plan/).waitFor();
+  await dialog.getByLabel("Unlimited traffic").click();
+  await dialog.getByLabel("Traffic (GB)").fill("10001");
 
   // Duration is a select limited to the bot's four subscription lengths, so it cannot be invalid.
   await dialog.getByLabel("Duration").click();
