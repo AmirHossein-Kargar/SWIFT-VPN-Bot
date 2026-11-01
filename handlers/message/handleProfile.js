@@ -16,7 +16,6 @@ import { renderInterface } from "../../services/messaging/messageManager.js";
 
 moment.loadPersian({ usePersianDigits: false, dialect: "persian-modern" });
 
-const EMPTY_RECENT_ORDERS = "▫️ هنوز سفارشی برای نمایش وجود ندارد.";
 const RECENT_ORDER_LIMIT = 5;
 // Per-provider over-fetch so collapsing duplicate pending rows can still fill the list.
 const PROVIDER_FETCH_LIMIT = 10;
@@ -46,7 +45,7 @@ export function formatJalaliDate(value) {
   return toPersianDigits(moment(date).format("jYYYY/jMM/jDD"));
 }
 
-/** Persian payment-status summary for the profile's recent-orders list. */
+/** Persian payment-status summary for a recent-orders list. */
 export function paymentStatusFa(provider, record) {
   if (record.recoveryStatus === "required") return "🔔 در حال بررسی";
   const status = normalizePaymentStatus(provider, record.status);
@@ -81,6 +80,9 @@ function orderKey(provider, record) {
  * abandoned rows are never fetched; the in-memory pass below only repeats the
  * same policy for stores that ignore the predicate and collapses duplicates.
  * Historical records are untouched.
+ *
+ * No caller since the profile message dropped its recent-orders section; kept
+ * with its tests.
  */
 export async function loadRecentProfileOrders(userId, {
   hooshModel = HooshPayInvoice,
@@ -128,39 +130,26 @@ export async function loadRecentProfileOrders(userId, {
   return result;
 }
 
-function paymentAmount(provider, record) {
-  return provider === "nowpayments" ? Number(record.amountToman || 0) : Number(record.amount || 0);
-}
-
-/** Pure renderer so the layout can be tested without Telegram or MongoDB. */
-export function renderProfileMessage({ user, activeServices, orders }) {
-  const displayName = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
-  const orderLines = orders.map(({ provider, label, record }) =>
-    `${paymentStatusFa(provider, record)} · ${formatToman(paymentAmount(provider, record))}\n`
-    + `     ${label} · ${formatJalaliDate(record.createdAt)}`);
-
+/**
+ * Pure renderer so the layout can be tested without Telegram or MongoDB. Every
+ * value shares a line with its Persian label: a line holding only a Latin code
+ * or a bare date would lose the message's right-to-left alignment.
+ */
+export function renderProfileMessage({ user }) {
   return [
     "👤 <b>پروفایل من</b>",
     SEPARATOR,
     "",
-    "🪪 <b>اطلاعات حساب</b>",
-    `▫️ نام: ${displayName ? `<b>${escapeHtml(displayName)}</b>` : "ثبت نشده"}`,
-    `▫️ شناسه کاربری: <code>${escapeHtml(user.telegramId)}</code>`,
-    `▫️ نام کاربری: ${user.username ? `@${escapeHtml(user.username)}` : "ثبت نشده"}`,
-    `▫️ تاریخ عضویت: ${formatJalaliDate(user.createdAt)}`,
-    "",
-    "💰 <b>کیف پول</b>",
-    `▫️ موجودی: <b>${formatToman(user.balance)}</b>`,
-    "",
-    "📦 <b>سرویس‌های من</b>",
-    `▫️ سرویس‌های فعال: <b>${toPersianDigits(activeServices)}</b>`,
-    `▫️ پرداخت‌های موفق: <b>${toPersianDigits(user.successfulPayments || 0)}</b>`,
+    `💰 موجودی کیف پول: <b>${formatToman(user.balance)}</b>`,
+    `📅 تاریخ عضویت: <b>${formatJalaliDate(user.createdAt)}</b>`,
     ...(user.referralCode
-      ? ["", "🎁 <b>دعوت از دوستان</b>", `▫️ کد معرف: <code>${escapeHtml(user.referralCode)}</code> (برای کپی لمس کنید)`]
+      ? [
+        "",
+        "🎁 <b>دعوت از دوستان</b>",
+        `کد معرف شما: <code>${escapeHtml(user.referralCode)}</code>`,
+        "<i>برای کپی، روی کد بزنید.</i>",
+      ]
       : []),
-    "",
-    "🧾 <b>آخرین سفارش‌ها</b>",
-    ...(orderLines.length ? orderLines : [EMPTY_RECENT_ORDERS]),
   ].join("\n");
 }
 
@@ -177,17 +166,7 @@ const handleProfile = async (bot, chatId, userId, dependencies = {}) => {
       return;
     }
 
-    // Active services = not revoked and (no expiry known OR expiry in future).
-    const now = Date.now();
-    const services = Array.isArray(user.services) ? user.services : [];
-    const activeServices = services.filter((service) => {
-      if (service.revokedAt) return false;
-      if (!service.expiresAt) return true;
-      return new Date(service.expiresAt).getTime() > now;
-    }).length;
-
-    const orders = await loadRecentProfileOrders(userId, dependencies);
-    const message = renderProfileMessage({ user, activeServices, orders });
+    const message = renderProfileMessage({ user });
 
     const reply_markup = {
       reply_markup: {
@@ -223,5 +202,4 @@ const handleProfile = async (bot, chatId, userId, dependencies = {}) => {
   }
 };
 
-export { EMPTY_RECENT_ORDERS };
 export default handleProfile;
