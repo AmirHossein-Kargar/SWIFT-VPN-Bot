@@ -104,6 +104,26 @@ export async function verifyInvoice(uid) {
   return body;
 }
 
+/**
+ * A health check, not traffic, so it stays out of the provider series: a green probe must not read as customers paying.
+ * `GET /balance` is the documented read that needs the API key, so it proves reachability and the key together. The reference
+ * gives no response shape, so `success` is all that is relied on. Nothing is read from the body.
+ */
+export async function probeHooshPay() {
+  const client = createHooshPayClient();
+  try {
+    const response = await client.get("/balance");
+    return { reachable: true, authorized: true, recognized: response.data?.success === true };
+  } catch (error) {
+    const status = Number.isInteger(error?.response?.status) ? error.response.status : null;
+    if (status === 401 || status === 403) return { reachable: true, authorized: false, recognized: false };
+    // Any other 4xx is the service answering, so it is up. This path has not been tried against the live API, and a wrong path
+    // must read as something to look at, not as an outage.
+    if (status >= 400 && status < 500 && status !== 408) return { reachable: true, authorized: true, recognized: false };
+    throw new HooshPayApiError("health check", { status: status ?? undefined, code: typeof error?.code === "string" ? error.code : undefined, ambiguous: true });
+  }
+}
+
 export async function cancelInvoice(uid) {
   if (typeof uid !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(uid)) throw new TypeError("Invalid HooshPay invoice UID");
   return unwrap(await request("invoice cancellation", "POST", `/invoices/${encodeURIComponent(uid)}/cancel`), "invoice cancellation");

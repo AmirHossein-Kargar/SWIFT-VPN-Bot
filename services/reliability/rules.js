@@ -22,6 +22,9 @@ const DEPENDENCY = [
   { id: "telegram", label: "Telegram Bot API", severity: "critical", impact: "Customers cannot reach the bot, and deliveries wait in the outbox." },
   { id: "wizardxray", label: "WizardXray", severity: "high", impact: "New orders cannot be provisioned." },
   { id: "express", label: "Express app", severity: "critical", impact: "Webhooks and this panel depend on it." },
+  { id: "hooshpay", label: "HooshPay", severity: "high", impact: "Customers may not be able to top up, and payment checks cannot complete." },
+  { id: "nowpayments", label: "NOWPayments", severity: "high", impact: "Customers may not be able to top up with crypto." },
+  { id: "webhook", label: "Webhook path", severity: "high", impact: "A real provider callback would fail the same way, so credits would wait for recovery." },
 ];
 
 function dependencyConditions({ probes, components, conditions, unevaluated }) {
@@ -58,7 +61,8 @@ function pollingConditions({ polling, conditions, unevaluated }) {
   }
 }
 
-function webhookConditions({ recent, providers, conditions, unevaluated }) {
+function webhookConditions({ recent, providers, components, conditions, unevaluated }) {
+  const pathProven = components.find((item) => item.id === "webhook")?.state === "healthy";
   const missing = providers.filter((item) => item.configured && !item.secretConfigured);
   for (const provider of missing) {
     conditions.push(condition({ code: "WEBHOOK_SECRET_MISSING", subject: provider.id, group: "webhook:config", component: "webhook", severity: "high", title: `${provider.label} webhook secret is missing`, summary: "Fail closed: every callback from this provider is being refused until the secret is set.", evidence: [{ label: "Secret configured", value: "No", source: "Environment" }] }));
@@ -66,14 +70,15 @@ function webhookConditions({ recent, providers, conditions, unevaluated }) {
   for (const provider of ["hooshpay", "nowpayments"]) {
     const series = sumSeries(recent, [`webhook.${provider}`]);
     const evidence = [{ label: "Answered 5xx in 15 min", value: String(series.err), source: "Webhook route" }, { label: "Accepted in 15 min", value: String(series.ok), source: "Webhook route" }];
-    // Failures stopping because callbacks stopped is not recovery. Only an answered callback can clear this.
-    if (series.n === 0) unevaluated.push(`webhook:${provider}`);
+    // Failures stopping because callbacks stopped is not recovery. Only an answered callback can clear this, or a signed test
+    // callback through the same route, which is evidence of the path and not an absence of traffic.
+    if (series.n === 0 && !pathProven) unevaluated.push(`webhook:${provider}`);
     if (series.err >= MIN_FAILURES) conditions.push(condition({ code: "WEBHOOK_FAILURES", subject: provider, group: `webhook:${provider}`, component: "webhook", severity: "high", title: `${provider === "hooshpay" ? "HooshPay" : "NOWPayments"} callbacks are failing`, summary: "Our handler answered 5xx, so the gateway will retry. A credit may be delayed.", evidence }));
     if (series.rej >= REJECTED_BURST) conditions.push(condition({ code: "WEBHOOK_REJECTED_BURST", subject: provider, group: "webhook:traffic", component: "webhook", severity: "medium", title: `Burst of rejected ${provider === "hooshpay" ? "HooshPay" : "NOWPayments"} callbacks`, summary: "Unsigned, forged or mismatched callbacks. Nothing was credited.", evidence: [{ label: "Rejected in 15 min", value: String(series.rej), source: "Webhook route" }] }));
   }
 }
 
-function providerConditions({ recent, conditions, unevaluated }) {
+function providerConditions({ recent, components, conditions, unevaluated }) {
   const PROVIDERS = [
     { series: ["provider.wizardxray.create", "provider.wizardxray.write"], subject: "wizardxray", component: "wizardxray", label: "WizardXray" },
     { series: ["provider.hooshpay"], subject: "hooshpay", component: "hooshpay", label: "HooshPay" },
@@ -84,7 +89,8 @@ function providerConditions({ recent, conditions, unevaluated }) {
     const failures = series.err + series.tmo;
     const evidence = [{ label: "Requests in 15 min", value: String(series.n), source: "Outbound client" }, { label: "Failed", value: String(series.err), source: "Outbound client" }, { label: "Timed out", value: String(series.tmo), source: "Outbound client" }];
     const group = `provider:${provider.subject}`;
-    if (series.n === 0) unevaluated.push(group);
+    // No traffic is no evidence, but a passing reachability check is. Without one, the incident waits for real traffic.
+    if (series.n === 0 && components.find((item) => item.id === provider.component)?.state !== "healthy") unevaluated.push(group);
     if (series.tmo >= MIN_FAILURES) conditions.push(condition({ code: "PROVIDER_TIMEOUTS", subject: provider.subject, group, component: provider.component, severity: "high", title: `${provider.label} requests are timing out`, summary: "A timed-out mutation has an unknown outcome, so it is never replayed automatically.", evidence }));
     else if (failures >= MIN_FAILURES && failures / Math.max(1, series.n) >= 0.5) conditions.push(condition({ code: "PROVIDER_ERRORS", subject: provider.subject, group, component: provider.component, severity: "high", title: `${provider.label} requests are failing`, summary: "At least half of recent requests failed.", evidence }));
   }
@@ -145,8 +151,8 @@ export function evaluateRules(input) {
   const recent = minutes.filter((minute) => minute.t >= now - RECENT_MS);
   dependencyConditions({ probes, components, conditions, unevaluated });
   pollingConditions({ polling, conditions, unevaluated });
-  webhookConditions({ recent, providers, conditions, unevaluated });
-  providerConditions({ recent, conditions, unevaluated });
+  webhookConditions({ recent, providers, components, conditions, unevaluated });
+  providerConditions({ recent, components, conditions, unevaluated });
   orderConditions({ probes, workflow, conditions, unevaluated });
   jobConditions({ jobs, conditions, unevaluated });
   sentinelConditions({ sentinel, conditions, unevaluated });

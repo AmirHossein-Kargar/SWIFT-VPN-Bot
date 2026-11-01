@@ -31,6 +31,12 @@ export const SERIES = Object.freeze([
 const KNOWN_SERIES = new Set(SERIES);
 const OUTCOMES = new Set(["ok", "error", "rejected", "timeout"]);
 
+/**
+ * Marks the health check's own webhook calls. Random per process and known only to it, so a stranger cannot use it to keep a
+ * forged callback out of the counts, and the check's expected refusals never read as a burst of rejected callbacks.
+ */
+export const WEBHOOK_PROBE_TOKEN = randomBytes(24).toString("hex");
+
 const context = new AsyncLocalStorage();
 
 /** Names the order a provider call belongs to, without changing the signature of anything in between. */
@@ -257,7 +263,7 @@ const REJECTION_REASON = { 400: "invalid request", 401: "invalid signature", 404
 export function observeWebhook(provider) {
   const series = `webhook.${provider}`;
   return (req, res, next) => {
-    if (req.method !== "POST") return next();
+    if (req.method !== "POST" || req.get?.("x-reliability-probe") === WEBHOOK_PROBE_TOKEN) return next();
     const started = performance.now();
     const json = res.json.bind(res);
     let requestId = null;

@@ -116,6 +116,20 @@ export function createNowPaymentsRequest({
   };
 }
 
+/**
+ * A health check, not traffic: it goes around createNowPaymentsRequest so it stays out of the provider series. `GET /status` is
+ * the public liveness read, and `GET /merchant/coins` is the cheapest read that needs the API key, so together they prove the
+ * service is up and this key is accepted. Neither touches an invoice.
+ */
+export async function probeNowPayments({ apiKey, baseURL, transport = axios.request } = {}) {
+  const base = String(baseURL || "https://api.nowpayments.io/v1").replace(/\/+$/, "");
+  const options = { method: "GET", timeout: 8_000, maxContentLength: 1_048_576, validateStatus: () => true };
+  const status = await transport({ ...options, url: `${base}/status`, headers: { Accept: "application/json" } });
+  if (status.status !== 200 || status.data?.message !== "OK") return { reachable: false, authorized: false, status: status.status };
+  const coins = await transport({ ...options, url: `${base}/merchant/coins`, headers: { Accept: "application/json", "x-api-key": apiKey } });
+  return { reachable: true, authorized: coins.status >= 200 && coins.status < 300, status: coins.status };
+}
+
 const jwtCache = new Map();
 const JWT_CACHE_TTL_MS = 4 * 60 * 1000; // 4 minutes (NOWPayments JWT expires in 5 minutes)
 

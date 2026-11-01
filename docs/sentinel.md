@@ -115,7 +115,7 @@ dismissed findings carry none. Each lifecycle stage shows its own total; stages 
 | `RESERVATION_WITHOUT_ORDER` | Confirmed | High | Debit with no order |
 | `DEBIT_NOT_RECORDED_ON_ORDER` | Probable | Medium | Debited, order says `not_debited` |
 | `FAILED_ORDER_DEBIT_KEPT` | Confirmed | Critical | Failed order kept the money |
-| `COMPLETED_NOT_COMMITTED` | Confirmed | High | Completed without a delivered service |
+| `COMPLETED_NOT_COMMITTED` | Confirmed | High | Completed with no commit entry, so nothing was delivered. A service delivered and later deleted is not this: both delete paths set `revokedAt`, and with no such mark it reads Informational, with no money owed |
 | `DEBIT_STATUS_MISMATCH` | Confirmed | Low | Debit label disagrees with the state |
 | `DUPLICATE_SERVICE_FOR_ORDER` | Confirmed | High | One order, several services |
 | `SERVICE_WITHOUT_ORDER` | Probable | Medium | Paid service names a missing order |

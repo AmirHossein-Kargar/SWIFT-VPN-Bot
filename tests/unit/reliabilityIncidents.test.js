@@ -135,7 +135,8 @@ describe("lifecycle", () => {
 const count = (fields) => ({ n: 0, ok: 0, err: 0, rej: 0, tmo: 0, sumMs: 0, timed: 0, h: new Array(12).fill(0), ...fields });
 const healthyProbe = { status: "healthy", latencyMs: 5, failures: 0, lastSuccessAt: NOW };
 const component = (id, state = "healthy") => ({ id, state, reason: `${id} ${state}` });
-const COMPONENTS = ["mongodb", "redis", "telegram", "wizardxray", "express"];
+const COMPONENTS = ["mongodb", "redis", "telegram", "wizardxray", "express", "hooshpay", "nowpayments", "webhook"];
+const quietComponents = COMPONENTS.map((id) => component(id, ["hooshpay", "nowpayments", "wizardxray", "webhook"].includes(id) ? "unknown" : "healthy"));
 
 function rules(overrides = {}) {
   const orders = { status: "healthy", details: { needsReview: 0, stalledProvisioning: 0, ledgerStalled: 0, awaitingProvider: 0, refundPending: 0, deliveryPending: 0, alertPending: 0 } };
@@ -143,7 +144,7 @@ function rules(overrides = {}) {
     now: NOW,
     minutes: [],
     components: COMPONENTS.map((id) => component(id)),
-    probes: { mongodb: healthyProbe, redis: healthyProbe, telegram: healthyProbe, wizardxray: healthyProbe, express: healthyProbe, orders },
+    probes: { mongodb: healthyProbe, redis: healthyProbe, telegram: healthyProbe, wizardxray: healthyProbe, express: healthyProbe, hooshpay: healthyProbe, nowpayments: healthyProbe, webhook: healthyProbe, orders },
     polling: { failing: false, stalled: false },
     providers: [{ id: "hooshpay", label: "HooshPay", configured: true, secretConfigured: true }],
     jobs: [],
@@ -228,13 +229,27 @@ describe("rules", () => {
   });
 
   test("no traffic is not recovery: a provider or webhook rule with nothing to read holds its incident", () => {
-    const quiet = rules({ minutes: [] });
+    const quiet = rules({ minutes: [], components: quietComponents });
     for (const group of ["provider:wizardxray", "provider:hooshpay", "provider:nowpayments", "webhook:hooshpay", "webhook:nowpayments"]) assert.ok(quiet.unevaluated.includes(group), group);
     const incidents = tracker({ clearTicks: 2 });
-    const failing = rules({ minutes: [{ t: NOW - MINUTE, series: { "provider.hooshpay": count({ n: 4, err: 4 }) } }] });
+    const failing = rules({ components: quietComponents, minutes: [{ t: NOW - MINUTE, series: { "provider.hooshpay": count({ n: 4, err: 4 }) } }] });
     incidents.apply({ ...failing, now: NOW });
-    for (let index = 1; index < 20; index += 1) assert.deepEqual(incidents.apply({ ...rules({ minutes: [] }), now: NOW + index * MINUTE }), []);
+    for (let index = 1; index < 20; index += 1) assert.deepEqual(incidents.apply({ ...rules({ minutes: [], components: quietComponents }), now: NOW + index * MINUTE }), []);
     assert.equal(incidents.open().length, 1);
+  });
+
+  test("a passing reachability check is evidence, so it clears a provider incident with no traffic", () => {
+    const incidents = tracker({ clearTicks: 2 });
+    incidents.apply({ ...rules({ components: quietComponents, minutes: [{ t: NOW - MINUTE, series: { "provider.hooshpay": count({ n: 4, err: 4 }) } }] }), now: NOW });
+    incidents.apply({ ...rules({ minutes: [] }), now: NOW + MINUTE });
+    assert.deepEqual(incidents.apply({ ...rules({ minutes: [] }), now: NOW + 2 * MINUTE }).map((item) => item.kind), ["resolved"]);
+  });
+
+  test("a failing payment provider or webhook check raises the same incident as any dependency", () => {
+    for (const id of ["hooshpay", "nowpayments", "webhook"]) {
+      const result = rules({ components: COMPONENTS.map((item) => component(item, item === id ? "failed" : "healthy")), probes: { [id]: { status: "down", failures: 2 }, orders: { status: "healthy", details: {} } } });
+      assert.ok(result.conditions.some((item) => item.code === "DEPENDENCY_DOWN" && item.component === id), id);
+    }
   });
 
   test("a real success clears a provider incident", () => {

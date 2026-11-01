@@ -197,7 +197,7 @@ const EXPLANATIONS = {
   },
   COMPLETED_NOT_COMMITTED: {
     why: "The order is complete but the service is missing from the customer's account.",
-    cause: "The commit to the user failed, or the service row was removed.",
+    cause: "The commit to the user failed. If this reads informational the commit happened and the service was deleted later, before deletions were recorded on the order.",
     options: () => [openRecovery(), manualReconcile()],
   },
   DEBIT_STATUS_MISMATCH: {

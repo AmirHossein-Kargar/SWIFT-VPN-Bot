@@ -24,8 +24,10 @@ export const WINDOWS = Object.freeze({
   "24h": { ms: 24 * HOUR, bucketMs: 30 * MINUTE, label: "24 hours" },
 });
 
-/** How long positive evidence from traffic lasts, for a component nothing can probe. */
+/** How long positive evidence from traffic lasts. */
 export const EVIDENCE_WINDOW_MS = 6 * HOUR;
+/** The webhook and delivery checks run real paths, so they run rarely. Their evidence still has to be recent. */
+export const RARE_PROBE_MS = 10 * MINUTE;
 
 /** Percentiles below these sample counts are withheld: with 8 samples, "P99" is only the maximum under another name. */
 export const PERCENTILE_MIN_SAMPLES = Object.freeze({ p50: 5, p95: 20, p99: 100 });

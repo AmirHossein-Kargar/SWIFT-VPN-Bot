@@ -40,8 +40,9 @@ same checks, without history, incidents or topology.
 | Stale | It was checked, but too long ago to describe now (three missed intervals) |
 | Unknown | No evidence either way |
 
-**Healthy needs positive evidence. No errors is not evidence.** A provider with no traffic is *Unknown*, a check that went
-quiet is *Stale*, and orders that cannot be read are *Unknown*, never zero and never healthy.
+**Healthy needs positive evidence. No errors is not evidence.** A check that never ran is *Unknown*, a check that went quiet is
+*Stale*, and orders that cannot be read are *Unknown*, never zero and never healthy. Traffic is one kind of evidence and a passing
+active check is another, so a quiet system with every dependency configured reads twelve of twelve.
 
 **Overall:** a failed critical component is *Failed*; anything failed or degraded is *Degraded*; no evidence on a critical
 component is *Unknown* or *Stale*. Only then is it *Healthy*, and blind spots on optional components are listed beside it, so
@@ -59,11 +60,12 @@ everything reads *Unknown*.
 | Telegram Bot API | `getMe` and `getWebhookInfo`, on the probe interval | Same |
 | Polling loop | The poller's own last-success stamp; no extra Telegram call | `getPollingEvidence` |
 | Express app | Loopback `GET /livez`, 5xx share, event-loop delay | `services/reliability/collector.js`, `perf_hooks` |
-| WizardXray | `GET /status`, plus real create calls | `HEALTH_CHECKERS`, `api/wizardApi.js` |
-| HooshPay, NOWPayments | **Traffic only**: a real outbound success or a signed callback in the last 6 hours | The provider clients, `observeWebhook` |
-| Webhook path | Secrets present, then callback outcomes by HTTP status | `observeWebhook` on the route |
+| WizardXray | `status` (the bot reaches its service panel), `me` (the key works, the prices are readable), then a location list, a sample `price` agreeing with `me`, and whether the wallet can fund the cheapest plan. All reads. Plus real create calls | `HEALTH_CHECKERS`, `api/wizardApi.js` |
+| HooshPay | `GET /balance` with the API key, or real traffic | `probeHooshPay`, `observeWebhook` |
+| NOWPayments | `GET /status`, then `GET /merchant/coins` with the API key, or real traffic | `probeNowPayments`, `observeWebhook` |
+| Webhook path | Secrets present, callback outcomes by HTTP status, and a [signed test callback](#signed-test-callback) every 10 minutes | `checkWebhookPath`, `observeWebhook` on the route |
 | Order workflow | Stored records | `WalletPurchase`, through Sentinel's read-only wrappers |
-| Telegram delivery | The outbox, and each delivery's result | `WalletPurchase.notificationPending`, `notifyPurchaseOnce` |
+| Telegram delivery | The outbox, each delivery's result, and a send to the admin group every 10 minutes | `WalletPurchase.notificationPending`, `notifyPurchaseOnce`, `checkDeliveryPath` |
 | Background jobs | Each job's report against its schedule | `recordJobRun`, `observeJob`, `JOBS` in `constants.js` |
 
 The order lifecycle reuses Sentinel's feed for stored stages. Payments and orders meet only at the wallet, so the trace states
@@ -72,13 +74,29 @@ that a payment is **not linked** to an order rather than guessing, and links to 
 Every trace stage carries a basis: *Recorded* (a stored field says so), *Inferred*, or *No telemetry* (this record cannot tell).
 Delay limits are the ones System Health already uses: 10 minutes in a working state, 2 minutes for delivery and refunds.
 
+### Signed test callback
+
+A quiet payment path used to read *Unknown*, because nothing proves a webhook without a callback. So every 10 minutes
+`checkWebhookPath` posts one correctly signed callback per configured provider to this server's own routes, naming a random invoice
+that cannot exist with a status that credits nothing. The only passing answer is 404 `invoice_not_found`, which can only come after
+the route, the JSON parser, the signature check against the configured secret and a MongoDB lookup have all worked. A wrong
+secret answers 401, and a database outage answers 503.
+
+It cannot touch money: the id is random, no record can match it, and neither handler writes for an unknown invoice, which
+`tests/integration/reliabilityChecks.mongo.test.js` proves against a real database. Each call does log one "unknown invoice" warning.
+The calls carry a per-process random header so they stay out of the callback counts. A guessed header changes nothing.
+
+`sendChatAction` is the delivery equivalent: the one send-class call that leaves no message. Admins see "typing" in the admin group
+for a few seconds every 10 minutes.
+
 ## Telemetry that does not exist
 
 These limits are deliberate statements, not gaps to paper over:
 
-- **HooshPay and NOWPayments have no reachability check.** The existing checks only prove the configuration is present. Their
-  state comes from real traffic, so they read *Unknown* whenever nobody paid in 6 hours.
-- **Nothing measures Telegram's delivery to the phone**, only that Telegram accepted the message.
+- **A quiet check is not a full transaction.** The reachability checks prove the provider answers and accepts the key. They do not create
+  an invoice, because that would be a real invoice. HooshPay's `GET /balance` is documented by path alone, so only `success` is relied on.
+- **Nothing measures Telegram's delivery to the phone**, only that Telegram accepted the message. The test send proves the admin group
+  can be reached, not that one customer's chat can.
 - **Job starts are not observed**, only completions and failures, because jobs report when they finish. A job's history is in
   process memory, so after a restart every job is *Unknown* until it reports.
 - **`job.started` and per-handler bot latency do not exist.** Telegram updates are counted when they arrive; how long handlers
@@ -109,14 +127,14 @@ Windows are 15 minutes, 1 hour, 6 hours and 24 hours. Every figure on a card sta
 
 | Code | Severity | Raised when |
 |---|---|---|
-| `DEPENDENCY_DOWN` | Critical / High | A dependency failed two checks in a row (Telegram: one) |
+| `DEPENDENCY_DOWN` | Critical / High | A dependency, including HooshPay, NOWPayments and the webhook path, failed two checks in a row (Telegram: one) |
 | `DEPENDENCY_DEGRADED` | Medium | A dependency is slow or partly working |
 | `POLLING_CONFLICT` | Critical | 409: another process polls with this token |
 | `POLLING_FAILING`, `POLLING_STALLED` | High | No successful poll since an error, or for 90 seconds |
 | `WEBHOOK_SECRET_MISSING` | High | A configured provider has no webhook secret |
 | `WEBHOOK_FAILURES` | High | Three or more 5xx answers in 15 minutes |
 | `WEBHOOK_REJECTED_BURST` | Medium | Ten or more rejected callbacks in 15 minutes |
-| `PROVIDER_TIMEOUTS`, `PROVIDER_ERRORS` | High | Three timeouts, or three failures at 50% or more, in 15 minutes |
+| `PROVIDER_TIMEOUTS`, `PROVIDER_ERRORS` | High | Three timeouts, or three failures at 50% or more, in 15 minutes. A rejected API key or a documented server-side failure counts as a failure, not as a refusal |
 | `ORDERS_NEED_REVIEW`, `ORDERS_STUCK_PROVISIONING`, `ORDERS_INTERRUPTED`, `REFUNDS_PENDING` | High | Order counts from the records |
 | `ORDERS_AWAITING_PROVIDER`, `DELIVERY_PENDING` | Medium | Same |
 | `ADMIN_ALERTS_PENDING` | Low | Same |
@@ -130,8 +148,8 @@ Windows are 15 minutes, 1 hour, 6 hours and 24 hours. Every figure on a card sta
 - **Recovery** needs three clean evaluations, so a flapping dependency stays one incident. A problem back within 15 minutes
   reopens its incident.
 - **Missing telemetry never resolves anything.** A rule that cannot read its input reports its group as unevaluated, and that
-  group's open incidents stay as they are. So a provider or webhook incident stays open until real traffic shows recovery, even if
-  that takes all night, and a job's incident survives a restart, when the job is *Unknown* rather than fixed. A burst of rejected
+  group's open incidents stay as they are. So a provider or webhook incident stays open until real traffic or a passing check shows
+  recovery, and a job's incident survives a restart, when the job is *Unknown* rather than fixed. A burst of rejected
   callbacks is the exception: it is an event, not a broken state, so it clears with time.
 - **Escalation:** a rising severity updates the same row. A falling one does not lower it.
 - **MongoDB's own outage:** ids are made in memory, so the incident is written when the database returns, with its true first
@@ -190,7 +208,8 @@ Theme: every colour is a token from `design/theme.css`, and states are always wr
 
 - **The recorder cannot affect what it observes.** `services/reliability/telemetry.js` imports nothing from the application;
   every observer is synchronous, does no I/O and catches its own errors. Series come from a fixed list, so no request can name one.
-- **The webhook handlers are unchanged.** `observeWebhook` sits on the route and judges by the status code the handler answered.
+- **The webhook handlers are unchanged.** `observeWebhook` sits on the route and judges by the status code the handler answered. The
+  signed test callback goes through them exactly as a provider's does.
 - **Only `store.js` writes**, and it knows `ReliabilityEvent`, `ReliabilityIncident` and `ReliabilityRollup`. The job also keeps its
   own `JobCheckpoint` row, `service-reliability`.
 - **Money collections are read through Sentinel's `readOnly.js`.** No module here imports code that moves money or provisions.
@@ -216,9 +235,10 @@ on `notificationPending: true`, so it stays tiny, and it stops the delivery coun
 is non-unique and changes no money guarantee, so no migration is needed.
 
 Cost of one process: one tick every 30 seconds runs two pings and a loopback request; once a minute it also calls Telegram
-`getMe` and `getWebhookInfo`, WizardXray `/status`, and reads the order records (the indexed counts, up to 100 backlog rows, up
-to 3,000 orders from the last day). A tick holds a `JobCheckpoint` lease only to write. Memory is bounded: 24 hours of sparse minutes
-and 1,000 events. Reads of the snapshot and history do no I/O.
+`getMe` and `getWebhookInfo`, WizardXray `status` and `me`, HooshPay `/balance`, NOWPayments `/status` and `/merchant/coins`, and reads the
+order records (the indexed counts, up to 100 backlog rows, up to 3,000 orders from the last day). WizardXray `get_hosts` and `price`
+run once in 5 minutes, and the signed test callbacks and the admin-group send once in 10. A tick holds a `JobCheckpoint` lease only to
+write. Memory is bounded: 24 hours of sparse minutes and 1,000 events. Reads of the snapshot and history do no I/O.
 
 ## Troubleshooting
 
@@ -228,7 +248,10 @@ and 1,000 events. Reads of the snapshot and history do no I/O.
 | Everything *Unknown* | Just started, or `RELIABILITY_ENABLED=off` | Wait one tick, or check the variable |
 | *Polling* permanently | A proxy is breaking SSE | Check `/api/admin/reliability/stream` is not buffered. The page keeps working, more slowly |
 | `stream_capacity` | Four tabs open for one admin | Close one |
-| Provider *Unknown* | No request or callback in 6 hours | Normal when quiet. Use the provider's own dashboard to confirm reachability |
+| Provider *Unknown* | It is not configured here, or no check has finished yet | Set its API key, or wait one minute |
+| Provider *Degraded* or *Failed* naming the API key | The provider answered and refused the key | Replace the key |
+| Webhook path *Failed*: `answered 401` | The stored secret is not the one the route verifies with | Check `HOOSHPAY_WEBHOOK_SECRET` or `NOWPAYMENTS_IPN_SECRET` |
+| WizardXray *Degraded*: `cannot fund` | The provider wallet is below the cheapest plan's cost | Top it up. New orders wait as `awaiting_provider` until then |
 | Job *Unknown* after a deploy | No run reported yet by this process | Wait one interval |
 | *Telemetry is not being saved* | MongoDB writes fail | Live values continue; only history is at risk until a restart |
 | Persistence reads *standby* | Another process holds the lease | Normal for a moment during a deploy |
@@ -249,6 +272,7 @@ Configuration: [RELIABILITY variables](configuration.md#telegram-and-admin).
 | `tests/unit/reliabilityPanel.test.js` | What may be called Live, merging, filters, topology, formats |
 | `tests/integration/reliabilityHttp.test.js` | Auth, CSRF surface, validation, sanitizing and the event stream, over real HTTP |
 | `tests/integration/reliability.mongo.test.js` | Real orders, byte-identical money, two processes, restarts, index plans |
+| `tests/integration/reliabilityChecks.mongo.test.js` | All twelve checks with the real checkers, app and database and stand-in providers, passing on a quiet system and each one failing with its dependency |
 | `tests/e2e/reliability.e2e.mjs` | Themes, widths, interactions, live updates, reconnection, outages, axe, main-thread cost |
 
 Recipes are in [Testing](testing.md).

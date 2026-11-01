@@ -222,8 +222,23 @@ describe("orders and refunds", () => {
   });
 
   test("a completed order with no delivered service", () => {
-    assert.equal(only(bundle({ orders: [order("o13")], user: { services: [] } }), "COMPLETED_NOT_COMMITTED").direction, "owed_to_customer");
-    assert.equal(only(bundle({ orders: [order("o14")], user: { completedPurchaseIds: [] } }), "COMPLETED_NOT_COMMITTED").code, "COMPLETED_NOT_COMMITTED");
+    const finding = only(bundle({ orders: [order("o14")], user: { completedPurchaseIds: [] } }), "COMPLETED_NOT_COMMITTED");
+    assert.equal(finding.direction, "owed_to_customer");
+    assert.equal(finding.classification, "confirmed");
+  });
+
+  test("a service removed on purpose is not a service owed", () => {
+    // Both delete paths take the service off the account and record it on the order. This used to raise a confirmed "owed".
+    const removed = bundle({ orders: [order("o13", { revokedAt: ago(HOUR) })], user: { services: [] } });
+    assert.ok(!codes(removed).includes("COMPLETED_NOT_COMMITTED"));
+  });
+
+  test("a delivered service that vanished with no record is worth seeing, but owes nothing", () => {
+    // The commit entry and the service are written in one update, so it was delivered. Older deletions left no mark.
+    const finding = only(bundle({ orders: [order("o13b")], user: { services: [] } }), "COMPLETED_NOT_COMMITTED");
+    assert.equal(finding.classification, "informational");
+    assert.equal(finding.direction, "none");
+    assert.equal(finding.amountToman, 0);
   });
 
   test("a debit label that disagrees with the state", () => {

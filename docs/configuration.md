@@ -41,7 +41,7 @@ malformed.
 | `GROUP_ID` | Admin group chat ID | Negative integer, e.g. `-100…`. Admin actions in the group are only accepted from this chat |
 | `MONGO_URL` | MongoDB connection string | See [aliases](#alternate-names) below. A URI without a database name gets `/swiftvpn` (or `MONGO_DB_NAME`). Production must not use a loopback host |
 | `REDIS_URL` **or** `REDIS_HOST` (+ `REDIS_PORT`) | Redis for sessions, locks and cron leases | Production must not use a loopback host. Redis is never authoritative for money |
-| `WIZARD_API_URL` | WizardXray API v1 base URL, no trailing slash (the method name is appended) | Public HTTPS |
+| `WIZARD_API_URL` | WizardXray API v1 base URL from the provider's bot; each account has its own (the method name is appended, and a trailing slash makes no difference) | Public HTTPS |
 | `VPN_API_KEY` | WizardXray bearer token | |
 | `HOOSHPAY_API_KEY` | HooshPay API key | |
 | `HOOSHPAY_WEBHOOK_SECRET` | HMAC-SHA256 secret for HooshPay webhook signatures | ≥ 32 characters. If unset, every webhook is rejected |
@@ -69,7 +69,7 @@ malformed.
 | `SENTINEL_LEDGER_EPOCH` | `2026-10-05T00:00:00.000Z` | Records older than this may predate the wallet ledger, so they can never produce a confirmed balance finding. An out-of-range `SENTINEL_*` value falls back to its default |
 | `RELIABILITY_ENABLED` | on | `off` stops the [Service Reliability Center](reliability.md) monitor; the panel then reads Unknown, never healthy |
 | `RELIABILITY_INTERVAL_SECONDS` | `30` (10–300) | How often the monitor pings MongoDB and Redis and re-evaluates incidents |
-| `RELIABILITY_PROBE_SECONDS` | `60` (30–600) | How often it calls Telegram and WizardXray and reads the order records. An out-of-range `RELIABILITY_*` value falls back to its default |
+| `RELIABILITY_PROBE_SECONDS` | `60` (30–600) | How often it calls Telegram, WizardXray, HooshPay and NOWPayments and reads the order records. An out-of-range `RELIABILITY_*` value falls back to its default |
 | `ADMIN_PENDING_DELETE_MIN_HOURS` | `72` (minimum `24`) | Minimum age before the admin panel may delete a still-pending or expired top-up record; see [Deleting payment records](admin.md#deleting-payment-records-admin-panel) |
 | `SUPPORT_CONTACT` | empty | Support contact shown to users (`@username` or numeric ID). If empty, the direct-support buttons are hidden |
 | `SUPPORT_TERMS_URL` | empty | https URL of the terms page, shown as a button before a support ticket is created. Ignored unless https |
@@ -119,7 +119,7 @@ malformed.
 | `WEBHOOK_RATE_LIMIT_PER_MIN` | `600` | Per-IP webhook limit per 60 s window (`0` disables it; max 100000) |
 | `ADMIN_SESSION_TTL_SECONDS` | `28800` | Web admin session lifetime (900–86400) |
 | `ADMIN_ALLOWED_ORIGINS` | empty | Comma-separated exact origins, beyond `WEBHOOK_BASE_URL` and Railway's `RAILWAY_PUBLIC_DOMAIN`, that browsers may use for the admin and support APIs. Set it if you open the panel on a second domain, or sign-in is refused with `origin_not_allowed`. Wildcards, paths and (in production) plain HTTP except loopback are ignored; the settings page counts ignored entries. See [browser protections](admin.md#browser-protections) |
-| `WIZARD_STATUS_TTL_SECONDS` | `90` | Cache time for live WizardXray status in "My services" and admin views (`0` = always fresh) |
+| `WIZARD_STATUS_TTL_SECONDS` | `90` (15–600) | Cache time for live WizardXray status in "My services". Anything out of range falls back to the default. Any change to a service clears its entry |
 | `COST_PER_DAY` / `COST_PER_GB` | `200` / `300` | Cost constants (Toman) used by the admin profit reports |
 
 ### Tests only

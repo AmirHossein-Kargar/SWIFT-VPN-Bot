@@ -97,6 +97,20 @@ pm2 logs swift-vpn-bot | grep '"message":"PAYMENT_CREDITED'     # watch credits 
 grep '"level":"error"' logs/error.log | grep -c hooshpay          # errors today
 ```
 
+## Health at a glance
+
+Four separate questions, on purpose. A reachable API alone does not prove a purchase would work.
+
+| Question | Where | Depends on |
+|---|---|---|
+| Is the process up? | `GET /health`, `GET /livez` | Nothing else: use this for the platform health check |
+| Can it serve? | `GET /ready` | MongoDB, Redis, Telegram polling. Not the providers: their outage must not get a healthy process restarted |
+| Do dependencies work now? | `/panel/system-health`, on demand | Every check, including real provider reads and a signed webhook test |
+| Is the whole service working? | `/panel/reliability` | The same checks over time, with traffic, jobs, orders and incidents |
+
+None of these return a key, a token, a link or customer data. System Health reads *down* when MongoDB, Redis, Telegram or WizardXray is down, the
+same critical set as the Reliability Center. An integration this deployment does not configure reads *unknown* and does not degrade the overall state.
+
 ## Money Flow Sentinel
 
 The `/panel/sentinel` reconciliation job runs in this process. Its health is the status bar on those pages, not System Health. It logs

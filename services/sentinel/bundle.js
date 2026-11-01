@@ -21,7 +21,7 @@ const PAYMENT_FIELDS = {
   bank: "paymentId userId amount paymentType status trackingCode balanceCredited balanceCreditedAt creditLedgerVersion recoveryStatus recoveryReason createdAt confirmedAt rejectedAt confirmedBy retryCount lastErrorCode",
   trx: "invoiceId userId amount paymentType status transactionHash balanceCredited balanceCreditedAt creditLedgerVersion recoveryStatus recoveryReason createdAt confirmedAt rejectedAt retryCount lastErrorCode",
 };
-const ORDER_FIELDS = "purchaseId telegramId planId planName gig days amount status walletDebitStatus walletDebitedAt reservedAt provisioningStartedAt serviceUsername provisionedAt completedAt errorCode retryCount recoveryStatus recoveryReason refundStatus refundAmount refundReason refundedAt refundRequestedAt awaitingProviderSince events createdAt";
+const ORDER_FIELDS = "purchaseId telegramId planId planName gig days amount status walletDebitStatus walletDebitedAt reservedAt provisioningStartedAt serviceUsername provisionedAt completedAt revokedAt errorCode retryCount recoveryStatus recoveryReason refundStatus refundAmount refundReason refundedAt refundRequestedAt awaitingProviderSince events createdAt";
 const USER_FIELDS = "telegramId balance successfulPayments appliedPaymentKeys appliedAdminBalanceKeys appliedPurchaseReservations refundedPurchaseIds completedPurchaseIds services.purchaseId services.username services.productId testServiceAttemptId createdAt";
 const AUDIT_FIELDS = "operationId action status targetId actorTelegramId metadata.amount metadata.direction createdAt completedAt errorCode";
 
@@ -94,6 +94,7 @@ export function normalizeOrder(record, config) {
     serviceUsername: record.serviceUsername || null,
     provisionedAt: record.provisionedAt || null,
     completedAt: record.completedAt || null,
+    revokedAt: record.revokedAt || null,
     errorCode: record.errorCode || null,
     retryCount: Number(record.retryCount || 0),
     recoveryStatus: record.recoveryStatus || "none",

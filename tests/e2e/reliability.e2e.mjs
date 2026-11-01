@@ -183,7 +183,7 @@ for (const [theme, width] of [["dark", 1440], ["light", 1440], ["dark", 1024], [
 await step("the sidebar links the section, in the existing shell", async () => {
   const { page, context } = await newPage();
   await page.goto("/panel", { waitUntil: "load" });
-  await page.getByRole("link", { name: "Service reliability" }).click();
+  await page.getByRole("link", { name: "Service reliability", exact: true }).click();
   await page.waitForURL("**/panel/reliability");
   await page.getByText("Service topology").waitFor();
   assert.equal(await page.locator("aside").first().isVisible(), true);

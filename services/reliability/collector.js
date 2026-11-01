@@ -14,11 +14,11 @@ import { monitorEventLoopDelay } from "node:perf_hooks";
 import mongoose from "mongoose";
 import JobCheckpoint from "../../models/JobCheckpoint.js";
 import { default as botInstance } from "../../config/botInstance.js";
-import { HEALTH_CHECKERS, getPollingEvidence } from "../admin/monitoring.js";
+import { HEALTH_CHECKERS, checkDeliveryPath, getPollingEvidence } from "../admin/monitoring.js";
 import { acquireLease, releaseLease, writeLeasedState } from "../jobLease.js";
 import { getSyncStatus } from "../sentinel/queries.js";
 import { defaultSources } from "../sentinel/readOnly.js";
-import { EDGES, RELIABILITY_JOB, SEVERITY_RANK, WINDOWS, blastRadius, readReliabilityConfig } from "./constants.js";
+import { EDGES, RARE_PROBE_MS, RELIABILITY_JOB, SEVERITY_RANK, WINDOWS, blastRadius, readReliabilityConfig } from "./constants.js";
 import { deriveComponents, deriveOverall, jobStates } from "./health.js";
 import { INCIDENT_DEFAULTS, createIncidentTracker } from "./incidents.js";
 import { edgeTraffic, eventLoopSummary, windowMetrics } from "./metrics.js";
@@ -30,7 +30,9 @@ import { loadBacklog, loadCohorts } from "./workflow.js";
 
 const LEASE_TTL_MS = 90_000;
 const FAST_PROBES = ["mongodb", "redis", "express"];
-const SLOW_PROBES = ["telegram", "wizardxray", "hooshpay", "orders"];
+const SLOW_PROBES = ["telegram", "wizardxray", "hooshpay", "nowpayments", "orders"];
+/** These run a real path through the application, so once a minute would be noise. */
+const RARE_PROBES = ["webhook", "delivery"];
 const RECENT_EVENTS = 40;
 const WORKFLOW_ROWS = 12;
 /** monitoring.js words these for the Persian bot panel; the dashboard is English. */
@@ -56,8 +58,8 @@ function checkExpress(port = process.env.PORT || 3000) {
   };
 }
 
-function defaultProbes() {
-  return { ...HEALTH_CHECKERS, express: checkExpress() };
+export function defaultProbes() {
+  return { ...HEALTH_CHECKERS, delivery: checkDeliveryPath, express: checkExpress() };
 }
 
 export const publicEvent = ({ dirty: _dirty, seq: _seq, ...event }) => event;
@@ -105,6 +107,7 @@ export function createCollector(options = {}) {
   let snapshot = null;
   let previousStates = {};
   let lastSlowAt = 0;
+  let lastRareAt = 0;
   let lastTickAt = null;
   let tickMs = null;
   let hydrated = false;
@@ -268,10 +271,16 @@ export function createCollector(options = {}) {
     try {
       await hydrate(started);
       const slowDue = started - lastSlowAt >= config.probeIntervalMs - 1_000;
+      const rareDue = started - lastRareAt >= RARE_PROBE_MS - 1_000;
       await Promise.all([...FAST_PROBES, ...(slowDue ? SLOW_PROBES : [])].map(runProbe));
       if (slowDue) {
         lastSlowAt = started;
         await refreshRecords(started);
+      }
+      // After the others, so a test callback never competes with the check that would explain why it failed.
+      if (rareDue) {
+        lastRareAt = started;
+        await Promise.all(RARE_PROBES.map(runProbe));
       }
       const now = clock();
       const loop = loopMonitor ? eventLoopSummary(loopMonitor) : eventLoop;

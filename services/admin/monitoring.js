@@ -1,21 +1,31 @@
+import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import mongoose from "mongoose";
 import SystemHealth from "../../models/SystemHealth.js";
 import WalletPurchase from "../../models/WalletPurchase.js";
 import redisClient, { isRedisReady, getRedisError } from "../../config/redisClient.js";
 import { default as botInstance } from "../../config/botInstance.js";
-import { StatusApi } from "../../api/wizardApi.js";
-import { createHooshPayClient } from "../hooshpay/hooshpayClient.js";
+import { StatusApi, getAccount, getHosts, panelPingMs, quotePrice } from "../../api/wizardApi.js";
+import { probeHooshPay } from "../hooshpay/hooshpayClient.js";
+import { canonicalPayload } from "../hooshpay/verifySignature.js";
 import { readNowPaymentsConfig } from "../nowpayments/money.js";
+import { probeNowPayments } from "../nowpayments/nowpaymentsClient.js";
+import { signNowPaymentsIpn } from "../nowpayments/signature.js";
+import { getSellablePlans } from "../plans.js";
+import { providerCost } from "../wizardAccount.js";
 import { assertAdminUser } from "./authorization.js";
-import { observeJob, observePollingError } from "../reliability/telemetry.js";
+import { jobStates, worstState } from "../reliability/health.js";
+import { WEBHOOK_PROBE_TOKEN, observeJob, observePollingError, telemetry } from "../reliability/telemetry.js";
 
 const CHECK_TIMEOUT_MS = 8_000;
+/** Locations and the sample quote change rarely, and each is one more call to the provider. */
+const WIZARD_DEEP_CHECK_MS = 5 * 60_000;
 const CACHE_TTL_MS = 30_000;
 const PERSIST_INTERVAL_MS = 60_000;
 const MEMORY_CACHE = new Map();
 let lastPersistAt = 0;
 
 const INTERNAL_SERVICES = new Set(["webhook", "background-jobs"]);
+const CRITICAL_SERVICES = ["mongodb", "redis", "telegram", "wizardxray"];
 
 function nowMs() { return Date.now(); }
 
@@ -30,9 +40,16 @@ function withTimeout(promise, ms, label) {
   ]).finally(() => clearTimeout(timer));
 }
 
+const WIZARD_REASONS = {
+  auth_invalid: "WizardXray rejected the API key",
+  auth_missing: "WizardXray did not accept the API key header",
+  api_disabled: "The WizardXray web service is switched off",
+};
+
 function safeError(error) {
   const name = error?.name || "Error";
   const code = typeof error?.code === "string" ? error.code : undefined;
+  if (WIZARD_REASONS[error?.reason]) return WIZARD_REASONS[error.reason];
   if (Number.isInteger(error?.status)) return `HTTP ${error.status} response`;
   if (code === "ETIMEDOUT" || code === "ECONNABORTED") return "مهلت درخواست پایان یافت";
   if (code === "ENOTFOUND" || code === "EAI_AGAIN") return "آدرس سرور قابل تشخیص نیست";
@@ -69,46 +86,193 @@ async function checkRedis() {
   }
 }
 
+let wizardDeepCheck = null;
+
+/**
+ * The slower half of the WizardXray check: can it name a location, and does `price` agree with the prices `me` reports? Those
+ * two are what a purchase depends on after the connection itself. Both are reads. Kept for a few minutes because a provider
+ * should not be asked once a minute what rarely changes.
+ */
+async function wizardDeepCheckResult(account) {
+  if (wizardDeepCheck && nowMs() - wizardDeepCheck.at < WIZARD_DEEP_CHECK_MS) return wizardDeepCheck.value;
+  const issues = [];
+  let locations = null;
+  try {
+    const hosts = await withTimeout(getHosts(), CHECK_TIMEOUT_MS, "wizard hosts");
+    locations = hosts.filter((host) => !host.disabled).length;
+    if (!locations) issues.push("WizardXray lists no enabled location");
+  } catch (error) {
+    if (error?.reason !== "hosts_unavailable") throw error;
+    locations = 0;
+    issues.push("WizardXray lists no location, or could not reach its service panel");
+  }
+  const quote = await withTimeout(quotePrice(1, 1), CHECK_TIMEOUT_MS, "wizard price");
+  const expected = providerCost(account, { gig: 1, days: 1 });
+  if (expected !== null && quote.price !== expected) issues.push("WizardXray's quote disagrees with its own price list");
+  const value = { locations, issues };
+  wizardDeepCheck = { at: nowMs(), value };
+  return value;
+}
+
+/** The cheapest thing on sale, at the provider's price. Null when the catalog cannot say. */
+async function cheapestOrderCost(account) {
+  try {
+    const plans = await getSellablePlans();
+    const costs = plans.map((plan) => providerCost(account, { gig: plan.gig, days: plan.days })).filter((cost) => cost !== null);
+    return costs.length ? Math.min(...costs) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether WizardXray can fulfil an order, which takes more than an answer on a port. `status` says the bot still reaches the
+ * service panel, `me` proves the key and gives the prices, and the rest asks whether the next sale could be provisioned. Every
+ * call is a read: no check here creates or changes a service.
+ */
 async function checkWizardXray() {
   const started = nowMs();
   try {
-    const status = await withTimeout(StatusApi(), CHECK_TIMEOUT_MS, "wizard status");
+    // `status` decides whether the panel is up. `me` failing alone leaves orders working, so it is a problem and not an outage,
+    // unless it is the key that was refused, which `status` would have refused too.
+    const [status, account] = await withTimeout(Promise.all([StatusApi(), getAccount().catch((error) => ({ failed: error }))]), CHECK_TIMEOUT_MS, "wizard status");
     const result = status?.result || {};
-    if (result.system && result.system !== "connected") throw new Error("panel reports it is not connected");
+    if (result.system && result.system !== "connected") throw new Error("the panel reports it cannot reach its service server");
+    const latencyMs = nowMs() - started;
+    const issues = [];
+    if (latencyMs > 2_500) issues.push(`WizardXray took ${latencyMs} ms`);
+    if (account.failed) {
+      issues.push(`WizardXray answered, but its account details could not be read (${safeError(account.failed)}); unlimited stays off sale`);
+      return { status: "degraded", latencyMs, error: issues.join("; "), details: { panelPingMs: panelPingMs(result) } };
+    }
+    const deep = await wizardDeepCheckResult(account).catch((error) => ({ locations: null, issues: [`A WizardXray read failed: ${safeError(error)}`] }));
+    issues.push(...deep.issues);
+    const cheapest = await cheapestOrderCost(account);
+    if (cheapest !== null && account.balance !== null && account.balance < cheapest) issues.push("The WizardXray wallet cannot fund the cheapest plan; new orders will wait for funds");
     return {
-      status: classify(nowMs() - started, 2_500, null),
-      latencyMs: nowMs() - started,
-      error: null,
+      status: issues.length ? "degraded" : "healthy",
+      latencyMs,
+      error: issues.join("; ") || null,
       details: {
-        panelPingMs: Number.isFinite(Number(result.ping)) ? Number(result.ping) : null,
+        panelPingMs: panelPingMs(result),
         activeServices: Number.isFinite(Number(result.count_active_services)) ? Number(result.count_active_services) : null,
         totalServices: Number.isFinite(Number(result.count_services)) ? Number(result.count_services) : null,
+        balanceToman: account.balance,
+        unlimitedEnabled: account.limits.unlimitedEnabled,
+        locations: deep.locations,
       },
     };
+  } catch (error) {
+    return { status: "down", latencyMs: null, error: error?.message === "the panel reports it cannot reach its service server" ? "WizardXray cannot reach its service server" : safeError(error) };
+  }
+}
+
+const notConfigured = (message) => ({ status: "unknown", latencyMs: null, error: message, details: { configured: false } });
+
+/** A real request with the real key. Constructing a client, which is all this used to do, proves only that a variable is set. */
+async function checkHooshPay() {
+  const started = nowMs();
+  if (!process.env.HOOSHPAY_API_KEY?.trim()) return notConfigured("HOOSHPAY_API_KEY is not configured");
+  try {
+    const answer = await withTimeout(probeHooshPay(), CHECK_TIMEOUT_MS, "hooshpay balance");
+    const latencyMs = nowMs() - started;
+    if (!answer.authorized) return { status: "down", latencyMs, error: "HooshPay rejected the API key" };
+    if (!answer.recognized) return { status: "degraded", latencyMs, error: "HooshPay answered, but not in a recognizable form" };
+    return { status: classify(latencyMs, 3_000, null), latencyMs, error: null, details: { configured: true } };
   } catch (error) {
     return { status: "down", latencyMs: null, error: safeError(error) };
   }
 }
 
-async function checkHooshPay() {
+/** The public liveness read, then a read that needs the key. */
+async function checkNowPayments({ transport } = {}) {
   const started = nowMs();
+  let config;
   try {
-    createHooshPayClient();
-    return { status: classify(nowMs() - started, 500, null), latencyMs: nowMs() - started, error: null };
+    config = readNowPaymentsConfig();
+  } catch {
+    return { status: "down", latencyMs: null, error: "NOWPayments configuration is invalid" };
+  }
+  if (!config) return notConfigured("NOWPayments configuration is incomplete");
+  try {
+    const answer = await withTimeout(probeNowPayments({ apiKey: config.apiKey, baseURL: config.baseURL, transport }), CHECK_TIMEOUT_MS, "nowpayments status");
+    const latencyMs = nowMs() - started;
+    if (!answer.reachable) return { status: "down", latencyMs, error: `NOWPayments status answered ${answer.status}` };
+    if (!answer.authorized) return { status: "down", latencyMs, error: "NOWPayments rejected the API key" };
+    return { status: classify(latencyMs, 3_000, null), latencyMs, error: null, details: { configured: true } };
   } catch (error) {
-    const notConfigured = /not configured/i.test(String(error?.message || ""));
-    return { status: "down", latencyMs: null, error: notConfigured ? "HOOSHPAY_API_KEY is not configured" : safeError(error) };
+    return { status: "down", latencyMs: null, error: safeError(error) };
   }
 }
 
-async function checkNowPayments() {
+/**
+ * The webhook path, end to end, through this server's own routes. Each configured provider gets one correctly signed callback
+ * naming an invoice that cannot exist, with a status that credits nothing. The only passing answer is 404 `invoice_not_found`,
+ * which can only come after the route, the JSON parser, the signature check against the configured secret and a MongoDB lookup
+ * have all worked. A wrong secret answers 401, a missing one 503, a database outage 503.
+ *
+ * It cannot touch money: the id is 24 random bytes, no record can match it, and neither handler writes for an unknown invoice.
+ * The handlers are not changed by this and run exactly as they do for the provider.
+ */
+async function checkWebhookPath({ port = process.env.PORT || 3000, env = process.env } = {}) {
+  const callback = async (path, body, signatureHeader, sign) => {
+    const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-reliability-probe": WEBHOOK_PROBE_TOKEN, [signatureHeader]: sign(body) },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
+    });
+    const answer = await response.json().catch(() => null);
+    return response.status === 404 && answer?.error === "invoice_not_found" ? null : `answered ${response.status}`;
+  };
+  const reference = () => `probe_${randomBytes(24).toString("hex")}`;
+  const providers = [];
+  if (env.HOOSHPAY_WEBHOOK_SECRET) {
+    providers.push(["HooshPay", () => callback("/api/hooshpay/webhook", { invoice: reference(), order_id: reference(), status: "failed", event: "payment.failed" }, "X-HooshPay-Signature",
+      (body) => createHmac("sha256", env.HOOSHPAY_WEBHOOK_SECRET).update(canonicalPayload(body), "utf8").digest("hex"))]);
+  }
+  if (env.NOWPAYMENTS_IPN_SECRET?.trim()) {
+    // A well-formed order id: anything else is refused before the invoice lookup this check exists to exercise.
+    providers.push(["NOWPayments", () => callback("/api/nowpayments/ipn", { order_id: `NP-${randomUUID()}`, payment_id: reference(), payment_status: "failed" }, "x-nowpayments-sig",
+      (body) => signNowPaymentsIpn(body, env.NOWPAYMENTS_IPN_SECRET))]);
+  }
+  if (!providers.length) return notConfigured("No webhook secret is configured");
+
+  const started = nowMs();
+  const failures = [];
+  await Promise.all(providers.map(async ([label, run]) => {
+    try {
+      const problem = await run();
+      if (problem) failures.push(`${label} ${problem}`);
+    } catch (error) {
+      failures.push(`${label} did not answer (${error?.name || "Error"})`);
+    }
+  }));
+  const latencyMs = nowMs() - started;
+  return {
+    status: failures.length === providers.length ? "down" : failures.length ? "degraded" : "healthy",
+    latencyMs,
+    error: failures.length ? `A signed test callback failed: ${failures.join("; ")}` : null,
+    details: { configured: true, providers: providers.length, lastSuccessAt: lastWebhookSuccessAt, lastFailureAt: lastWebhookFailureAt, lastError: lastWebhookError },
+  };
+}
+
+/**
+ * Whether the bot can still post to a real chat. `getMe` proves the token; it does not prove sending. `sendChatAction` to the admin
+ * group is the one send-class call that leaves no message: admins see "typing" for a few seconds, a few times an hour. It does
+ * not prove that one customer's chat works, which nothing but delivering to it can.
+ */
+async function checkDeliveryPath() {
+  const bot = botInstance.bot;
+  const groupId = process.env.GROUP_ID;
+  if (!groupId) return notConfigured("GROUP_ID is not configured");
+  if (!bot?.sendChatAction) return { status: "unknown", latencyMs: null, error: "The bot has not started", details: { configured: true } };
   const started = nowMs();
   try {
-    if (!readNowPaymentsConfig()) throw new Error("not configured");
-    return { status: classify(nowMs() - started, 500, null), latencyMs: nowMs() - started, error: null };
+    await withTimeout(bot.sendChatAction(groupId, "typing"), CHECK_TIMEOUT_MS, "telegram sendChatAction");
+    return { status: "healthy", latencyMs: nowMs() - started, error: null, details: { configured: true } };
   } catch (error) {
-    const notConfigured = /not configured/i.test(String(error?.message || "")) || error?.code === "not_configured";
-    return { status: "down", latencyMs: null, error: notConfigured ? "NOWPayments configuration is incomplete" : safeError(error) };
+    return { status: "down", latencyMs: null, error: `Telegram refused a send to the admin group (${safeError(error)})` };
   }
 }
 
@@ -301,9 +465,11 @@ const CHECKERS = {
   nowpayments: checkNowPayments,
   telegram: checkTelegram,
   orders: checkOrderFulfillment,
+  webhook: checkWebhookPath,
 };
 
-export { CHECKERS as HEALTH_CHECKERS };
+/** Separate because it posts to the admin group, so only the monitor's slow timer may run it, never a page refresh. */
+export { CHECKERS as HEALTH_CHECKERS, checkDeliveryPath };
 
 async function persistHealth(name, outcome) {
   try {
@@ -384,16 +550,19 @@ export async function getSystemHealth({ actorId, fresh = false } = {}) {
   });
 
   const extended = [...services];
-  extended.push({ name: "webhook", ...webhookHealth(), lastSuccessAt: null, lastFailureAt: null, lastErrorMessage: null, details: {} });
-  extended.push({ name: "background-jobs", ...backgroundJobsHealth(), lastSuccessAt: null, lastFailureAt: null, lastErrorMessage: null, details: {} });
+  const jobs = backgroundJobsHealth();
+  extended.push({ name: "background-jobs", ...jobs, lastSuccessAt: null, lastFailureAt: null, lastErrorMessage: null });
 
-  const criticalDown = extended.filter((service) => ["mongodb", "redis", "telegram"].includes(service.name) && service.status === "down");
+  // The same critical set as the Service Reliability Center, so the two pages cannot disagree about what "down" means.
+  const criticalDown = extended.filter((service) => CRITICAL_SERVICES.includes(service.name) && service.status === "down");
+  // An integration this deployment does not use is not a problem with this deployment. Anything else short of healthy is.
+  const counted = extended.filter((service) => service.details?.configured !== false);
   return {
     generatedAt: new Date().toISOString(),
-    overall: criticalDown.length ? "down" : (extended.some((service) => service.status !== "healthy") ? "degraded" : "healthy"),
+    overall: criticalDown.length ? "down" : (counted.some((service) => service.status !== "healthy") ? "degraded" : "healthy"),
     services: extended,
     notes: {
-      webhook: "سلامت Webhook مربوط به همین فرایند است و پرچم‌های آمادگی اجرا را نشان می‌دهد.",
+      webhook: "هر بار یک فراخوان امضاشدهٔ آزمایشی برای فاکتوری ناموجود از مسیر واقعی Webhook می‌گذرد؛ هیچ مبلغی تغییر نمی‌کند.",
       "background-jobs": "سلامت کارهای پس‌زمینه مربوط به همین فرایند است؛ زمان آخرین اجرا فقط از فرایند جاری می‌آید.",
     },
   };
@@ -413,22 +582,6 @@ export function recordWebhookOutcome({ ok, error } = {}) {
   }
 }
 
-function webhookHealth() {
-  const hasBase = Boolean(process.env.WEBHOOK_BASE_URL && process.env.HOOSHPAY_WEBHOOK_SECRET);
-  return {
-    status: hasBase ? "healthy" : "degraded",
-    error: hasBase ? null : "WEBHOOK_BASE_URL or HOOSHPAY_WEBHOOK_SECRET is not configured",
-    details: {
-      lastSuccessAt: lastWebhookSuccessAt,
-      lastFailureAt: lastWebhookFailureAt,
-      lastError: lastWebhookError,
-      baseUrlConfigured: Boolean(process.env.WEBHOOK_BASE_URL),
-      secretConfigured: Boolean(process.env.HOOSHPAY_WEBHOOK_SECRET),
-    },
-    lastCheckedAt: new Date().toISOString(),
-  };
-}
-
 let jobStats = {};
 
 export function recordJobRun(job, { ok, meta = {} } = {}) {
@@ -444,35 +597,25 @@ export function getRecordedJobStats() {
   return { ...jobStats };
 }
 
-function backgroundJobsHealth() {
-  const trx = jobStats["trx-scanner"];
-  const hoosh = jobStats["hooshpay-recovery-cron"];
-  const staleMs = 15 * 60_000;
-  const evaluate = (entry) => {
-    if (!entry) return { status: "unknown", error: "no run recorded since process start" };
-    const age = Date.now() - new Date(entry.lastRunAt).getTime();
-    if (!entry.ok) return { status: "down", error: "last run failed" };
-    if (age > staleMs) return { status: "degraded", error: `last run was ${Math.round(age / 60_000)} minutes ago` };
-    return { status: "healthy", error: null };
-  };
-  const trxState = evaluate(trx);
-  const hooshState = evaluate(hoosh);
-  const status = [trxState.status, hooshState.status].includes("down") ? "down"
-    : [trxState.status, hooshState.status].some((value) => value !== "healthy") ? "degraded" : "healthy";
+const JOB_STATUS = { healthy: "healthy", degraded: "degraded", failed: "down", stale: "degraded", unknown: "unknown" };
+
+/** Every job on the schedule, judged by the same rules as the Service Reliability Center. This used to look at two of them. */
+function backgroundJobsHealth({ now = nowMs(), env = process.env } = {}) {
+  const jobs = jobStates(telemetry.jobs(), { now, startedAt: telemetry.startedAt, env });
+  const worst = jobs.length ? worstState(jobs.map((job) => job.state)) : "unknown";
+  const named = jobs.filter((job) => job.state === worst && worst !== "healthy");
   return {
-    status,
-    error: [trxState.error, hooshState.error].filter(Boolean).join("; ") || null,
-    details: {
-      trxScanner: { ...trxState, lastRunAt: trx?.lastRunAt || null },
-      hooshpayRecoveryCron: { ...hooshState, lastRunAt: hoosh?.lastRunAt || null },
-    },
-    lastCheckedAt: new Date().toISOString(),
+    status: JOB_STATUS[worst] ?? "unknown",
+    error: named.length ? `${named.map((job) => job.label).join(", ")}: ${named[0].reason}` : null,
+    details: { jobs: jobs.map((job) => ({ name: job.name, label: job.label, state: job.state, lastRunAt: job.lastRunAt })) },
+    lastCheckedAt: new Date(now).toISOString(),
   };
 }
 
 export function resetHealthCacheForTests() {
   MEMORY_CACHE.clear();
   lastPersistAt = 0;
+  wizardDeepCheck = null;
   lastWebhookSuccessAt = null;
   lastWebhookFailureAt = null;
   lastWebhookError = null;

@@ -380,12 +380,22 @@ function orderRules(bundle, ledger, ctx, raise) {
     }
 
     if (order.status === "completed" && !order.legacy) {
-      const delivered = ledger.completed.has(order.purchaseId) && (serviceCounts.get(order.purchaseId) || 0) > 0 && Boolean(order.serviceUsername);
-      if (!delivered) {
+      const committed = ledger.completed.has(order.purchaseId) && Boolean(order.serviceUsername);
+      const listed = (serviceCounts.get(order.purchaseId) || 0) > 0;
+      const facts = { ...base.facts, commitEntry: ledger.completed.has(order.purchaseId), services: serviceCounts.get(order.purchaseId) || 0 };
+      if (!committed) {
         raise("COMPLETED_NOT_COMMITTED", {
           ...base, direction: "owed_to_customer",
           expected: "A service on the customer's account", observed: "Order completed without a commit entry or a service",
-          facts: { ...base.facts, commitEntry: ledger.completed.has(order.purchaseId), services: serviceCounts.get(order.purchaseId) || 0 },
+          facts,
+        });
+      } else if (!listed && !order.revokedAt) {
+        // The commit entry is written in the same update as the service, so this customer did receive it, and no money is
+        // owed. It is gone since, and nothing recorded why: older deletions left no mark. Worth seeing, not worth an alarm.
+        raise("COMPLETED_NOT_COMMITTED", {
+          ...base, amount: 0, classification: "informational", severity: "info",
+          expected: "A service on the customer's account, or a recorded removal", observed: "Delivered, then removed with no removal recorded",
+          facts,
         });
       }
       if (order.walletDebitStatus !== "finalized") {

@@ -5,7 +5,7 @@
  * traffic is `unknown`, a check that has gone quiet is `stale`, and a dependency we cannot read through is `unknown`. Any of
  * those can be the truth during an outage, so none of them may ever read as healthy.
  */
-import { COMPONENTS, EVIDENCE_WINDOW_MS, JOBS, STATE_RANK, WINDOWS } from "./constants.js";
+import { COMPONENTS, EVIDENCE_WINDOW_MS, JOBS, RARE_PROBE_MS, STATE_RANK, WINDOWS } from "./constants.js";
 import { sumSeries } from "./metrics.js";
 
 const SECOND = 1_000;
@@ -80,21 +80,33 @@ function expressApp(probe, intervalMs, now, http15m, eventLoop) {
   return result("healthy", "The server answered its own /livez route.", extra);
 }
 
-function webhookPath({ secrets, recent, now, totals6h, lastOkAt }) {
+/** What a check said, for the rules below. A check that was never run or has gone quiet says nothing. */
+function activeEvidence(probe, intervalMs, now) {
+  const { state, reason } = probeState(probe, intervalMs, now);
+  return { state, reason, answered: state === "healthy", extra: { evidence: "probe", checkedAt: iso(probe?.at), lastSuccessAt: iso(probe?.lastSuccessAt), latencyMs: probe?.latencyMs ?? null } };
+}
+
+function webhookPath({ secrets, recent, now, totals6h, lastOkAt, probe }) {
   const missing = secrets.filter((item) => item.configured && !item.secretConfigured).map((item) => item.label);
+  const checked = activeEvidence(probe, RARE_PROBE_MS, now);
   const details = [{ label: "Callbacks in 6 h", value: String(totals6h.n) }];
   if (totals6h.rej) details.push({ label: "Rejected in 6 h", value: String(totals6h.rej) });
+  if (probe) details.push({ label: "Signed test callback", value: checked.state });
   const extra = { evidence: "traffic", checkedAt: iso(now), lastSuccessAt: iso(lastOkAt), latencyMs: null, details };
   if (missing.length) return result("failed", `${missing.join(", ")}: the webhook secret is missing, so every callback is refused.`, { ...extra, evidence: "config" });
   if (recent.err >= MIN_FAILURES && recent.err / (recent.ok + recent.err) >= FAILURE_RATE) return result("failed", `${recent.err} callbacks failed in 15 minutes.`, extra);
   if (recent.err) return result("degraded", `${recent.err} callback${recent.err === 1 ? "" : "s"} failed in 15 minutes; the gateway retries them.`, extra);
+  if (checked.state === "failed" || checked.state === "degraded") return result(checked.state, checked.reason, { ...extra, ...checked.extra, details });
   if (totals6h.ok) return result("healthy", "Signed callbacks are being accepted.", extra);
+  if (checked.answered) return result("healthy", "A signed test callback passed the signature check and reached the invoice lookup.", { ...extra, ...checked.extra, details });
+  if (checked.state === "stale") return result("stale", checked.reason, { ...extra, ...checked.extra, details });
   return result("unknown", "No accepted callback in 6 hours, so this path is unproven. That is normal when nobody is paying.", extra);
 }
 
-function paymentProvider({ label, configured, recent, totals, webhookOk, lastOkAt, now }) {
+function paymentProvider({ label, configured, recent, totals, webhookOk, lastOkAt, now, probe, intervalMs }) {
+  const checked = activeEvidence(probe, intervalMs, now);
   const details = [
-    { label: "Reachability check", value: "None: only configuration can be checked" },
+    { label: "Reachability check", value: probe ? checked.state : "Not run yet" },
     { label: "Requests in 6 h", value: String(totals.n) },
     { label: "Callbacks accepted in 6 h", value: String(webhookOk) },
   ];
@@ -103,22 +115,31 @@ function paymentProvider({ label, configured, recent, totals, webhookOk, lastOkA
   const failures = recent.err + recent.tmo;
   if (failures >= MIN_FAILURES && failures / Math.max(1, recent.ok + failures) >= FAILURE_RATE) return result("failed", `${failures} of ${recent.n} requests failed in 15 minutes.`, extra);
   if (failures) return result("degraded", `${failures} request${failures === 1 ? "" : "s"} failed in 15 minutes.`, extra);
+  // One lost check is a blip, as it is for every other dependency: only two in a row is a failure.
+  if (checked.state === "failed") return result(probe.failures >= 2 ? "failed" : "degraded", checked.reason, { ...extra, ...checked.extra, details });
+  if (checked.state === "degraded") return result("degraded", checked.reason, { ...extra, ...checked.extra, details });
+  if (checked.answered) return result("healthy", `${label} answered a read that needs its API key.`, { ...extra, ...checked.extra, details });
   if (totals.ok || webhookOk) return result("healthy", "A request or a signed callback succeeded in the last 6 hours.", extra);
+  if (checked.state === "stale") return result("stale", checked.reason, { ...extra, ...checked.extra, details });
   return result("unknown", `Configured, but nothing has proven ${label} reachable in 6 hours.`, extra);
 }
 
 function wizardPanel(probe, intervalMs, now, create15m) {
   const base = probeState(probe, intervalMs, now);
   const failures = create15m.err + create15m.tmo;
+  const { panelPingMs, balanceToman, unlimitedEnabled, locations } = probe?.details ?? {};
   const details = [
-    ...(probe?.latencyMs != null ? [{ label: "/status", value: `${probe.latencyMs} ms` }] : []),
-    ...(probe?.details?.panelPingMs != null ? [{ label: "Panel ping", value: `${probe.details.panelPingMs} ms` }] : []),
+    ...(probe?.latencyMs != null ? [{ label: "/status and /me", value: `${probe.latencyMs} ms` }] : []),
+    ...(panelPingMs != null ? [{ label: "Service panel ping", value: `${panelPingMs} ms` }] : []),
+    ...(balanceToman != null ? [{ label: "Provider balance", value: `${balanceToman.toLocaleString("en-US")} Toman` }] : []),
+    ...(locations != null ? [{ label: "Locations", value: String(locations) }] : []),
+    ...(typeof unlimitedEnabled === "boolean" ? [{ label: "Unlimited", value: unlimitedEnabled ? "On for this account" : "Off for this account" }] : []),
     { label: "Create calls in 15 min", value: String(create15m.n) },
   ];
   const extra = { ...probeExtra(probe), details };
   if (base.state !== "healthy") return result(base.state, base.reason, extra);
-  if (failures >= MIN_FAILURES && failures / Math.max(1, create15m.n) >= FAILURE_RATE) return result("degraded", `/status answers, but ${failures} of ${create15m.n} create calls failed.`, extra);
-  return result("healthy", "/status answered.", extra);
+  if (failures >= MIN_FAILURES && failures / Math.max(1, create15m.n) >= FAILURE_RATE) return result("degraded", `The panel answers, but ${failures} of ${create15m.n} create calls failed.`, extra);
+  return result("healthy", "The key works, the service panel is connected, and it can price and locate an order.", extra);
 }
 
 function orderWorkflow(probe, intervalMs, now) {
@@ -136,7 +157,7 @@ function orderWorkflow(probe, intervalMs, now) {
   return result("healthy", "The records show no stuck or waiting order.", extra);
 }
 
-function telegramDelivery({ ordersProbe, intervalMs, now, totals, recent, lastOkAt }) {
+function telegramDelivery({ ordersProbe, intervalMs, now, totals, recent, lastOkAt, probe }) {
   const details = ordersProbe?.details || {};
   const rows = [{ label: "Delivered in 6 h", value: String(totals.ok) }, ...(details.deliveryPending != null ? [{ label: "Waiting in the outbox", value: String(details.deliveryPending) }] : [])];
   if (details.alertPending) rows.push({ label: "Admin alerts waiting", value: String(details.alertPending) });
@@ -145,6 +166,9 @@ function telegramDelivery({ ordersProbe, intervalMs, now, totals, recent, lastOk
   if (details.deliveryPending || details.alertPending) return result("degraded", `${(details.deliveryPending || 0) + (details.alertPending || 0)} message(s) waiting past the normal delay.`, extra);
   if (recent.err >= MIN_FAILURES && !recent.ok) return result("degraded", `${recent.err} deliveries failed in 15 minutes.`, extra);
   if (totals.ok) return result("healthy", "A service was delivered in the last 6 hours and the outbox is clear.", extra);
+  const checked = activeEvidence(probe, RARE_PROBE_MS, now);
+  if (checked.state === "failed" || checked.state === "degraded") return result("degraded", checked.reason, { ...extra, details: rows });
+  if (checked.answered) return result("healthy", "The outbox is clear, and Telegram accepted a send to the admin group.", { ...extra, details: [...rows, { label: "Test send", value: checked.state }] });
   return result("unknown", "The outbox is clear, but nothing was delivered in 6 hours to prove the path.", extra);
 }
 
@@ -202,6 +226,8 @@ export function deriveComponents({ now, config, probes, minutes, polling, jobs, 
       webhookOk: sumSeries(last6h, [`webhook.${id}`]).ok,
       lastOkAt: Math.max(entry?.lastRequestOkAt ?? 0, entry?.lastWebhookOkAt ?? 0) || null,
       now,
+      probe: probes[id],
+      intervalMs: probeIntervalMs,
     });
   };
 
@@ -211,12 +237,12 @@ export function deriveComponents({ now, config, probes, minutes, polling, jobs, 
     telegram: telegramApi(probes.telegram, probeIntervalMs, now),
     polling: pollingLoop(polling, now),
     express: expressApp(probes.express, intervalMs, now, sumSeries(last15m, ["http.admin", "http.panel", "http.store", "http.support", "http.other"]), eventLoop),
-    webhook: webhookPath({ secrets: providers, recent: sumSeries(last15m, webhookKeys), now, totals6h: callbacks6h, lastOkAt: webhookLastOk }),
+    webhook: webhookPath({ secrets: providers, recent: sumSeries(last15m, webhookKeys), now, totals6h: callbacks6h, lastOkAt: webhookLastOk, probe: probes.webhook }),
     hooshpay: provider("hooshpay", "HooshPay", "provider.hooshpay"),
     nowpayments: provider("nowpayments", "NOWPayments", "provider.nowpayments"),
     wizardxray: wizardPanel(probes.wizardxray, probeIntervalMs, now, sumSeries(last15m, ["provider.wizardxray.create"])),
     orders: orderWorkflow(probes.orders, probeIntervalMs, now),
-    delivery: telegramDelivery({ ordersProbe: probes.orders, intervalMs: probeIntervalMs, now, totals: sumSeries(last6h, ["telegram.delivery"]), recent: sumSeries(last15m, ["telegram.delivery"]), lastOkAt: lastDeliveryOkAt }),
+    delivery: telegramDelivery({ ordersProbe: probes.orders, intervalMs: probeIntervalMs, now, totals: sumSeries(last6h, ["telegram.delivery"]), recent: sumSeries(last15m, ["telegram.delivery"]), lastOkAt: lastDeliveryOkAt, probe: probes.delivery }),
     jobs: backgroundJobs(jobs, now),
   };
   return COMPONENTS.map((component) => ({ id: component.id, label: component.label, group: component.group, critical: component.critical, role: component.role, dependsOn: component.dependsOn, ...derived[component.id] }));

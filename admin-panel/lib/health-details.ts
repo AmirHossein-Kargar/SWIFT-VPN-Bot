@@ -28,6 +28,21 @@ export function detailRows(service: SystemHealthService): DetailRow[] {
     if (oldest !== null) rows.push({ label: "Oldest waiting", value: `${oldest} min`, warn: oldest > 60 });
     return rows;
   }
+  if (service.name === "wizardxray") {
+    const rows: DetailRow[] = [];
+    const ping = asNumber(details.panelPingMs);
+    if (ping !== null) rows.push({ label: "Service panel ping", value: `${ping} ms` });
+    const balance = asNumber(details.balanceToman);
+    if (balance !== null) rows.push({ label: "Provider balance", value: `${balance.toLocaleString("en-US")} Toman` });
+    const locations = asNumber(details.locations);
+    if (locations !== null) rows.push({ label: "Locations", value: String(locations), warn: locations === 0 });
+    if (typeof details.unlimitedEnabled === "boolean") rows.push({ label: "Unlimited", value: details.unlimitedEnabled ? "on" : "off" });
+    return rows;
+  }
+  if (service.name === "background-jobs") {
+    const jobs = Array.isArray(details.jobs) ? details.jobs : [];
+    return jobs.map(asRecord).filter((job) => typeof job.label === "string").map((job) => ({ label: String(job.label), value: String(job.state ?? "unknown"), warn: job.state === "failed" || job.state === "degraded" }));
+  }
   if (service.name === "telegram") {
     const rows: DetailRow[] = [];
     const polling = asRecord(details.polling);

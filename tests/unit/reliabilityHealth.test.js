@@ -56,9 +56,9 @@ describe("no errors is not evidence", () => {
     assert.match(hooshpay.reason, /nothing has proven/i);
   });
 
-  test("the provider row says plainly that reachability is not checked", () => {
+  test("the provider row says plainly when no reachability check has run", () => {
     const { hooshpay } = byId(derive());
-    assert.ok(hooshpay.details.some((row) => /only configuration/i.test(row.value)));
+    assert.ok(hooshpay.details.some((row) => row.label === "Reachability check" && /not run yet/i.test(row.value)));
   });
 
   test("a provider becomes healthy only through a real success", () => {
