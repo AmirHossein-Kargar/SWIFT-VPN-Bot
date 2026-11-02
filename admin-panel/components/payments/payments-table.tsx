@@ -97,7 +97,7 @@ export function PaymentsTable({ items }: { items: AdminPayment[] }) {
             </TableHead>
             <TableHead>Provider</TableHead>
             <TableHead>User</TableHead>
-            <TableHead>Product</TableHead>
+            <TableHead className="hidden xl:table-cell">Product</TableHead>
             <TableHead>Amount</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Created</TableHead>
@@ -118,11 +118,11 @@ export function PaymentsTable({ items }: { items: AdminPayment[] }) {
               </TableCell>
               <TableCell>
                 {payment.providerLabel}
-                <span className="block max-w-40 break-all font-mono text-xs text-muted-foreground" title={payment.id}>{payment.id}</span>
+                <span className="block max-w-56 break-all font-mono text-xs text-muted-foreground" title={payment.id}>{payment.id}</span>
                 {payment.trackingCode ? <span className="block break-all font-mono text-xs text-muted-foreground">ref {payment.trackingCode}</span> : null}
               </TableCell>
               <TableCell>{payment.userId}</TableCell>
-              <TableCell className="max-w-48 truncate">{payment.product}</TableCell>
+              <TableCell className="hidden max-w-48 truncate xl:table-cell">{payment.product}</TableCell>
               <TableCell>{formatToman(payment.amount)}</TableCell>
               <TableCell>
                 <PaymentStatusBadge status={payment.status} />

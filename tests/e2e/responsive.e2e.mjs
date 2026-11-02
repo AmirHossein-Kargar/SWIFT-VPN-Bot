@@ -405,6 +405,8 @@ function judge(metrics, errors, route) {
   if (metrics.clipped.length) problems.push(`clipped without ellipsis: ${metrics.clipped.slice(0, 3).join("; ")}`);
   if (metrics.smallCount) problems.push(`${metrics.smallCount} controls under the touch minimum: ${metrics.small.slice(0, 3).join("; ")}`);
   if (metrics.scrollers.some((scroller) => !scroller.focusable)) problems.push(`scroller not reachable by keyboard: ${metrics.scrollers.filter((scroller) => !scroller.focusable).map((scroller) => scroller.element).join("; ")}`);
+  // Passing the checks above is not enough for a table: its last columns are the status and the actions, and from a tablet up they must be on screen.
+  if (metrics.viewport >= 768 && metrics.scrollers.some((scroller) => scroller.element.includes("scroll-region"))) problems.push(`a table scrolls sideways: ${metrics.scrollers.map((scroller) => `${scroller.client}/${scroller.scroll}`).join(", ")}`);
   if (route.rtl && metrics.direction !== "rtl") problems.push(`expected rtl, got ${metrics.direction}`);
   if (errors.length) problems.push(...[...new Set(errors)].slice(0, 4));
   return problems;
