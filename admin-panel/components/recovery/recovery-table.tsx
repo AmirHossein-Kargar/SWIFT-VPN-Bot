@@ -71,11 +71,11 @@ export function RecoveryTable({ items }: { items: RecoveryItem[] }) {
 
   return (
     <>
-      <div className="flex items-center justify-between border-b border-border p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
         <p className="text-sm text-muted-foreground">
           {safeItems.length} of {items.length} on this page can be retried automatically.
         </p>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 max-sm:w-full max-sm:[&>*]:flex-1">
           <Button variant="outline" size="sm" disabled={selected.size === 0} onClick={() => setConfirming([...selected])}>
             Retry selected ({selected.size})
           </Button>
@@ -84,10 +84,10 @@ export function RecoveryTable({ items }: { items: RecoveryItem[] }) {
           </Button>
         </div>
       </div>
-      <Table>
+      <Table stack label="Recovery queue">
         <TableHeader>
           <TableRow>
-            <TableHead className="w-10" />
+            <TableHead className="w-10"><span className="sr-only">Select</span></TableHead>
             <TableHead>Provider</TableHead>
             <TableHead>User</TableHead>
             <TableHead>Amount</TableHead>
@@ -99,18 +99,18 @@ export function RecoveryTable({ items }: { items: RecoveryItem[] }) {
         <TableBody>
           {items.map((item) => (
             <TableRow key={item.key}>
-              <TableCell>
+              <TableCell corner>
                 <Checkbox checked={selected.has(item.key)} disabled={!item.retrySafe} onCheckedChange={() => toggle(item.key)} aria-label={`Select ${item.key}`} />
               </TableCell>
-              <TableCell>{PROVIDER_LABEL[item.provider]}</TableCell>
-              <TableCell>{item.userId}</TableCell>
-              <TableCell>{formatToman(item.amount)}</TableCell>
-              <TableCell>
+              <TableCell wide className="max-md:font-medium">{PROVIDER_LABEL[item.provider]}</TableCell>
+              <TableCell label="User">{item.userId}</TableCell>
+              <TableCell label="Amount">{formatToman(item.amount)}</TableCell>
+              <TableCell wide label="Kind">
                 <Badge variant={item.retrySafe ? "warning" : "destructive"}>{item.kind.replace(/-/g, " ")}</Badge>
                 {item.kind === "provisioning-uncertain" ? <ProviderCandidatesCheck purchaseId={item.key.slice("wallet:".length)} /> : null}
               </TableCell>
-              <TableCell className="text-muted-foreground">{formatDateTime(item.lastEventAt)}</TableCell>
-              <TableCell className="text-muted-foreground">
+              <TableCell label="Last event" className="text-muted-foreground">{formatDateTime(item.lastEventAt)}</TableCell>
+              <TableCell label="Retries" className="text-muted-foreground">
                 {item.retryCount > 0 ? `${item.retryCount} (last ${formatDateTime(item.lastRetryAt)})` : "—"}
               </TableCell>
             </TableRow>

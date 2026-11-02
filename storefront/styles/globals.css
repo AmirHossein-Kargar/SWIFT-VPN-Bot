@@ -61,6 +61,8 @@
     min-height: 100vh;
   }
   img, svg { display: block; }
+  /* A grid track must be able to shrink below its content, or one long string widens the whole section. */
+  .grid > * { min-width: 0; }
   :focus-visible { @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background; }
 }
 
@@ -98,6 +100,8 @@
   .press { transition: transform 0.15s ease, color 0.2s ease, background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease; }
   @media (hover: hover) { .press:hover { transform: translateY(-1px); } }
   .press:active { transform: translateY(1px) scale(0.985); }
+  /* Every button and button-like link is at least 44 px on a touch screen, whatever its variant. */
+  @media (pointer: coarse) { a.press, button.press { min-height: 2.75rem; } }
   .plan-best { border-color: hsl(var(--brand) / 0.45); box-shadow: 0 0 0 1px hsl(var(--brand) / 0.15), var(--shadow-card); }
   /* The tab pill slides between tabs; until tabs.tsx has measured it the active tab paints its own background. */
   .tabs-pill { position: absolute; top: 0; left: 0; width: 0; height: 0; border-radius: 0.75rem; background: hsl(var(--primary)); opacity: 0; pointer-events: none; }

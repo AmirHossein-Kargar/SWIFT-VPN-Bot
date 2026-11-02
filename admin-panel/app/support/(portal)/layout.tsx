@@ -13,7 +13,7 @@ export default async function SupportPortalLayout({ children }: { children: Reac
 
   if (session.unavailable) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-3 px-4 text-center" dir="rtl" lang="fa">
+      <div className="flex min-h-dvh flex-col items-center justify-center gap-3 px-4 text-center" dir="rtl" lang="fa">
         <AlertTriangle className="h-8 w-8 text-warning" />
         <p className="text-sm font-medium">پنل پشتیبانی موقتاً در دسترس نیست.</p>
         <p className="text-sm text-muted-foreground">لطفاً چند لحظه بعد دوباره تلاش کنید.</p>
@@ -24,8 +24,8 @@ export default async function SupportPortalLayout({ children }: { children: Reac
 
   return (
     <CustomerSessionProvider csrfToken={session.csrfToken}>
-      <div className="min-h-screen bg-background" dir="rtl" lang="fa">
-        <header className="flex h-14 items-center justify-between border-b border-border bg-card px-4 sm:px-6">
+      <div className="min-h-dvh bg-background" dir="rtl" lang="fa">
+        <header className="sticky top-0 z-40 flex min-h-14 items-center justify-between gap-2 border-b border-border bg-card px-4 pt-[env(safe-area-inset-top)] sm:px-6">
           <ProgressLink pendingLabel="در حال بارگذاری" href="/support" className="flex items-center gap-2.5" aria-label="پشتیبانی سوییفت">
             <Logo height={24} />
             <span className="text-sm font-semibold">پشتیبانی</span>

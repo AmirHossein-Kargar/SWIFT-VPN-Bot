@@ -57,7 +57,7 @@ export function PendingMain({ children }: { children: React.ReactNode }) {
   return (
     <>
       {pending ? <div className="nav-progress" role="progressbar" aria-label="Loading" /> : null}
-      <main aria-busy={pending} data-pending={pending ? "true" : undefined} className="min-w-0 flex-1 overflow-y-auto p-6">
+      <main aria-busy={pending} data-pending={pending ? "true" : undefined} className="min-w-0 flex-1 p-4 sm:p-6">
         {changingSection ? <SectionSkeleton /> : null}
         <div hidden={changingSection}>{children}</div>
       </main>

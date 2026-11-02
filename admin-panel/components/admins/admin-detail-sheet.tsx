@@ -233,7 +233,7 @@ export function AdminDetailSheet({ admin, open, onOpenChange, onCloseAutoFocus }
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full overflow-y-auto sm:max-w-xl" onCloseAutoFocus={onCloseAutoFocus}>
+      <SheetContent onCloseAutoFocus={onCloseAutoFocus}>
         <SheetHeader>
           <div className="flex items-center gap-3">
             {shown ? <UserAvatar key={shown.telegramId} telegramId={shown.telegramId} label={label} noPhoto={!shown.hasBotProfile} /> : null}

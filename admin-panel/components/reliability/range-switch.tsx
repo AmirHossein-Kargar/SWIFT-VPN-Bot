@@ -7,7 +7,7 @@ export function RangeSwitch({ value, onChange }: { value: RangeName; onChange: (
   return (
     <div className="inline-flex gap-1" role="group" aria-label="Time window">
       {RANGES.map((range) => (
-        <button key={range.value} type="button" className="rf-toggle" aria-pressed={value === range.value} aria-label={range.long} onClick={() => onChange(range.value)}>{range.label}</button>
+        <button key={range.value} type="button" className="rf-toggle" aria-pressed={value === range.value} aria-label={`${range.label}, ${range.long}`} onClick={() => onChange(range.value)}>{range.label}</button>
       ))}
     </div>
   );

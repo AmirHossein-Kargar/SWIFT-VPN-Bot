@@ -173,6 +173,7 @@ the fallback.
 
 - `npm test` includes real-HTTP tests of the built storefront (`tests/integration/storefrontBuild.test.js`),
   skipped with an explicit reason when the build is missing.
+- `npm run test:e2e:responsive` measures the page, its static fallback and the 404 at seven viewports and drives the phone menu, the order review and the guide.
 - `npm run test:e2e:store` drives real Chrome under the real CSP: hydration, themes and
   persistence, plan selection, the order review and its failure paths, right-to-left layout,
   accessibility (axe-core, if installed) and SEO tags. See [Testing](testing.md).

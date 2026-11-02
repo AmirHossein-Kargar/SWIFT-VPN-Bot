@@ -94,7 +94,7 @@ export default async function RemoteClientsPage({ searchParams }: { searchParams
 
   return (
     <div className="space-y-4">
-      <nav aria-label="VPN sections" className="flex gap-2">
+      <nav aria-label="VPN sections" className="flex flex-wrap gap-2">
         <ProgressLink href="/vpns" className={buttonVariants({ variant: "outline", size: "sm" })}>Local services</ProgressLink>
         <ProgressLink href="/vpns/remote" aria-current="page" className={buttonVariants({ variant: "default", size: "sm" })}>Remote clients</ProgressLink>
         <ProgressLink href="/products" className={buttonVariants({ variant: "outline", size: "sm" })}>Service catalog</ProgressLink>
@@ -117,18 +117,18 @@ export default async function RemoteClientsPage({ searchParams }: { searchParams
           ) : !clients?.items.length ? (
             <p className="p-6 text-center text-sm text-muted-foreground">The provider returned no clients.</p>
           ) : (
-            <Table>
+            <Table stack label="Remote clients">
               <TableHeader>
                 <TableRow><TableHead>Client</TableHead><TableHead>Status</TableHead><TableHead>Traffic</TableHead><TableHead>Expires</TableHead><TableHead>Local account</TableHead></TableRow>
               </TableHeader>
               <TableBody>
                 {clients.items.map((row, index) => (
                   <TableRow key={`${row.username ?? "client"}-${index}`}>
-                    <TableCell className="break-all font-mono text-xs">{row.username ?? "—"}{row.test ? <Badge variant="muted" className="ms-2">test</Badge> : null}</TableCell>
-                    <TableCell><Badge variant={STATUS_VARIANT[row.status ?? ""] ?? "outline"}>{row.status ?? "unknown"}</Badge></TableCell>
-                    <TableCell className="whitespace-nowrap text-muted-foreground">{traffic(row)}</TableCell>
-                    <TableCell className="whitespace-nowrap text-muted-foreground">{formatDateTime(row.expiresAt)}</TableCell>
-                    <TableCell>{row.knownLocally ? <Badge variant="success">linked</Badge> : <Badge variant="warning">not in bot database</Badge>}</TableCell>
+                    <TableCell wide className="break-all font-mono text-xs">{row.username ?? "—"}{row.test ? <Badge variant="muted" className="ms-2">test</Badge> : null}</TableCell>
+                    <TableCell label="Status"><Badge variant={STATUS_VARIANT[row.status ?? ""] ?? "outline"}>{row.status ?? "unknown"}</Badge></TableCell>
+                    <TableCell label="Traffic" className="whitespace-nowrap text-muted-foreground">{traffic(row)}</TableCell>
+                    <TableCell label="Expires" className="whitespace-nowrap text-muted-foreground">{formatDateTime(row.expiresAt)}</TableCell>
+                    <TableCell label="Local account">{row.knownLocally ? <Badge variant="success">linked</Badge> : <Badge variant="warning">not in bot database</Badge>}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

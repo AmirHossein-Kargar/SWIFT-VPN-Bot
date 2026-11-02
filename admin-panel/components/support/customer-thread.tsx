@@ -44,7 +44,7 @@ export function CustomerThread({ messages, attachmentBase }: { messages: TicketM
               {message.attachment?.kind === "video" ? (
                 <video src={`${attachmentBase}/${message.id}`} controls preload="none" className="mb-2 max-h-72 rounded-md border border-border" />
               ) : null}
-              {message.text ? <p className="whitespace-pre-wrap break-words" dir="auto">{message.text}</p> : null}
+              {message.text ? <p className="whitespace-pre-wrap [overflow-wrap:anywhere]" dir="auto">{message.text}</p> : null}
             </div>
           </li>
         );

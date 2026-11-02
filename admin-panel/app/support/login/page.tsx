@@ -7,7 +7,7 @@ export const metadata: Metadata = { title: "ورود به پشتیبانی" };
 
 export default function SupportLoginPage() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4" dir="rtl" lang="fa">
+    <div className="flex min-h-dvh items-center justify-center bg-background px-4" dir="rtl" lang="fa">
       <div className="w-full max-w-sm space-y-6">
         <div className="flex flex-col items-center gap-3 text-center">
           <Logo variant="stacked" height={72} />

@@ -19,7 +19,7 @@ export function TicketCustomerView({ telegramId, profile, onOpen, buttonRef }: {
       <div className="min-w-0 text-xs leading-tight">
         {name ? <p className="truncate text-sm font-medium" dir="auto">{name}</p> : null}
         <p className="flex flex-wrap gap-x-2 text-muted-foreground">
-          {username ? <span dir="ltr">{username}</span> : null}
+          {username ? <span dir="ltr" className="min-w-0 [overflow-wrap:anywhere]">{username}</span> : null}
           <span>ID <span className="font-mono">{telegramId}</span></span>
         </p>
       </div>
@@ -31,10 +31,10 @@ export function TicketCustomerView({ telegramId, profile, onOpen, buttonRef }: {
       ref={buttonRef}
       type="button"
       onClick={onOpen}
-      aria-label={`Open customer details for ${name ?? username ?? telegramId}`}
       data-testid="ticket-customer"
       className="-mx-1.5 flex min-w-0 max-w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
+      <span className="sr-only">Open customer details for </span>
       {content}
     </button>
   );

@@ -14,6 +14,10 @@ interface Selection { node: ComponentId | null; path: ComponentId[] | null }
 const EXTERNAL: ComponentId[] = ["telegram", "hooshpay", "nowpayments", "wizardxray"];
 const DATA: ComponentId[] = ["mongodb", "redis"];
 
+function stateLine(component: ComponentHealth): string {
+  return `${STATE_LABEL[component.state]}${component.evidence === "probe" && component.latencyMs != null ? ` · ${component.latencyMs} ms` : ""}`;
+}
+
 function summary(component: ComponentHealth): string {
   return `${component.label}: ${STATE_LABEL[component.state]}. ${component.reason}`;
 }
@@ -89,7 +93,6 @@ export const Topology = memo(function Topology({ components, edges, selection, o
               data-dim={dim ? "true" : undefined}
               data-node={component.id}
               aria-pressed={selection.node === component.id}
-              aria-label={`${summary(component)}${component.incidents ? ` ${component.incidents} open ${component.incidents === 1 ? "incident" : "incidents"}.` : ""} Opens details.`}
               onClick={() => onSelect(selection.node === component.id ? null : component.id)}
               onPointerEnter={() => setHovered(component.id)}
               onPointerLeave={() => setHovered(null)}
@@ -100,8 +103,9 @@ export const Topology = memo(function Topology({ components, edges, selection, o
               <span className="mf-node-plate" aria-hidden />
               <span className="rf-node-face">
                 <span className="rf-node-title"><span className="mf-signal" data-tone={STATE_TONE[component.state]} aria-hidden /><span className="truncate">{NODE_LABEL[component.id]}</span></span>
-                <span className="rf-node-state">{STATE_LABEL[component.state]}{component.evidence === "probe" && component.latencyMs != null ? ` · ${component.latencyMs} ms` : ""}</span>
+                <span className="rf-node-state">{stateLine(component)}</span>
               </span>
+              <span className="sr-only">{` ${summary(component)}${component.incidents ? ` ${component.incidents} open ${component.incidents === 1 ? "incident" : "incidents"}.` : ""} Opens details.`}</span>
               {component.incidents ? <span className="rf-node-badge" aria-hidden>{component.incidents}</span> : null}
               <span className="rf-node-flash" ref={(element) => { if (element) nodes.current.set(component.id, element); else nodes.current.delete(component.id); }} aria-hidden />
             </button>

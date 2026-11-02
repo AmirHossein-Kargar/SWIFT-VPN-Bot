@@ -105,7 +105,7 @@ export function CustodyView({ overview, transactions }: { overview: CustodyOverv
               {overview.balanceError ? <CardDescription className="text-destructive">{overview.balanceError}</CardDescription> : null}
             </CardHeader>
             <CardContent className="p-0">
-              <Table>
+              <Table stack label="Custody balances">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Asset</TableHead>
@@ -119,9 +119,9 @@ export function CustodyView({ overview, transactions }: { overview: CustodyOverv
                   ) : (
                     overview.balances.map((balance) => (
                       <TableRow key={balance.code}>
-                        <TableCell className="font-medium">{balance.ticker} ({balance.network})</TableCell>
-                        <TableCell>{balance.availableDisplay}</TableCell>
-                        <TableCell className="text-muted-foreground">{balance.pendingDisplay}</TableCell>
+                        <TableCell wide className="font-medium">{balance.ticker} ({balance.network})</TableCell>
+                        <TableCell label="Available">{balance.availableDisplay}</TableCell>
+                        <TableCell label="Pending" className="text-muted-foreground">{balance.pendingDisplay}</TableCell>
                       </TableRow>
                     ))
                   )}
@@ -157,7 +157,7 @@ export function CustodyView({ overview, transactions }: { overview: CustodyOverv
                 {overview.conversionsError ? <CardDescription className="text-destructive">{overview.conversionsError}</CardDescription> : null}
               </CardHeader>
               <CardContent className="p-0">
-                <Table>
+                <Table stack label="Recent conversions">
                   <TableHeader>
                     <TableRow><TableHead>Pair</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead></TableRow>
                   </TableHeader>
@@ -167,9 +167,9 @@ export function CustodyView({ overview, transactions }: { overview: CustodyOverv
                     ) : (
                       overview.recentConversions.map((conversion) => (
                         <TableRow key={conversion.id}>
-                          <TableCell className="font-medium">{conversion.fromCurrency.toUpperCase()} → {conversion.toCurrency.toUpperCase()}</TableCell>
-                          <TableCell>{conversion.fromAmountDisplay} → {conversion.toAmountDisplay}</TableCell>
-                          <TableCell><Badge variant="outline">{conversion.status}</Badge></TableCell>
+                          <TableCell wide className="font-medium">{conversion.fromCurrency.toUpperCase()} → {conversion.toCurrency.toUpperCase()}</TableCell>
+                          <TableCell label="Amount">{conversion.fromAmountDisplay} → {conversion.toAmountDisplay}</TableCell>
+                          <TableCell label="Status"><Badge variant="outline">{conversion.status}</Badge></TableCell>
                         </TableRow>
                       ))
                     )}
@@ -184,7 +184,7 @@ export function CustodyView({ overview, transactions }: { overview: CustodyOverv
                 {overview.payoutsError ? <CardDescription className="text-destructive">{overview.payoutsError}</CardDescription> : null}
               </CardHeader>
               <CardContent className="p-0">
-                <Table>
+                <Table stack label="Recent payouts">
                   <TableHeader>
                     <TableRow><TableHead>Asset</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead></TableRow>
                   </TableHeader>
@@ -194,9 +194,9 @@ export function CustodyView({ overview, transactions }: { overview: CustodyOverv
                     ) : (
                       overview.recentPayouts.map((payout) => (
                         <TableRow key={payout.id}>
-                          <TableCell className="font-medium">{payout.ticker}</TableCell>
-                          <TableCell>{payout.amountDisplay}</TableCell>
-                          <TableCell><Badge variant="outline">{payout.status}</Badge></TableCell>
+                          <TableCell wide className="font-medium">{payout.ticker}</TableCell>
+                          <TableCell label="Amount">{payout.amountDisplay}</TableCell>
+                          <TableCell label="Status"><Badge variant="outline">{payout.status}</Badge></TableCell>
                         </TableRow>
                       ))
                     )}
@@ -239,7 +239,7 @@ export function CustodyView({ overview, transactions }: { overview: CustodyOverv
 
           <Card>
             <CardContent className="p-0">
-              <Table>
+              <Table stack label="NOWPayments transactions">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Order</TableHead>
@@ -256,14 +256,14 @@ export function CustodyView({ overview, transactions }: { overview: CustodyOverv
                   ) : (
                     transactions.map((tx) => (
                       <TableRow key={tx.orderId}>
-                        <TableCell className="font-medium">{tx.orderId}</TableCell>
-                        <TableCell>{tx.userId}</TableCell>
-                        <TableCell>{formatToman(tx.amountToman)}</TableCell>
-                        <TableCell>{tx.ticker}</TableCell>
-                        <TableCell>
+                        <TableCell wide className="font-medium">{tx.orderId}</TableCell>
+                        <TableCell label="User">{tx.userId}</TableCell>
+                        <TableCell label="Amount">{formatToman(tx.amountToman)}</TableCell>
+                        <TableCell label="Currency">{tx.ticker}</TableCell>
+                        <TableCell label="Status">
                           <Badge variant={tx.balanceCredited ? "success" : "outline"}>{tx.status}</Badge>
                         </TableCell>
-                        <TableCell className="text-muted-foreground">{formatDateTime(tx.createdAt)}</TableCell>
+                        <TableCell label="Created" className="text-muted-foreground">{formatDateTime(tx.createdAt)}</TableCell>
                       </TableRow>
                     ))
                   )}

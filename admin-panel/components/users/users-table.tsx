@@ -36,7 +36,7 @@ export function UsersTable({ items }: { items: AdminUser[] }) {
 
   return (
     <>
-      <Table>
+      <Table stack label="Users">
         <TableHeader>
           <TableRow>
             <TableHead>User</TableHead>
@@ -46,27 +46,27 @@ export function UsersTable({ items }: { items: AdminUser[] }) {
             <TableHead className="hidden md:table-cell">Registered</TableHead>
             <TableHead className="hidden lg:table-cell">Last active</TableHead>
             <TableHead>Status</TableHead>
-            <TableHead className="w-10" />
+            <TableHead className="w-10"><span className="sr-only">Actions</span></TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {items.map((user) => (
             <TableRow key={user.telegramId}>
-              <TableCell>
-                <button className="text-left hover:underline" onClick={() => openDetail(user.telegramId)}>
+              <TableCell wide>
+                <button className="max-w-full text-left hover:underline" onClick={() => openDetail(user.telegramId)}>
                   <p className="font-medium">{user.name ?? user.username ?? user.telegramId}</p>
                   <p className="text-xs text-muted-foreground">{user.telegramId}</p>
                 </button>
               </TableCell>
-              <TableCell><ChangeFlash value={user.balance}>{formatToman(user.balance)}</ChangeFlash></TableCell>
-              <TableCell className="hidden sm:table-cell">{formatNumber(user.successfulPayments)}</TableCell>
-              <TableCell className="hidden sm:table-cell">{formatNumber(user.serviceCount)}</TableCell>
-              <TableCell className="hidden text-muted-foreground md:table-cell">{formatDateTime(user.createdAt)}</TableCell>
-              <TableCell className="hidden text-muted-foreground lg:table-cell">{formatDateTime(user.lastActivityAt)}</TableCell>
-              <TableCell>
+              <TableCell label="Balance"><ChangeFlash value={user.balance}>{formatToman(user.balance)}</ChangeFlash></TableCell>
+              <TableCell label="Payments" className="hidden sm:table-cell">{formatNumber(user.successfulPayments)}</TableCell>
+              <TableCell label="Services" className="hidden sm:table-cell">{formatNumber(user.serviceCount)}</TableCell>
+              <TableCell label="Registered" className="hidden text-muted-foreground md:table-cell">{formatDateTime(user.createdAt)}</TableCell>
+              <TableCell label="Last active" className="hidden text-muted-foreground lg:table-cell">{formatDateTime(user.lastActivityAt)}</TableCell>
+              <TableCell label="Status">
                 <ChangeFlash value={user.isBanned}>{user.isBanned ? <Badge variant="destructive">Blocked</Badge> : <Badge variant="success">Active</Badge>}</ChangeFlash>
               </TableCell>
-              <TableCell>
+              <TableCell corner>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="ghost" size="icon" aria-label={`Actions for ${user.telegramId}`}>

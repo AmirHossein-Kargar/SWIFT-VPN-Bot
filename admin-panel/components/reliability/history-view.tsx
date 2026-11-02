@@ -51,7 +51,7 @@ function DataTable({ points }: { points: HistoryPoint[] }) {
   return (
     <details className="rounded-md border border-border bg-card px-3 py-2 text-sm">
       <summary className="cursor-pointer font-medium">Table view</summary>
-      <div className="mt-2 max-h-80 overflow-auto">
+      <div className="mt-2 max-h-80 overflow-auto" tabIndex={0} role="region" aria-label="History as a table">
         <table className="w-full min-w-[32rem] text-left text-xs">
           <thead className="text-muted-foreground"><tr><th className="py-1 pr-3 font-medium">Bucket</th><th className="pr-3 font-medium">Handled</th><th className="pr-3 font-medium">Errors</th><th className="pr-3 font-medium">Timeouts</th><th className="pr-3 font-medium">P95</th><th className="font-medium">Provider P95</th></tr></thead>
           <tbody className="divide-y divide-border tabular-nums">

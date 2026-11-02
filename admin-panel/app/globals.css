@@ -42,8 +42,25 @@
   * {
     @apply border-border;
   }
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    scroll-padding-top: 4.5rem; /* A focused or linked element never lands under the sticky top bar. */
+  }
   body {
     @apply bg-background text-foreground antialiased;
+    overflow-wrap: break-word;
+  }
+  /* A grid track must be able to shrink below its content, or one long id widens the whole page. */
+  .grid > * {
+    min-width: 0;
+  }
+  /* The one touch floor for links and buttons that stand alone. A link inside a sentence stays `inline` and sizes with the text. */
+  @media (pointer: coarse) {
+    a.flex, a.inline-flex, a.inline-block, button.flex, button.inline-flex:not([role="switch"]), th button, td button:not([role="switch"], [role="checkbox"]) {
+      min-height: 2.75rem;
+    }
+    a.inline-block { display: inline-flex; align-items: center; }
   }
   :focus-visible {
     @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
@@ -56,6 +73,49 @@
 .brand-on-dark { display: none; }
 .dark .brand-on-light { display: none; }
 .dark .brand-on-dark { display: inline-block; }
+
+/*
+ * Below `md`, a `<Table stack>` reads as one card per row. The header stays for screen readers; each cell names itself from
+ * `data-label`. Specificity is what lets a cell that hides as a column (`hidden lg:table-cell`) still show here.
+ */
+@media (max-width: 767.98px) {
+  .table-stack { display: block; }
+  .table-stack > thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  /* Sort buttons in that hidden header would still take keyboard focus, invisibly; a table with sorting offers it as a control. */
+  .table-stack > thead button { visibility: hidden; }
+  .table-stack > tbody { display: block; }
+  .table-stack > tbody > tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem 1rem; padding: 1rem; }
+  .table-stack > tbody > tr > td { display: block; min-width: 0; max-width: none; padding: 0; overflow-wrap: anywhere; white-space: normal; }
+  .table-stack > tbody > tr > td[data-wide], .table-stack > tbody > tr > td[colspan] { grid-column: 1 / -1; }
+  .table-stack > tbody > tr > td:empty { display: none; }
+  .table-stack > tbody > tr { position: relative; }
+  .table-stack > tbody > tr > td[data-corner] { position: absolute; top: 0.5rem; right: 0.5rem; display: grid; place-items: center; min-width: 2.75rem; min-height: 2.75rem; }
+  .table-stack > tbody > tr:has(> td[data-corner]) > td[data-wide]:not(:empty) { padding-right: 2.5rem; }
+  .table-stack td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 0.125rem; font-size: 0.75rem; line-height: 1rem; color: hsl(var(--muted-foreground)); }
+}
+
+/* The same card, kept up to `xl`, in four columns once there is room for them. */
+@media (max-width: 1279.98px) {
+  .table-stack-xl { display: block; }
+  .table-stack-xl > thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .table-stack-xl > thead button { visibility: hidden; }
+  .table-stack-xl > tbody { display: block; }
+  .table-stack-xl > tbody > tr { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem 1rem; padding: 1rem; }
+  .table-stack-xl > tbody > tr > td { display: block; min-width: 0; max-width: none; padding: 0; overflow-wrap: anywhere; white-space: normal; }
+  .table-stack-xl > tbody > tr > td[data-wide], .table-stack-xl > tbody > tr > td[colspan] { grid-column: 1 / -1; }
+  .table-stack-xl > tbody > tr > td:empty { display: none; }
+  .table-stack-xl > tbody > tr > td[data-corner] { position: absolute; top: 0.5rem; right: 0.5rem; display: grid; place-items: center; min-width: 2.75rem; min-height: 2.75rem; }
+  .table-stack-xl > tbody > tr:has(> td[data-corner]) > td[data-wide]:not(:empty) { padding-right: 2.5rem; }
+  .table-stack-xl td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 0.125rem; font-size: 0.75rem; line-height: 1rem; color: hsl(var(--muted-foreground)); }
+}
+@media (min-width: 640px) and (max-width: 1279.98px) {
+  .table-stack-xl > tbody > tr { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* The side of a scroll region with more behind it fades out; scrollbars are hidden on phones. */
+.scroll-region[data-edge="end"] { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 1.5rem), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 1.5rem), transparent); }
+.scroll-region[data-edge="start"] { -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 1.5rem), transparent); mask-image: linear-gradient(to left, #000 calc(100% - 1.5rem), transparent); }
+.scroll-region[data-edge="both"] { -webkit-mask-image: linear-gradient(to right, transparent, #000 1.5rem, #000 calc(100% - 1.5rem), transparent); mask-image: linear-gradient(to right, transparent, #000 1.5rem, #000 calc(100% - 1.5rem), transparent); }
 
 /* System-health ECG: a bright 30% window sweeps along the (faint) full waveform. With reduced motion the full trace is simply drawn bright and still. */
 @media (prefers-reduced-motion: no-preference) {
@@ -158,6 +218,7 @@ main[data-pending] .page-enter { opacity: 0.6; transition: opacity 0.15s ease 0.
 
 .mf-node { position: absolute; width: 8.5%; min-width: 4.5rem; aspect-ratio: 1.45; translate: -50% -50%; transform: translateZ(26px); border-radius: 0.7rem; transform-style: preserve-3d; outline-offset: 3px; }
 .mf-node-source { width: 12.5%; aspect-ratio: 2.2; }
+@media (pointer: coarse) { .mf-node, .rf-node { min-height: 2.75rem; } }
 .mf-node-core { width: 12%; aspect-ratio: 1.3; }
 .mf-node-plate { position: absolute; inset: 0; border-radius: inherit; border: 1px solid hsl(var(--brand) / 0.3); background: hsl(var(--brand) / 0.08); transition: transform 0.2s ease-out; }
 .mf-node-plate:nth-child(1) { transform: translate(5px, 9px); }
@@ -243,7 +304,7 @@ main[data-pending] .page-enter { opacity: 0.6; transition: opacity 0.15s ease 0.
 .rf-toggle { display: inline-flex; align-items: center; gap: 0.375rem; min-height: 2rem; padding: 0 0.625rem; border: 1px solid hsl(var(--border)); border-radius: calc(var(--radius) - 2px); background: transparent; color: hsl(var(--muted-foreground)); font-size: 0.75rem; font-weight: 500; transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease; }
 .rf-toggle:hover { background: hsl(var(--accent)); color: hsl(var(--accent-foreground)); }
 .rf-toggle[aria-pressed="true"] { border-color: hsl(var(--primary)); background: hsl(var(--primary) / 0.12); color: hsl(var(--foreground)); }
-@media (pointer: coarse) { .rf-toggle { min-height: 2.5rem; min-width: 2.5rem; justify-content: center; } }
+@media (pointer: coarse) { .rf-toggle { min-height: 2.75rem; min-width: 2.75rem; justify-content: center; } }
 
 /* The hero's map: one ring segment per component, on two plates. */
 .rf-hero { min-height: 13rem; }

@@ -20,7 +20,7 @@ export function ReliabilityTabs() {
   const pathname = stripBasePath(usePathname());
   const openIncidents = useFeed((state) => state.snapshot?.incidents.openCount ?? 0);
   return (
-    <nav aria-label="Service Reliability sections" className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1">
+    <nav aria-label="Service Reliability sections" className="-mx-1 flex flex-wrap gap-1 px-1 pb-1">
       {TABS.map(({ href, label, icon: Icon }) => {
         const active = href === "/reliability" ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
         return (

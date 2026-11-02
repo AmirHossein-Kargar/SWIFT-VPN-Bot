@@ -107,7 +107,7 @@ export function FindingDetailView({ finding }: { finding: FindingDetail }) {
               <ul className="space-y-1">
                 {finding.refs.map((ref) => {
                   const href = refHref(ref);
-                  return <li key={`${ref.type}:${ref.key}`} className="break-all font-mono text-xs">{href ? <Link href={href} className="text-primary underline-offset-4 hover:underline">{ref.key}</Link> : ref.key}</li>;
+                  return <li key={`${ref.type}:${ref.key}`} className="break-all font-mono text-xs">{href ? <Link href={href} className="inline-flex items-center text-primary underline-offset-4 hover:underline">{ref.key}</Link> : ref.key}</li>;
                 })}
               </ul>
             </div>

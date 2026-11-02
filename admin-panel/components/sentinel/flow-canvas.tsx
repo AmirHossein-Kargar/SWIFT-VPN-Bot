@@ -61,7 +61,6 @@ function FlowNodeButton({ node, selected, onSelect }: { node: FlowNode; selected
       data-alert={node.alert ?? undefined}
       data-empty={node.count === 0 ? "true" : undefined}
       aria-pressed={selected}
-      aria-label={`${node.label}: ${formatNumber(node.count)} records, ${formatToman(node.amount)}${alert}. ${node.hint}. Filters the feed.`}
       onClick={() => onSelect(selected ? null : node.id)}
     >
       <span className="mf-node-plate" aria-hidden />
@@ -70,6 +69,7 @@ function FlowNodeButton({ node, selected, onSelect }: { node: FlowNode; selected
         <span className="mf-node-label">{node.label}</span>
         <span className="mf-node-count">{formatNumber(node.count)}</span>
       </span>
+      <span className="sr-only">{` records, ${formatToman(node.amount)}${alert}. ${node.hint}. Filters the feed.`}</span>
     </button>
   );
 }

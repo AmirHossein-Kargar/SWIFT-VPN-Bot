@@ -55,12 +55,12 @@ export function PaymentsFilters({
 
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <div className="relative w-full max-w-xs">
+      <div className="relative w-full sm:max-w-xs">
         <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
         <Input value={search} onChange={(event) => onSearchChange(event.target.value)} placeholder="Search by ID, order, or tracking code" className="pl-8" />
       </div>
       <Select value={status} onValueChange={(value) => update({ status: value })}>
-        <SelectTrigger className="w-44" aria-label="Filter by status">
+        <SelectTrigger className="w-full sm:w-44" aria-label="Filter by status">
           <SelectValue placeholder="Status" />
         </SelectTrigger>
         <SelectContent>
@@ -72,7 +72,7 @@ export function PaymentsFilters({
         </SelectContent>
       </Select>
       <Select value={provider} onValueChange={(value) => update({ provider: value })}>
-        <SelectTrigger className="w-44" aria-label="Filter by provider">
+        <SelectTrigger className="w-full sm:w-44" aria-label="Filter by provider">
           <SelectValue placeholder="Provider" />
         </SelectTrigger>
         <SelectContent>

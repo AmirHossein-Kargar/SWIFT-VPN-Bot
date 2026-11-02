@@ -52,7 +52,7 @@ export function TransactionDetailView({ transaction }: { transaction: Transactio
           <CardHeader className="pb-3"><CardTitle className="text-foreground">Identifiers</CardTitle></CardHeader>
           <CardContent>
             <dl className="grid gap-3 sm:grid-cols-2">
-              <Field label="Customer" value={<Link className="text-primary underline-offset-4 hover:underline" href={`/users?search=${encodeURIComponent(transaction.userId)}`}>{transaction.userId}</Link>} />
+              <Field label="Customer" value={<Link className="inline-flex items-center text-primary underline-offset-4 hover:underline" href={`/users?search=${encodeURIComponent(transaction.userId)}`}>{transaction.userId}</Link>} />
               {identifiers.map(([key, value]) => <Field key={key} label={FIELD_LABEL[key] ?? key} value={String(value)} />)}
             </dl>
             <Link href={paymentsHref} className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-primary underline-offset-4 hover:underline">Open in Payments<ExternalLink className="h-3.5 w-3.5" aria-hidden /></Link>

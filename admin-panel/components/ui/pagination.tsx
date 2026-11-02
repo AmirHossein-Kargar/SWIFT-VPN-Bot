@@ -15,7 +15,7 @@ export function Pagination({
 }) {
   const safePages = Math.max(1, pages);
   return (
-    <div className="flex items-center justify-between gap-4 px-1">
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1">
       <p className="text-xs text-muted-foreground">
         Page {page} of {safePages}
       </p>

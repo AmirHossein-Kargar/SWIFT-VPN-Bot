@@ -1,8 +1,7 @@
 "use client";
 
 import { useRouter, usePathname } from "next/navigation";
-import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { LogOut, Menu, User as UserIcon, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 
@@ -13,11 +12,9 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { useAdminSession } from "@/components/session-provider";
 import { adminMutate } from "@/lib/adminApi.client";
 import { stripBasePath } from "@/lib/basePath";
-import { NAV_SECTIONS } from "@/components/layout/sidebar";
+import { NAV_SECTIONS, NavLinks } from "@/components/layout/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Logo } from "@/components/brand/logo";
-import { cn } from "@/lib/utils";
-import { useOpenSection } from "@/components/shared/navigation-pending";
 
 function pageTitle(pathname: string): string {
   for (const section of NAV_SECTIONS) {
@@ -32,9 +29,18 @@ export function Topbar() {
   const router = useRouter();
   const pathname = stripBasePath(usePathname());
   const title = pageTitle(pathname);
-  const openSection = useOpenSection();
   const [signingOut, setSigningOut] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
+
+  // The drawer belongs to one page and to narrow screens: browser back and a rotated tablet must not leave it open.
+  useEffect(() => setMobileNavOpen(false), [pathname]);
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 1024px)");
+    const close = (event: MediaQueryListEvent) => { if (event.matches) setMobileNavOpen(false); };
+    desktop.addEventListener("change", close);
+    return () => desktop.removeEventListener("change", close);
+  }, []);
 
   async function handleSignOut() {
     setSigningOut(true);
@@ -50,13 +56,16 @@ export function Topbar() {
   }
 
   return (
-    <header className="flex h-14 items-center justify-between border-b border-border bg-card px-4 sm:px-6">
-      <div className="flex items-center gap-3">
+    <header className="sticky top-0 z-40 flex min-h-14 items-center justify-between gap-2 border-b border-border bg-card px-4 pt-[env(safe-area-inset-top)] sm:px-6">
+      <div className="flex min-w-0 items-center gap-3">
         <Button
+          ref={menuButton}
           variant="ghost"
           size="icon"
-          className="lg:hidden"
+          className="shrink-0 lg:hidden"
           aria-label="Open navigation"
+          aria-expanded={mobileNavOpen}
+          aria-controls="mobile-navigation"
           onClick={() => setMobileNavOpen(true)}
         >
           <Menu className="h-5 w-5" />
@@ -75,7 +84,7 @@ export function Topbar() {
           </BreadcrumbList>
         </Breadcrumb>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2">
         <ThemeToggle />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -100,44 +109,22 @@ export function Topbar() {
       </div>
 
       <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
-        <SheetContent side="right" className="w-72 p-0">
-          <SheetHeader className="border-b border-border px-5 py-4">
+        {/* Controlled, so Radix has no trigger to give focus back to. */}
+        <SheetContent
+          id="mobile-navigation"
+          side="left"
+          aria-describedby={undefined}
+          className="flex w-72 max-w-[85vw] flex-col p-0"
+          onCloseAutoFocus={(event) => { event.preventDefault(); menuButton.current?.focus(); }}
+        >
+          <SheetHeader className="shrink-0 border-b border-border px-5 py-4 pt-[max(1rem,env(safe-area-inset-top))]">
             <SheetTitle className="flex items-center gap-2.5">
               <Logo height={24} />
               <span className="sr-only">Admin navigation</span>
             </SheetTitle>
           </SheetHeader>
-          <nav className="overflow-y-auto px-3 py-4">
-            {NAV_SECTIONS.map((section) => (
-              <div key={section.label} className="mb-4">
-                <p className="px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  {section.label}
-                </p>
-                <ul className="space-y-0.5">
-                  {section.items.map((item) => {
-                    const active = pathname === item.href || (item.href !== "/" && pathname.startsWith(`${item.href}/`));
-                    const Icon = item.icon;
-                    return (
-                      <li key={item.href}>
-                        <Link
-                          href={item.href}
-                          onClick={(event) => { setMobileNavOpen(false); openSection(event, item.href); }}
-                          className={cn(
-                            "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-[color,background-color,transform] duration-150 active:scale-[0.98]",
-                            active
-                              ? "bg-primary text-primary-foreground"
-                              : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                          )}
-                        >
-                          <Icon className="h-4 w-4" />
-                          {item.label}
-                        </Link>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            ))}
+          <nav aria-label="Admin sections" className="min-h-0 flex-1 overflow-y-auto px-3 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+            <NavLinks touch onNavigate={() => setMobileNavOpen(false)} />
           </nav>
         </SheetContent>
       </Sheet>

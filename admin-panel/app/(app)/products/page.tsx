@@ -42,7 +42,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
 
   return (
     <div className="space-y-4">
-      <nav aria-label="VPN sections" className="flex gap-2">
+      <nav aria-label="VPN sections" className="flex flex-wrap gap-2">
         <ProgressLink href="/vpns" className={buttonVariants({ variant: "outline", size: "sm" })}>Local services</ProgressLink>
         <ProgressLink href="/vpns/remote" className={buttonVariants({ variant: "outline", size: "sm" })}>Remote clients</ProgressLink>
         <ProgressLink href="/products" aria-current="page" className={buttonVariants({ variant: "default", size: "sm" })}>Service catalog</ProgressLink>

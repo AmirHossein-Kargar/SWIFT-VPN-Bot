@@ -67,7 +67,7 @@ export function MessageList({ messages, actorId }: { messages: TicketMessage[]; 
                     className="mb-2 max-h-72 rounded-lg border border-border/60"
                   />
                 ) : null}
-                {message.text ? <p className="whitespace-pre-wrap break-words" dir="auto">{message.text}</p> : null}
+                {message.text ? <p className="whitespace-pre-wrap [overflow-wrap:anywhere]" dir="auto">{message.text}</p> : null}
               </div>
               <p className="flex flex-wrap gap-x-2 px-1 text-xs text-muted-foreground">
                 <span className="font-medium">{senderLabel(message, actorId)}</span>

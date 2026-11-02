@@ -119,6 +119,7 @@ The full reference, with defaults and optional settings, is in
 | `npm run build:guide-images` | Redraw the top-up guide images (needs Chrome; the images are committed) |
 | `npm run admin:dev` / `npm run storefront:dev` | Next.js dev servers (ports 3100 / 3101) |
 | `npm run test:e2e` / `npm run test:e2e:store` | Browser suites (need Chrome) |
+| `npm run test:e2e:responsive` | Every route at seven viewports, plus phone interactions |
 
 DB-backed suites need a throwaway MongoDB (`TEST_MONGO_URL`, name must contain `test`). Without one
 they are **skipped, not failed**: a green run with skips means those money-path assertions did not

@@ -24,7 +24,7 @@ const AlertDialogContent = React.forwardRef<React.ElementRef<typeof AlertDialogP
       <AlertDialogPrimitive.Content
         ref={ref}
         className={cn(
-          "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border border-border bg-card p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+          "fixed left-[50%] top-[50%] z-50 grid max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto rounded-lg border border-border bg-card p-4 shadow-lg duration-200 [overflow-wrap:anywhere] sm:p-6 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
           className
         )}
         {...props}
@@ -40,7 +40,7 @@ const AlertDialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDiv
 AlertDialogHeader.displayName = "AlertDialogHeader";
 
 const AlertDialogFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn("flex flex-col-reverse gap-2 sm:flex-row sm:justify-end", className)} {...props} />
+  <div className={cn("sticky -bottom-4 -mx-4 -mb-4 flex flex-wrap-reverse justify-end gap-2 bg-card px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 max-sm:[&>*]:flex-1 sm:-bottom-6 sm:-mx-6 sm:-mb-6 sm:px-6 sm:pb-6", className)} {...props} />
 );
 AlertDialogFooter.displayName = "AlertDialogFooter";
 

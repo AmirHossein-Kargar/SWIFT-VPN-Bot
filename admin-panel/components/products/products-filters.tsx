@@ -48,12 +48,12 @@ export function ProductsFilters({ search: defaultSearch, status, duration }: { s
 
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <div className="relative w-full max-w-xs">
+      <div className="relative w-full sm:max-w-xs">
         <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
         <Input value={search} onChange={(event) => onSearchChange(event.target.value)} placeholder="Search by name or ID" className="pl-8" aria-label="Search services" maxLength={80} />
       </div>
       <Select value={status} onValueChange={(value) => update({ status: value })}>
-        <SelectTrigger className="w-52" aria-label="Filter by availability">
+        <SelectTrigger className="w-full sm:w-52" aria-label="Filter by availability">
           <SelectValue placeholder="Availability" />
         </SelectTrigger>
         <SelectContent>
@@ -63,7 +63,7 @@ export function ProductsFilters({ search: defaultSearch, status, duration }: { s
         </SelectContent>
       </Select>
       <Select value={duration} onValueChange={(value) => update({ duration: value })}>
-        <SelectTrigger className="w-40" aria-label="Filter by duration">
+        <SelectTrigger className="w-full sm:w-40" aria-label="Filter by duration">
           <SelectValue placeholder="Duration" />
         </SelectTrigger>
         <SelectContent>

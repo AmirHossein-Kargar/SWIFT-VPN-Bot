@@ -124,7 +124,7 @@ export function BroadcastComposer() {
                     <FormLabel>Audience</FormLabel>
                     <Select value={field.value} onValueChange={field.onChange}>
                       <FormControl>
-                        <SelectTrigger className="w-64">
+                        <SelectTrigger className="w-full sm:w-64">
                           <SelectValue />
                         </SelectTrigger>
                       </FormControl>

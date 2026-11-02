@@ -56,6 +56,8 @@ rerun with `TEST_CONCURRENCY=1` to isolate a concurrency-sensitive test from a g
 - `npm run test:e2e` (admin, fixture backend) and `npm run test:e2e:store` (storefront under the real CSP) need Chrome
   (`CHROME_PATH`); the storefront suite needs a storefront build and exits 0 with `SKIP` without one. axe checks run only
   when `axe-core` resolves (`AXE_PATH`).
+- `npm run test:e2e:responsive` covers every route at seven viewports and the phone interactions, for any layout or shared UI change. It needs `npm run build` and a
+  disposable `TEST_MONGO_URL`. `E2E_WIDTHS=320,375` and `E2E_ONLY=<regex>` narrow it; `E2E_AUDIT=1` reports without failing, for measuring a baseline.
 - `node tests/e2e/nextPanel.e2e.mjs` is the `/panel` suite (needs `npx next build admin-panel`; not an npm script): real
   session and CSRF middleware, delayed and failing API answers, and the navigation-hang regressions. `E2E_ONLY=<regex>`
   runs matching steps. A navigation bug here passed one-file runs and failed with a warm server, so repeat a flaky

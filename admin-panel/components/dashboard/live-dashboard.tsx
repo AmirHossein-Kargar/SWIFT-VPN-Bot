@@ -64,7 +64,7 @@ function HealthStrip({ health }: { health: DashboardPulse["health"] }) {
             {health.components.map((component) => (
               <li key={component.id} className="flex min-w-0 items-center gap-2 text-sm" title={component.reason}>
                 <span aria-hidden="true" className={cn("dash-state-dot", STATE_DOT[component.state])} />
-                <span className="truncate">{component.label}</span>
+                <span className="min-w-0">{component.label}</span>
                 <span className="sr-only">: {component.state}</span>
               </li>
             ))}
@@ -79,9 +79,9 @@ function HealthStrip({ health }: { health: DashboardPulse["health"] }) {
 function ActivityRow({ item }: { item: DashboardActivity }) {
   return (
     <li className="dash-activity-row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 py-2 text-sm">
-      <span className="truncate font-medium">{item.title}</span>
+      <span className="min-w-0 font-medium">{item.title}</span>
       <span className="text-end">{item.amount != null ? formatToman(item.amount) : "—"}</span>
-      <span className="truncate text-xs text-muted-foreground">{item.kind === "order" ? "Order" : "Payment"} · {item.userId} · {formatDateTime(item.at)}</span>
+      <span className="min-w-0 text-xs text-muted-foreground">{item.kind === "order" ? "Order" : "Payment"} · {item.userId} · {formatDateTime(item.at)}</span>
       <span className="justify-self-end"><PaymentStatusBadge status={item.kind === "order" ? item.status.replace(/_/g, " ") : item.status} /></span>
     </li>
   );

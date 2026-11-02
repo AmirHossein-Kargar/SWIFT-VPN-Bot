@@ -27,7 +27,7 @@ export function VpnsTable({ items }: { items: AdminVpn[] }) {
 
   return (
     <>
-      <Table>
+      <Table stack label="VPN services">
         <TableHeader>
           <TableRow>
             <TableHead>Client ID</TableHead>
@@ -48,15 +48,17 @@ export function VpnsTable({ items }: { items: AdminVpn[] }) {
                 setOpen(true);
               }}
             >
-              <TableCell className="font-medium">{vpn.clientId}</TableCell>
-              <TableCell>
+              <TableCell wide className="font-medium">
+                <button type="button" className="max-w-full text-left hover:underline">{vpn.clientId}</button>
+              </TableCell>
+              <TableCell label="Owner">
                 <p>{vpn.ownerName ?? vpn.username ?? vpn.telegramId}</p>
                 <p className="text-xs text-muted-foreground">{vpn.telegramId}</p>
               </TableCell>
-              <TableCell className="max-w-44 truncate">{vpn.product ?? "—"}</TableCell>
-              <TableCell>{vpn.trafficGb === 0 ? "Unlimited" : vpn.trafficGb != null ? `${formatNumber(vpn.trafficGb)} GB` : "—"}</TableCell>
-              <TableCell className="text-muted-foreground">{formatDateTime(vpn.expiresAt)}</TableCell>
-              <TableCell>
+              <TableCell label="Plan" className="max-w-44 truncate">{vpn.product ?? "—"}</TableCell>
+              <TableCell label="Traffic">{vpn.trafficGb === 0 ? "Unlimited" : vpn.trafficGb != null ? `${formatNumber(vpn.trafficGb)} GB` : "—"}</TableCell>
+              <TableCell label="Expires" className="text-muted-foreground">{formatDateTime(vpn.expiresAt)}</TableCell>
+              <TableCell label="Status">
                 <Badge variant={STATUS_VARIANT[vpn.status]}>{vpn.status}</Badge>
               </TableCell>
             </TableRow>

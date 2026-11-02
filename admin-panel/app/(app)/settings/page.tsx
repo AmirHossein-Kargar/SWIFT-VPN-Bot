@@ -269,18 +269,18 @@ export default async function SettingsPage() {
             <CardContent className="p-0">
               {audit ? (
                 audit.items.length === 0 ? <p className="py-8 text-center text-sm text-muted-foreground">No admin activity recorded yet.</p> : (
-                  <Table>
+                  <Table stack label="Recent admin activity">
                     <TableHeader>
                       <TableRow><TableHead>When</TableHead><TableHead>Admin</TableHead><TableHead>Action</TableHead><TableHead>Target</TableHead><TableHead>Status</TableHead></TableRow>
                     </TableHeader>
                     <TableBody>
                       {audit.items.map((entry, index) => (
                         <TableRow key={`${entry.createdAt}-${index}`}>
-                          <TableCell className="text-muted-foreground">{formatDateTime(entry.createdAt)}</TableCell>
-                          <TableCell className="font-mono text-xs">{entry.actorTelegramId}</TableCell>
-                          <TableCell className="font-mono text-xs">{entry.action}</TableCell>
-                          <TableCell className="font-mono text-xs">{entry.targetId ?? "—"}</TableCell>
-                          <TableCell><Badge variant={entry.status === "succeeded" ? "success" : entry.status === "failed" ? "destructive" : "muted"}>{entry.status}</Badge></TableCell>
+                          <TableCell label="When" className="text-muted-foreground">{formatDateTime(entry.createdAt)}</TableCell>
+                          <TableCell label="Admin" className="font-mono text-xs">{entry.actorTelegramId}</TableCell>
+                          <TableCell wide label="Action" className="font-mono text-xs">{entry.action}</TableCell>
+                          <TableCell wide label="Target" className="font-mono text-xs">{entry.targetId ?? "—"}</TableCell>
+                          <TableCell label="Status"><Badge variant={entry.status === "succeeded" ? "success" : entry.status === "failed" ? "destructive" : "muted"}>{entry.status}</Badge></TableCell>
                         </TableRow>
                       ))}
                     </TableBody>

@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { ScrollRegion } from "@/components/ui/scroll-region";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import type { AuditLogEntry } from "@/lib/types";
 import { formatDateTime } from "@/lib/utils";
@@ -18,7 +19,7 @@ export function AuditTable({ items }: { items: AuditLogEntry[] }) {
 
   return (
     <>
-      <Table>
+      <Table stack label="Audit log">
         <TableHeader>
           <TableRow>
             <TableHead>Action</TableHead>
@@ -31,17 +32,19 @@ export function AuditTable({ items }: { items: AuditLogEntry[] }) {
         <TableBody>
           {items.map((entry, index) => (
             <TableRow key={`${entry.actorTelegramId}-${entry.createdAt}-${index}`} className="cursor-pointer" onClick={() => setViewing(entry)}>
-              <TableCell className="font-medium">{entry.action}</TableCell>
-              <TableCell>{entry.actorTelegramId}</TableCell>
-              <TableCell className="max-w-56 truncate">
+              <TableCell wide className="font-medium">
+                <button type="button" className="max-w-full text-left hover:underline">{entry.action}</button>
+              </TableCell>
+              <TableCell label="Actor">{entry.actorTelegramId}</TableCell>
+              <TableCell wide label="Target" className="max-w-56 truncate">
                 {entry.targetType ?? "—"} {entry.targetId ? `· ${entry.targetId}` : ""}
               </TableCell>
-              <TableCell>
+              <TableCell label="Status">
                 <Badge variant={entry.status === "success" ? "success" : entry.status === "failed" ? "destructive" : "outline"}>
                   {entry.status}
                 </Badge>
               </TableCell>
-              <TableCell className="text-muted-foreground">{formatDateTime(entry.createdAt)}</TableCell>
+              <TableCell label="When" className="text-muted-foreground">{formatDateTime(entry.createdAt)}</TableCell>
             </TableRow>
           ))}
         </TableBody>
@@ -75,16 +78,16 @@ export function AuditTable({ items }: { items: AuditLogEntry[] }) {
               </div>
               <div>
                 <p className="mb-1 text-muted-foreground">Metadata</p>
-                <pre className="overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs">
-                  {JSON.stringify(viewing.metadata ?? {}, null, 2)}
-                </pre>
+                <ScrollRegion label="Metadata" className="rounded-md border border-border bg-muted/40">
+                  <pre className="w-max min-w-full p-3 text-xs">{JSON.stringify(viewing.metadata ?? {}, null, 2)}</pre>
+                </ScrollRegion>
               </div>
               {viewing.result ? (
                 <div>
                   <p className="mb-1 text-muted-foreground">Result</p>
-                  <pre className="overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs">
-                    {JSON.stringify(viewing.result, null, 2)}
-                  </pre>
+                  <ScrollRegion label="Result" className="rounded-md border border-border bg-muted/40">
+                    <pre className="w-max min-w-full p-3 text-xs">{JSON.stringify(viewing.result, null, 2)}</pre>
+                  </ScrollRegion>
                 </div>
               ) : null}
             </div>

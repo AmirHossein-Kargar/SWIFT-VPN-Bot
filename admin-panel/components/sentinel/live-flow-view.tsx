@@ -106,11 +106,11 @@ export function LiveFlowView({ flow: initialFlow, feed, range, filters: urlFilte
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-3">
         <Select value={range} onValueChange={(value) => update({ range: value === "24h" ? "" : value })}>
-          <SelectTrigger className="w-44" aria-label="Time range"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-44" aria-label="Time range"><SelectValue /></SelectTrigger>
           <SelectContent>{RANGE_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
         </Select>
         <Select value={urlFilters.provider} onValueChange={(value) => update({ provider: value })}>
-          <SelectTrigger className="w-44" aria-label="Payment source"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-44" aria-label="Payment source"><SelectValue /></SelectTrigger>
           <SelectContent>{PROVIDER_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
         </Select>
         <form

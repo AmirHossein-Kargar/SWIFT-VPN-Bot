@@ -41,6 +41,7 @@ tests before deciding which one is wrong; do not assume the current code is the 
 | `npm run build` | Build `/panel` (admin-panel) and the storefront |
 | `npm run build:guide-images` | Redraw the top-up guide images from `storefront/lib/topup-guide.json` (needs Chrome; the images are committed) |
 | `npm run test:e2e` / `npm run test:e2e:store` | Browser suites (need Chrome; not part of `npm test`) |
+| `npm run test:e2e:responsive` | Every `/panel`, portal and storefront route at seven viewports, plus phone interactions (needs builds, Chrome and a disposable `TEST_MONGO_URL`) |
 
 ## Test safety (non-negotiable)
 

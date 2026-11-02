@@ -92,7 +92,7 @@ export function TicketStatusControl({
           else void apply(next);
         }}
       >
-        <SelectTrigger className="h-8 w-[10.5rem] text-xs" aria-label="Ticket status">
+        <SelectTrigger className="h-8 min-w-0 flex-1 text-xs sm:w-[10.5rem] sm:flex-none" aria-label="Ticket status">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>

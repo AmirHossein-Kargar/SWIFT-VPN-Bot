@@ -8,6 +8,7 @@ import { ArrowDown, ArrowUp, ArrowUpDown, MoreHorizontal, Plus } from "lucide-re
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
@@ -28,6 +29,11 @@ const SORTABLE: { key: string; label: string }[] = [
   { key: "duration", label: "Duration" },
   { key: "traffic", label: "Traffic" },
   { key: "price", label: "Price" },
+];
+const PHONE_SORT: { value: string; label: string }[] = [
+  { value: "order:asc", label: "Display order" },
+  ...SORTABLE.flatMap(({ key, label }) => [{ value: `${key}:asc`, label: `${label}, ascending` }, { value: `${key}:desc`, label: `${label}, descending` }]),
+  { value: "updated:desc", label: "Recently updated" },
 ];
 
 function StatusBadges({ product }: { product: AdminProduct }) {
@@ -122,6 +128,15 @@ export function ProductsTable({
     navigate(`${pathname}?${next.toString()}`);
   }
 
+  function sortFromPhone(value: string) {
+    const [key = "order", direction = "asc"] = value.split(":");
+    const next = new URLSearchParams(searchParams.toString());
+    next.set("sort", key);
+    next.set("order", direction);
+    next.delete("page");
+    navigate(`${pathname}?${next.toString()}`);
+  }
+
   function SortHead({ column }: { column: { key: string; label: string } }) {
     const active = sort === column.key;
     const Icon = !active ? ArrowUpDown : order === "desc" ? ArrowDown : ArrowUp;
@@ -148,14 +163,22 @@ export function ProductsTable({
           <Plus className="h-4 w-4" />
           Add service
         </Button>
+        <Select value={`${sort}:${order}`} onValueChange={sortFromPhone}>
+          <SelectTrigger className="w-full sm:w-56 xl:hidden" aria-label="Sort services">
+            <SelectValue placeholder="Sort" />
+          </SelectTrigger>
+          <SelectContent>
+            {PHONE_SORT.map(({ value, label }) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
+          </SelectContent>
+        </Select>
       </div>
       {items.length === 0 ? (
         <p className="py-10 text-center text-sm text-muted-foreground">
           {total === 0 ? "No services yet. Add the first one." : "No services match these filters."}
         </p>
       ) : (
-        <div className="overflow-x-auto">
-          <Table>
+        <div>
+          <Table stack="xl" label="Service catalog">
             <TableHeader>
               <TableRow>
                 {canReorder ? <TableHead className="w-16">Order</TableHead> : null}
@@ -171,7 +194,7 @@ export function ProductsTable({
                     {sort === "updated" ? (order === "desc" ? <ArrowDown className="h-3 w-3" aria-hidden /> : <ArrowUp className="h-3 w-3" aria-hidden />) : <ArrowUpDown className="h-3 w-3" aria-hidden />}
                   </button>
                 </TableHead>
-                <TableHead className="w-10" />
+                <TableHead className="w-10"><span className="sr-only">Actions</span></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -180,7 +203,7 @@ export function ProductsTable({
                 return (
                   <TableRow key={product.id} className={product.archived ? "opacity-60" : undefined}>
                     {canReorder ? (
-                      <TableCell>
+                      <TableCell label="Order" className="max-xl:order-last">
                         <div className="flex items-center gap-0.5">
                           <Button variant="ghost" size="icon-sm" disabled={busyId !== null || (index === 0 && !searchParams.get("page"))} onClick={() => move(product, "up")} aria-label={`Move ${product.name} up`}>
                             <ArrowUp />
@@ -191,17 +214,17 @@ export function ProductsTable({
                         </div>
                       </TableCell>
                     ) : null}
-                    <TableCell className="min-w-[11rem]">
+                    <TableCell wide className="min-w-[11rem]">
                       <div className="font-medium">{product.name}</div>
                       <div className="font-mono text-xs text-muted-foreground">{product.id}</div>
                     </TableCell>
-                    <TableCell>{formatNumber(product.durationDays)} days</TableCell>
-                    <TableCell>{product.unlimited ? "Unlimited" : `${formatNumber(product.trafficGb)} GB`}</TableCell>
-                    <TableCell>{formatToman(product.priceToman)}</TableCell>
-                    <TableCell className="text-muted-foreground">{formatToman(product.profitToman)}</TableCell>
-                    <TableCell><StatusBadges product={product} /></TableCell>
-                    <TableCell className="whitespace-nowrap text-muted-foreground">{formatDate(product.updatedAt)}</TableCell>
-                    <TableCell>
+                    <TableCell label="Duration">{formatNumber(product.durationDays)} days</TableCell>
+                    <TableCell label="Traffic">{product.unlimited ? "Unlimited" : `${formatNumber(product.trafficGb)} GB`}</TableCell>
+                    <TableCell label="Price">{formatToman(product.priceToman)}</TableCell>
+                    <TableCell label="Profit" className="text-muted-foreground">{formatToman(product.profitToman)}</TableCell>
+                    <TableCell label="Status"><StatusBadges product={product} /></TableCell>
+                    <TableCell label="Updated" className="whitespace-nowrap text-muted-foreground">{formatDate(product.updatedAt)}</TableCell>
+                    <TableCell corner>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button variant="ghost" size="icon" disabled={busyId === product.id} aria-label={`Actions for ${product.name}`}>

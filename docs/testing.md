@@ -59,6 +59,7 @@ Suites that need MongoDB: `adminBankConfirm`, `adminRegistryMutations`, `adminSe
 | Dashboard | `tests/unit/dashboardPulse.test.js`, `tests/integration/dashboardPulse.mongo.test.js`, `tests/e2e/dashboard.e2e.mjs` |
 | Service Reliability Center | `tests/unit/reliability*.test.js`, `tests/integration/reliabilityHttp.test.js`, `reliabilityChecks.mongo.test.js`, `reliability.mongo.test.js`, `tests/e2e/reliability.e2e.mjs` | Every health state and the positive-evidence rule; incident rules, deduplication and recovery; windows, sample floors and coverage; outages of MongoDB and Redis; the static no-interference guarantees and byte-identical money collections; auth, validation and the event stream over real HTTP; index plans; the panel's Live rules. Listed in [Service Reliability Center](reliability.md#testing) |
 | Mock tests | `tests/unit/mockTests.test.js`, `mockTestsUi.test.js`, `tests/integration/adminTelegramMock.test.js` | Harness isolation and all scenarios against the real services; UI data contract |
+| Responsive layout | `tests/e2e/responsive.e2e.mjs` | Every route at seven viewports: nothing past the viewport, controls reachable and touch sized, phone interactions |
 | Storefront | `tests/integration/storefrontAndPanel.test.js`, `storefrontBuild.test.js`, `tests/unit/storefrontLogic`, `storefrontApi`, `topupGuide`, `themeTokens` | Routing, CSP, canonical URL, caching and compression, hand-off URL safety, API client; the top-up guide against the bot's source; the shared palette (contrast, static-page copies, button scale) |
 | Configuration and startup | `envResolution`, `mongoStartup`, `moduleSmoke` | Environment aliases and validation, startup ordering, every production module imports cleanly |
 | Telegram UI | `messageManager`, `myServicesFlow`, `handleGuide`, `persianUiGuard`, `profile*`, `showPaymentMethods`, `supportContact` | Message handling, Persian UI guard, privacy of profile data |
@@ -85,6 +86,14 @@ Suites that need MongoDB: `adminBankConfirm`, `adminRegistryMutations`, `adminSe
 - `node tests/e2e/reliability.e2e.mjs` (same prerequisites and options as `sentinel.e2e.mjs`) drives `/panel/reliability` against the real app, a real
   event stream and a real database, with dependency probes the suite controls: themes and widths, topology interaction, live updates, deduplication,
   outages and recovery, reconnection, polling fallback, a stale monitor, signed-out sessions, order tracing, accessibility and main-thread cost.
+- `npm run test:e2e:responsive` (`tests/e2e/responsive.e2e.mjs`; needs `npm run build`, Chrome and a disposable `TEST_MONGO_URL`) opens every `/panel`, support portal and
+  storefront route at 320, 375, 430, 768, 1024, 1440 and 1920 px against the real app and database, seeded with worst-case values; only provider reads are fixtures. A new
+  `page.tsx` missing from its route list fails the run. It measures each element against the viewport, because `scrollWidth` on the document cannot see what `body { overflow-x: clip }` hides,
+  and fails on overflow, overrun outside a real scroller, covered controls, clipped text, a scroller the keyboard cannot reach, phone controls under 44 px, console errors and failed requests.
+  It then drives what only opens on interaction: the drawer lifecycle, sheets, row menus, selects, confirmations (cancelled, never confirmed), forms at keyboard height, tabs, the ticket thread,
+  the storefront menu, order review, guide and FAQ. It runs under reduced motion, because the storefront's scroll reveal leaves unscrolled sections invisible and so unmeasured. Options:
+  `E2E_ONLY`, `E2E_WIDTHS=320,375`, `E2E_SHOTS`, `E2E_JSON`, `AXE_PATH`, and `E2E_AUDIT=1` to measure without failing. Chrome only, with an emulated touch screen and a resized viewport standing in
+  for a keyboard: it proves nothing about Safari on iOS or a real keyboard.
 - `node tests/e2e/nextPanel.e2e.mjs` (after `npx next build admin-panel`) drives the real `/panel` with the real session,
   CSRF and origin middleware and under the real CSP. It covers money actions under delayed and failing API answers (nothing looks successful
   early, a retry keeps its `operationId`, a double click sends one request), filter navigation, charts and reduced motion.

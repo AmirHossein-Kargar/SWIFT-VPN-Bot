@@ -16,6 +16,7 @@
     "test:release": "node scripts/test-release.mjs",
     "test:e2e": "node tests/e2e/adminResponsive.e2e.mjs",
     "test:e2e:store": "node tests/e2e/storefront.e2e.mjs",
+    "test:e2e:responsive": "node tests/e2e/responsive.e2e.mjs",
     "build": "next build admin-panel && node scripts/build-storefront.mjs",
     "build:storefront": "node scripts/build-storefront.mjs",
     "build:guide-images": "node scripts/build-guide-images.mjs",

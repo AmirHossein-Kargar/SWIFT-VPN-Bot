@@ -181,7 +181,7 @@ export function TicketWorkspace({ initial }: { initial: WorkspaceInitial }) {
   const pages = list ? Math.max(1, Math.ceil(list.total / list.pageSize)) : 1;
 
   return (
-    <div className="flex h-[calc(100dvh-3.5rem-3rem)] min-h-[30rem] overflow-hidden rounded-lg border border-border bg-card">
+    <div className="flex h-[calc(100dvh-3.5rem-2rem)] min-h-[30rem] sm:h-[calc(100dvh-3.5rem-3rem)] overflow-hidden rounded-lg border border-border bg-card">
       <section aria-label="Conversation" className={cn("min-h-0 min-w-0 flex-1 md:block", selectedId ? "block" : "hidden")}>
         {selectedId ? (
           <LiveTicketThread key={selectedId} ticketId={selectedId} onBack={() => select(null)} onTicketChange={onTicketChange} onDeleted={() => { select(null); trigger(); }} />

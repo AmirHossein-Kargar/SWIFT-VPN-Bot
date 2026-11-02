@@ -14,6 +14,9 @@ export default function RevenueChart({ data }: { data: { date: string; value: nu
   const reducedMotion = useReducedMotion();
   const peak = data.reduce((best, point) => (point.value > best.value ? point : best), data[0] ?? { date: "", value: 0 });
   const total = data.reduce((sum, point) => sum + point.value, 0);
+  // A label centred on a point near either end runs out of the SVG, and on a phone that cuts the amount in half.
+  const peakAt = data.indexOf(peak) / Math.max(1, data.length - 1);
+  const peakLabel = peakAt > 0.75 ? "left" : peakAt < 0.25 ? "right" : "top";
 
   return (
     <div className="h-full w-full" role="group" aria-label={`Revenue over ${data.length} days: ${formatToman(total)} in total, highest ${formatToman(peak.value)} on ${formatDate(peak.date)}.`}>
@@ -53,7 +56,7 @@ export default function RevenueChart({ data }: { data: { date: string; value: nu
               fill={chartTheme.series1}
               stroke="hsl(var(--card))"
               strokeWidth={2}
-              label={{ value: formatToman(peak.value), position: "top", ...chartTheme.label }}
+              label={{ value: formatToman(peak.value), position: peakLabel, ...chartTheme.label }}
             />
           ) : null}
         </AreaChart>

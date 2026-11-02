@@ -19,7 +19,7 @@ export function BroadcastsHistoryTable({ items }: { items: BroadcastSummary[] })
   }
 
   return (
-    <Table>
+    <Table stack label="Broadcast history">
       <TableHeader>
         <TableRow>
           <TableHead>Audience</TableHead>
@@ -31,14 +31,14 @@ export function BroadcastsHistoryTable({ items }: { items: BroadcastSummary[] })
       <TableBody>
         {items.map((broadcast) => (
           <TableRow key={broadcast.operationId}>
-            <TableCell className="font-medium">{broadcast.audience}</TableCell>
-            <TableCell>
+            <TableCell label="Audience" className="font-medium">{broadcast.audience}</TableCell>
+            <TableCell label="Status">
               <Badge variant={STATUS_VARIANT[broadcast.status]}>{broadcast.status.replace(/_/g, " ")}</Badge>
             </TableCell>
-            <TableCell className="text-muted-foreground">
+            <TableCell wide label="Progress" className="text-muted-foreground">
               {formatNumber(broadcast.succeeded)} sent · {formatNumber(broadcast.failed)} failed / {formatNumber(broadcast.total)}
             </TableCell>
-            <TableCell className="text-muted-foreground">{formatDateTime(broadcast.createdAt)}</TableCell>
+            <TableCell wide label="Created" className="text-muted-foreground">{formatDateTime(broadcast.createdAt)}</TableCell>
           </TableRow>
         ))}
       </TableBody>

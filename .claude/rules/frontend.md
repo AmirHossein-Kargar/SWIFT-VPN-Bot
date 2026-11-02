@@ -23,8 +23,12 @@ Details: `docs/storefront.md` (storefront) and `docs/admin.md` (dashboard).
 - **One palette:** `design/theme.css` holds the colours, scrollbars and skeletons for both Next apps. Light mode is
   green-tinted, never plain black and white, and components use tokens. `web/public/store/store.css`, `web/public/styles.css`
   and the `theme-color` values are hand-mapped copies; `tests/unit/themeTokens.test.js` checks AA contrast and that they agree.
-- **Buttons** take their size from the variants, never a one-off height: `/panel` 32/36/40 px (40 on touch screens), the
-  storefront 40/44/48 px.
+- **Buttons** take their size from the variants, never a one-off height: `/panel` 32/36/40 px, the storefront 40/44/48 px. On a
+  touch screen both have a 44 px floor, set once for every control: the variants plus the `pointer: coarse` rule in each `globals.css`.
+- **Responsive.** The document scrolls, never `<main>`: a scrolling `main` hides overflow from every width check. A new `/panel`
+  table uses `<Table stack label>` (`stack="xl"` if it cannot fit a tablet) with `label` on each `TableCell`; wide content that cannot reflow goes in `ScrollRegion`. Do not
+  hide a column or a control on phones without another way to reach it. Dialogs, sheets and popovers get their limits from
+  `components/ui`, so do not re-add `max-h` or `overflow` per dialog. See `docs/admin.md` and `npm run test:e2e:responsive`.
 - The legacy vanilla-JS dashboard files in `web/public/` are still served at `/index.html`; removing them is an owner
   decision.
 - **`/panel` has no route loading file under `app/(app)`.** It hung filter navigation and streamed failed pages as 200; see

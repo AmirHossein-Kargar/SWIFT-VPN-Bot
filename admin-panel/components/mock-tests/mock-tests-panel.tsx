@@ -170,7 +170,7 @@ export function MockTestsPanel({ listing: rawListing }: { listing: MockTestsList
           {listing.items.length === 0 ? (
             <p className="py-10 text-center text-sm text-muted-foreground">No runs recorded yet.</p>
           ) : (
-            <Table>
+            <Table stack label="Mock test runs">
               <TableHeader>
                 <TableRow>
                   <TableHead>Run</TableHead>
@@ -178,22 +178,22 @@ export function MockTestsPanel({ listing: rawListing }: { listing: MockTestsList
                   <TableHead>Started</TableHead>
                   <TableHead>Duration</TableHead>
                   <TableHead>Result</TableHead>
-                  <TableHead className="w-20" />
+                  <TableHead className="w-20"><span className="sr-only">Details</span></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {listing.items.map((item) => (
                   <TableRow key={item.runId}>
-                    <TableCell>
-                      <p className="font-mono text-xs">{item.runId}</p>
+                    <TableCell wide>
+                      <p className="break-all font-mono text-xs">{item.runId}</p>
                       <p className="text-xs text-muted-foreground">via {item.trigger}</p>
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
+                    <TableCell wide label="Scenarios" className="text-xs text-muted-foreground">
                       {item.summary.PASS} passed · {item.summary.FAIL} failed · {item.summary.BLOCKED} blocked · {item.summary["NOT RUN"]} not run
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{formatDateTime(item.startedAt)}</TableCell>
-                    <TableCell className="text-muted-foreground">{formatDuration(runDurationMs(item))}</TableCell>
-                    <TableCell><StatusBadge status={item.summary.overall} /></TableCell>
+                    <TableCell label="Started" className="text-muted-foreground">{formatDateTime(item.startedAt)}</TableCell>
+                    <TableCell label="Duration" className="text-muted-foreground">{formatDuration(runDurationMs(item))}</TableCell>
+                    <TableCell label="Result"><StatusBadge status={item.summary.overall} /></TableCell>
                     <TableCell>
                       <Button variant="outline" size="sm" onClick={() => openDetail(item.runId)}>View</Button>
                     </TableCell>

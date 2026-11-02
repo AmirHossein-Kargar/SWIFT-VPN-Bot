@@ -41,7 +41,7 @@ export default async function ReferralsPage({ searchParams }: { searchParams: Pr
               <p className="text-xs">Referral codes are issued as users start using the updated bot; historical accounts appear as soon as they interact.</p>
             </div>
           ) : (
-            <Table>
+            <Table stack label="Referrals">
               <TableHeader>
                 <TableRow>
                   <TableHead>User</TableHead>
@@ -53,10 +53,10 @@ export default async function ReferralsPage({ searchParams }: { searchParams: Pr
               <TableBody>
                 {result.items.map((item) => (
                   <TableRow key={item.telegramId}>
-                    <TableCell className="font-mono text-xs">{item.telegramId}</TableCell>
-                    <TableCell className="font-mono text-xs">{item.referralCode ?? "—"}</TableCell>
-                    <TableCell className="font-mono text-xs">{item.referredByTelegramId ?? "—"}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{item.createdAt ? formatDateTime(item.createdAt) : "—"}</TableCell>
+                    <TableCell wide label="User" className="font-mono text-xs">{item.telegramId}</TableCell>
+                    <TableCell wide label="Referral code" className="font-mono text-xs">{item.referralCode ?? "—"}</TableCell>
+                    <TableCell label="Referred by" className="font-mono text-xs">{item.referredByTelegramId ?? "—"}</TableCell>
+                    <TableCell label="Registered" className="text-xs text-muted-foreground">{item.createdAt ? formatDateTime(item.createdAt) : "—"}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

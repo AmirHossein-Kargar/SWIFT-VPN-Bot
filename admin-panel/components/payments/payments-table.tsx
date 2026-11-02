@@ -118,7 +118,7 @@ export function PaymentsTable({ items }: { items: AdminPayment[] }) {
               </TableCell>
               <TableCell>
                 {payment.providerLabel}
-                <span className="block max-w-56 break-all font-mono text-xs text-muted-foreground" title={payment.id}>{payment.id}</span>
+                <span className="block max-w-40 break-all font-mono text-xs text-muted-foreground" title={payment.id}>{payment.id}</span>
                 {payment.trackingCode ? <span className="block break-all font-mono text-xs text-muted-foreground">ref {payment.trackingCode}</span> : null}
               </TableCell>
               <TableCell>{payment.userId}</TableCell>

@@ -6,7 +6,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
 
 export function Container({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("mx-auto w-full max-w-page px-4", className)} {...props} />;
+  return <div className={cn("mx-auto w-full max-w-page px-[max(1rem,env(safe-area-inset-left),env(safe-area-inset-right))]", className)} {...props} />;
 }
 
 /** Shared section title block; the id feeds aria-labelledby on the section. */
@@ -104,7 +104,7 @@ function MobileNav({ botUrl, active }: { botUrl: string | null; active: string |
         {open ? <X key="close" className="animate-rise size-5" aria-hidden="true" /> : <Menu key="open" className="animate-rise size-5" aria-hidden="true" />}
       </button>
       {open ? (
-        <div ref={panelRef} id="mobile-nav" className="absolute inset-x-0 top-full border-b bg-background/95 shadow-lg backdrop-blur-md animate-rise">
+        <div ref={panelRef} id="mobile-nav" className="absolute inset-x-0 top-full max-h-[calc(100dvh-68px-env(safe-area-inset-top))] overflow-y-auto overscroll-contain border-b bg-background/95 shadow-lg backdrop-blur-md animate-rise">
           <nav aria-label="بخش‌های صفحه" className="mx-auto grid max-w-page gap-1 px-4 py-3">
             {NAV_LINKS.map(([href, label], index) => (
               <a
@@ -133,7 +133,7 @@ function MobileNav({ botUrl, active }: { botUrl: string | null; active: string |
 export function SiteHeader({ botUrl }: { botUrl: string | null }) {
   const active = useActiveSection();
   return (
-    <header id="top" className="sticky top-0 z-40 border-b bg-background/80 backdrop-blur-md">
+    <header id="top" className="sticky top-0 z-40 border-b bg-background/80 pt-[env(safe-area-inset-top)] backdrop-blur-md">
       <Container className="relative flex min-h-[68px] items-center gap-3 sm:gap-4">
         <a href="/" aria-label="Swift VPN — صفحه اصلی" className="inline-flex min-h-11 min-w-0 items-center gap-3 rounded-lg">
           <Logo width={74} height={28} className="w-auto max-sm:!h-6" />
@@ -163,7 +163,7 @@ export function SiteHeader({ botUrl }: { botUrl: string | null }) {
 const TERMS_URL = "https://t.me/swift_shield/4";
 
 export function SiteFooter({ botUrl, supportUrl, year }: { botUrl: string | null; supportUrl: string | null; year: string }) {
-  const link = "inline-flex min-h-10 items-center rounded-lg px-1 text-sm text-muted-foreground transition-colors hover:text-foreground";
+  const link = "inline-flex min-h-11 items-center rounded-lg px-1 text-sm text-muted-foreground transition-colors hover:text-foreground";
   const heading = "mb-2 text-[13px] font-extrabold text-foreground";
   return (
     <footer className="border-t bg-alt pb-[calc(1.75rem+env(safe-area-inset-bottom))] pt-10">

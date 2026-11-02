@@ -28,7 +28,7 @@ export function RangeSelect({ range }: { range: string }) {
   const pathname = stripBasePath(usePathname());
   return (
     <Select value={range} onValueChange={(value) => navigate(`${pathname}?range=${value}`)}>
-      <SelectTrigger className="w-44" aria-label="Date range">
+      <SelectTrigger className="w-full sm:w-44" aria-label="Date range">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>

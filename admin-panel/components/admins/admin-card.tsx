@@ -52,7 +52,7 @@ export function AdminCard({ admin, generatedAt, onOpen, onRemove }: { admin: Adm
         <UserAvatar key={admin.telegramId} telegramId={admin.telegramId} label={label} noPhoto={!admin.hasBotProfile} />
         <div className="min-w-0 flex-1">
           {/* The stretched ::after makes the whole card open the profile, while Remove below stays its own button. */}
-          <button type="button" onClick={onOpen} className="block max-w-full truncate text-left font-semibold outline-none after:absolute after:inset-0 after:rounded-lg after:content-['']" dir="auto">
+          <button type="button" onClick={onOpen} className="block max-w-full truncate text-left font-semibold outline-none [@media(pointer:coarse)]:min-h-11 after:absolute after:inset-0 after:rounded-lg after:content-['']" dir="auto">
             {label}
           </button>
           <p className="truncate text-sm text-muted-foreground" dir="auto">{admin.username ? `@${admin.username}` : "No username on record"}</p>

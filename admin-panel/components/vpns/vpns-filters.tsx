@@ -38,12 +38,12 @@ export function VpnsFilters({ defaultSearch, status }: { defaultSearch: string; 
 
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <div className="relative w-full max-w-xs">
+      <div className="relative w-full sm:max-w-xs">
         <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
         <Input value={search} onChange={(event) => onSearchChange(event.target.value)} placeholder="Search by client ID, username, or Telegram ID" className="pl-8" />
       </div>
       <Select value={status} onValueChange={(value) => update({ status: value })}>
-        <SelectTrigger className="w-44" aria-label="Filter by status">
+        <SelectTrigger className="w-full sm:w-44" aria-label="Filter by status">
           <SelectValue placeholder="Status" />
         </SelectTrigger>
         <SelectContent>

@@ -177,7 +177,7 @@ export function CommandCenter() {
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between gap-2">
                 <CardTitle className="text-foreground">Open incidents</CardTitle>
-                <Link href="/reliability/incidents" className="text-xs font-medium text-primary underline-offset-4 hover:underline [@media(pointer:coarse)]:min-h-10">All incidents</Link>
+                <Link href="/reliability/incidents" className="inline-flex items-center text-xs font-medium text-primary underline-offset-4 hover:underline">All incidents</Link>
               </div>
               <CardDescription className="text-xs">Choose one to light up what it can affect.</CardDescription>
             </CardHeader>
@@ -190,7 +190,7 @@ export function CommandCenter() {
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between gap-2">
             <CardTitle className="text-foreground">Recent operational events</CardTitle>
-            <Link href="/reliability/events" className="text-xs font-medium text-primary underline-offset-4 hover:underline [@media(pointer:coarse)]:min-h-10">All events</Link>
+            <Link href="/reliability/events" className="inline-flex items-center text-xs font-medium text-primary underline-offset-4 hover:underline">All events</Link>
           </div>
         </CardHeader>
         <CardContent className="max-h-96 overflow-y-auto px-3 pb-3" data-testid="recent-events">

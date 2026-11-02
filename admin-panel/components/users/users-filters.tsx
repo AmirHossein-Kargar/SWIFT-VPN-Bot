@@ -54,7 +54,7 @@ export function UsersFilters({
 
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <div className="relative w-full max-w-xs">
+      <div className="relative w-full sm:max-w-xs">
         <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
         <Input
           value={search}
@@ -64,7 +64,7 @@ export function UsersFilters({
         />
       </div>
       <Select value={activity} onValueChange={(value) => update({ activity: value })}>
-        <SelectTrigger className="w-44" aria-label="Filter by activity">
+        <SelectTrigger className="w-full sm:w-44" aria-label="Filter by activity">
           <SelectValue placeholder="Activity" />
         </SelectTrigger>
         <SelectContent>
@@ -74,7 +74,7 @@ export function UsersFilters({
         </SelectContent>
       </Select>
       <Select value={paying} onValueChange={(value) => update({ paying: value })}>
-        <SelectTrigger className="w-44" aria-label="Filter by paying status">
+        <SelectTrigger className="w-full sm:w-44" aria-label="Filter by paying status">
           <SelectValue placeholder="Paying" />
         </SelectTrigger>
         <SelectContent>
@@ -84,7 +84,7 @@ export function UsersFilters({
         </SelectContent>
       </Select>
       <Select value={blocked} onValueChange={(value) => update({ blocked: value })}>
-        <SelectTrigger className="w-44" aria-label="Filter by block status">
+        <SelectTrigger className="w-full sm:w-44" aria-label="Filter by block status">
           <SelectValue placeholder="Status" />
         </SelectTrigger>
         <SelectContent>
@@ -94,7 +94,7 @@ export function UsersFilters({
         </SelectContent>
       </Select>
       <Select value={sort} onValueChange={(value) => update({ sort: value })}>
-        <SelectTrigger className="w-44" aria-label="Sort users">
+        <SelectTrigger className="w-full sm:w-44" aria-label="Sort users">
           <SelectValue placeholder="Sort by" />
         </SelectTrigger>
         <SelectContent>

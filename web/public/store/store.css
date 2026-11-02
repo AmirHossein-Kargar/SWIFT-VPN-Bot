@@ -126,6 +126,10 @@ p { margin: 0; }
 }
 .btn svg { width: 18px; height: 18px; flex: none; }
 .btn-sm { min-height: 40px; padding: 0 16px; font-size: 14px; }
+@media (pointer: coarse) {
+  .btn-sm, .brand, .footer-brand, .skip-link { min-height: 44px; }
+  .skip-link { display: inline-flex; align-items: center; }
+}
 .btn-lg { min-height: 48px; padding: 0 24px; font-size: 16px; }
 .btn-block { width: 100%; }
 .btn-primary { background: var(--primary-strong); color: var(--on-primary); }

@@ -108,7 +108,7 @@ export function CustodyAssetsTab() {
       <CardContent className="space-y-3 p-0">
         <div className="flex flex-wrap gap-2 px-4">
           <Input aria-label="Search assets" placeholder="Search code, ticker or network" className="max-w-xs" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} />
-          <select aria-label="Filter assets" className="h-9 rounded-md border border-input bg-transparent px-2 text-sm" value={filter} onChange={(event) => { setFilter(event.target.value); setPage(1); }}>
+          <select aria-label="Filter assets" className="h-9 rounded-md border border-input bg-transparent px-2 text-sm [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:text-base" value={filter} onChange={(event) => { setFilter(event.target.value); setPage(1); }}>
             <option value="with-balance">With balance</option>
             <option value="pending">Pending funds</option>
             <option value="fixed-rate">Fixed-rate capable</option>
@@ -118,18 +118,18 @@ export function CustodyAssetsTab() {
         {list.data?.balanceError ? <p className="px-4 text-sm text-warning" role="status">Custody balances are unavailable: {list.data.balanceError}</p> : null}
         <ListState loading={list.loading} error={list.error} empty={!list.loading && !list.error && !list.data?.items.length} onRetry={list.reload} />
         {list.data?.items.length ? (
-          <Table>
+          <Table stack label="Asset balances">
             <TableHeader>
               <TableRow><TableHead>Asset</TableHead><TableHead>Network</TableHead><TableHead>Available</TableHead><TableHead>Pending</TableHead><TableHead>Actions</TableHead></TableRow>
             </TableHeader>
             <TableBody>
               {list.data.items.map((asset) => (
                 <TableRow key={asset.code}>
-                  <TableCell><span className="font-medium">{asset.ticker}</span> <span className="text-muted-foreground">{asset.name}</span></TableCell>
-                  <TableCell>{asset.network}</TableCell>
-                  <TableCell className="font-mono text-xs">{asset.availableDisplay ?? "—"}</TableCell>
-                  <TableCell className="font-mono text-xs">{asset.pendingDisplay ?? "—"}</TableCell>
-                  <TableCell className="space-x-1">
+                  <TableCell wide><span className="font-medium">{asset.ticker}</span> <span className="text-muted-foreground">{asset.name}</span></TableCell>
+                  <TableCell label="Network">{asset.network}</TableCell>
+                  <TableCell label="Available" className="font-mono text-xs">{asset.availableDisplay ?? "—"}</TableCell>
+                  <TableCell label="Pending" className="font-mono text-xs">{asset.pendingDisplay ?? "—"}</TableCell>
+                  <TableCell label="Actions" className="space-x-1">
                     {asset.supportedActions.convert ? <Badge variant="outline">convert</Badge> : null}
                     {asset.supportedActions.withdraw ? <Badge variant="outline">withdraw</Badge> : null}
                     {!asset.enable ? <Badge variant="muted">disabled</Badge> : null}
@@ -210,7 +210,7 @@ export function CustodyConversionsTab() {
       </Card>
 
       <Dialog open={confirmOpen} onOpenChange={(next) => !busy && setConfirmOpen(next)}>
-        <DialogContent className="max-h-[90dvh] overflow-y-auto">
+        <DialogContent>
           <DialogHeader>
             <DialogTitle>Confirm conversion</DialogTitle>
             <DialogDescription>This moves custody funds at the provider and cannot be undone from this panel. The rate is re-quoted when it executes.</DialogDescription>
@@ -218,7 +218,7 @@ export function CustodyConversionsTab() {
           {preview ? <p className="text-sm"><b>{preview.fromAmount} {preview.fromTicker}</b> → about <b>{preview.estimatedToAmount} {preview.toTicker}</b></p> : null}
           <div className="space-y-1.5"><Label htmlFor="conv-reason">Reason (kept in the audit log)</Label><Input id="conv-reason" maxLength={240} value={reason} onChange={(event) => setReason(event.target.value)} /></div>
           {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
-          <DialogFooter className="gap-2 sm:gap-0">
+          <DialogFooter>
             <Button variant="outline" disabled={busy} onClick={() => setConfirmOpen(false)}>Cancel</Button>
             <Button disabled={busy || reason.trim().length < 5} onClick={execute}>{busy ? "Submitting…" : "Convert"}</Button>
           </DialogFooter>
@@ -230,17 +230,17 @@ export function CustodyConversionsTab() {
         <CardContent className="p-0">
           <ListState loading={list.loading} error={list.error} empty={!list.loading && !list.error && !list.data?.items.length} onRetry={list.reload} />
           {list.data?.items.length ? (
-            <Table>
+            <Table stack label="Conversion history">
               <TableHeader><TableRow><TableHead>ID</TableHead><TableHead>Pair</TableHead><TableHead>From</TableHead><TableHead>To</TableHead><TableHead>Status</TableHead><TableHead>Created</TableHead></TableRow></TableHeader>
               <TableBody>
                 {list.data.items.map((conversion) => (
                   <TableRow key={conversion.id}>
-                    <TableCell className={mono}>{conversion.id}</TableCell>
-                    <TableCell>{conversion.fromCurrency} → {conversion.toCurrency}</TableCell>
-                    <TableCell className="font-mono text-xs">{conversion.fromAmountDisplay}</TableCell>
-                    <TableCell className="font-mono text-xs">{conversion.toAmountDisplay}</TableCell>
-                    <TableCell><StatusPill status={conversion.status} /></TableCell>
-                    <TableCell className="text-muted-foreground">{formatDateTime(conversion.createdAt)}</TableCell>
+                    <TableCell wide label="ID" className={mono}>{conversion.id}</TableCell>
+                    <TableCell wide label="Pair">{conversion.fromCurrency} → {conversion.toCurrency}</TableCell>
+                    <TableCell label="From" className="font-mono text-xs">{conversion.fromAmountDisplay}</TableCell>
+                    <TableCell label="To" className="font-mono text-xs">{conversion.toAmountDisplay}</TableCell>
+                    <TableCell label="Status"><StatusPill status={conversion.status} /></TableCell>
+                    <TableCell label="Created" className="text-muted-foreground">{formatDateTime(conversion.createdAt)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -336,7 +336,7 @@ export function CustodyPayoutsTab() {
       </Card>
 
       <Dialog open={confirmOpen} onOpenChange={(next) => !busy && setConfirmOpen(next)}>
-        <DialogContent className="max-h-[90dvh] overflow-y-auto">
+        <DialogContent>
           <DialogHeader>
             <DialogTitle>Confirm payout</DialogTitle>
             <DialogDescription>Check the destination character by character. Crypto transfers are irreversible once verified.</DialogDescription>
@@ -351,7 +351,7 @@ export function CustodyPayoutsTab() {
           ) : null}
           <div className="space-y-1.5"><Label htmlFor="po-reason">Reason (kept in the audit log)</Label><Input id="po-reason" maxLength={240} value={reason} onChange={(event) => setReason(event.target.value)} /></div>
           {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
-          <DialogFooter className="gap-2 sm:gap-0">
+          <DialogFooter>
             <Button variant="outline" disabled={busy} onClick={() => setConfirmOpen(false)}>Cancel</Button>
             <Button variant="destructive" disabled={busy || reason.trim().length < 5} onClick={submit}>{busy ? "Submitting…" : "Create payout"}</Button>
           </DialogFooter>
@@ -367,7 +367,7 @@ export function CustodyPayoutsTab() {
           <div className="space-y-1.5"><Label htmlFor="po-code">Verification code</Label><Input id="po-code" inputMode="text" autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value)} /></div>
           <div className="space-y-1.5"><Label htmlFor="po-vreason">Reason (kept in the audit log)</Label><Input id="po-vreason" maxLength={240} value={verifyReason} onChange={(event) => setVerifyReason(event.target.value)} /></div>
           {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
-          <DialogFooter className="gap-2 sm:gap-0">
+          <DialogFooter>
             <Button variant="outline" disabled={busy} onClick={() => setVerifyBatch(null)}>Cancel</Button>
             <Button disabled={busy || code.trim().length < 4 || verifyReason.trim().length < 5} onClick={submitVerification}>{busy ? "Verifying…" : "Verify"}</Button>
           </DialogFooter>
@@ -379,18 +379,18 @@ export function CustodyPayoutsTab() {
         <CardContent className="p-0">
           <ListState loading={list.loading} error={list.error} empty={!list.loading && !list.error && !list.data?.items.length} onRetry={list.reload} />
           {list.data?.items.length ? (
-            <Table>
-              <TableHeader><TableRow><TableHead>Payout</TableHead><TableHead>Asset</TableHead><TableHead>Amount</TableHead><TableHead>Destination</TableHead><TableHead>Status</TableHead><TableHead>Created</TableHead><TableHead /></TableRow></TableHeader>
+            <Table stack label="Payout history">
+              <TableHeader><TableRow><TableHead>Payout</TableHead><TableHead>Asset</TableHead><TableHead>Amount</TableHead><TableHead>Destination</TableHead><TableHead>Status</TableHead><TableHead>Created</TableHead><TableHead><span className="sr-only">Actions</span></TableHead></TableRow></TableHeader>
               <TableBody>
                 {list.data.items.map((payout) => (
                   <TableRow key={`${payout.id}-${payout.batchWithdrawalId}`}>
-                    <TableCell className={mono}>{payout.id}{payout.batchWithdrawalId ? <span className="block text-muted-foreground">batch {payout.batchWithdrawalId}</span> : null}</TableCell>
-                    <TableCell>{payout.ticker} <span className="text-muted-foreground">{payout.network}</span></TableCell>
-                    <TableCell className="font-mono text-xs">{payout.amountDisplay}{payout.fee != null ? <span className="block text-muted-foreground">fee {payout.fee}</span> : null}</TableCell>
-                    <TableCell className={mono}>{payout.address}{payout.extraId ? <span className="block text-muted-foreground">memo {payout.extraId}</span> : null}</TableCell>
-                    <TableCell><StatusPill status={payout.status} /></TableCell>
-                    <TableCell className="text-muted-foreground">{formatDateTime(payout.createdAt)}</TableCell>
-                    <TableCell>
+                    <TableCell wide label="Payout" className={mono}>{payout.id}{payout.batchWithdrawalId ? <span className="block text-muted-foreground">batch {payout.batchWithdrawalId}</span> : null}</TableCell>
+                    <TableCell label="Asset">{payout.ticker} <span className="text-muted-foreground">{payout.network}</span></TableCell>
+                    <TableCell label="Amount" className="font-mono text-xs">{payout.amountDisplay}{payout.fee != null ? <span className="block text-muted-foreground">fee {payout.fee}</span> : null}</TableCell>
+                    <TableCell wide label="Destination" className={mono}>{payout.address}{payout.extraId ? <span className="block text-muted-foreground">memo {payout.extraId}</span> : null}</TableCell>
+                    <TableCell label="Status"><StatusPill status={payout.status} /></TableCell>
+                    <TableCell label="Created" className="text-muted-foreground">{formatDateTime(payout.createdAt)}</TableCell>
+                    <TableCell wide>
                       {payout.batchWithdrawalId && ["creating", "waiting"].includes(payout.status.toLowerCase()) ? (
                         <Button size="sm" variant="outline" onClick={() => { setError(null); setVerifyBatch(payout.batchWithdrawalId); }}>Verify 2FA</Button>
                       ) : null}

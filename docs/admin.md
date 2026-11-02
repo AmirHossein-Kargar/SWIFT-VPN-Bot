@@ -148,6 +148,32 @@ and only `transform` and `opacity` animate. Reduced motion shows final figures a
 - Charts use the green `--chart-*` tokens from `design/theme.css`; a second series is also dashed and legend-keyed; Recharts' own animation follows
   `prefers-reduced-motion` through `lib/use-reduced-motion.ts`.
 
+## Responsive layout
+
+Tailwind's default breakpoints, used the same way everywhere: `sm` lets filter controls take their own width, `md` is where a table
+stops being cards, and `lg` is where the sidebar replaces the drawer.
+
+- **The document scrolls.** The top bar and sidebar are sticky, so the menu button stays in reach on a long page. `<main>` must not get
+  `overflow`: when it had `overflow-y-auto`, the browser computed `overflow-x: auto` too, so anything too wide was cut off inside it and
+  `document.documentElement.scrollWidth` still reported no overflow. Every older width assertion passed that way.
+- **Tables** are cards below `md`. `<Table stack label="...">` turns each row into a two-column card, and each `TableCell` names itself with
+  `label`. `wide` takes a whole row of the card, and `corner` pins a row's menu or checkbox. Nothing is dropped: a column hidden as `hidden lg:table-cell` still
+  shows in the card. `stack="xl"` keeps the cards up to `xl`, in four columns from `sm`, for a table that does not fit a tablet (the catalog). Sort buttons live in the header, which a card
+  does not show, so a sortable table offers sorting as a control instead, as the catalog does.
+  Tables with few short columns (analytics) stay tables; a ledger compared across columns (the Sentinel lifecycle, reliability history)
+  stays one and scrolls.
+- **`ScrollRegion`** (`components/ui/scroll-region.tsx`) is for what cannot reflow: a table wider than its column, a block of JSON. It joins the tab order only
+  while it has something to scroll, and fades the edge with more behind it, because phones hide scrollbars.
+- **Dialogs, sheets and popovers** carry their own limits in `components/ui`: a 16 px margin, no taller than the screen, the action row sticks to the bottom while the body scrolls, and
+  long ids wrap. Popovers keep 8 px from the edge. The viewport sets `interactive-widget=resizes-content`, so a software keyboard should resize the layout rather than cover it.
+  That is verified only by resizing Chrome's viewport, not on a real keyboard or on Safari for iOS, which may ignore the setting.
+- **Drawer.** The same `NavLinks` drives the sidebar and the drawer. The drawer opens from the side of its button, locks the page behind it, returns focus to the button,
+  and closes on navigation, browser back, Escape, the backdrop, and when the screen reaches desktop width.
+- **Touch.** 44 px is the floor on a coarse pointer: the `Button`, `Input`, `Select` and `Tabs` primitives set it, and one rule in `app/globals.css` covers standalone links and raw
+  buttons. A link inside a sentence stays inline. A checkbox keeps its small mark and gets a larger hit area on `::after`.
+
+`npm run test:e2e:responsive` checks all of this at seven viewports; see [Testing](testing.md).
+
 ## Money safety in admin actions
 
 - **Balance changes** use the idempotency ledger above; a replayed request or button cannot

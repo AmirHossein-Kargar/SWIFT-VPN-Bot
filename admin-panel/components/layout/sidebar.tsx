@@ -72,48 +72,58 @@ const NAV_SECTIONS: NavSection[] = [
   },
 ];
 
-export function Sidebar() {
+/** The section links, for the desktop sidebar and the mobile drawer alike. */
+export function NavLinks({ onNavigate, touch = false }: { onNavigate?: () => void; touch?: boolean }) {
   const pathname = stripBasePath(usePathname());
   const openSection = useOpenSection();
 
   return (
-    <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-card lg:flex">
-      <div className="flex h-14 items-center gap-2.5 border-b border-border px-5">
+    <>
+      {NAV_SECTIONS.map((section) => (
+        <div key={section.label} className="mb-4">
+          <p className="px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            {section.label}
+          </p>
+          <ul className="space-y-0.5">
+            {section.items.map((item) => {
+              const active = pathname === item.href || (item.href !== "/" && pathname.startsWith(`${item.href}/`));
+              const Icon = item.icon;
+              return (
+                <li key={item.href}>
+                  <Link
+                    href={item.href}
+                    aria-current={active ? "page" : undefined}
+                    onClick={(event) => { onNavigate?.(); openSection(event, item.href); }}
+                    className={cn(
+                      "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-[color,background-color,transform] duration-150 active:scale-[0.98]",
+                      touch && "min-h-11",
+                      active
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                    )}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    {item.label}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ))}
+    </>
+  );
+}
+
+export function Sidebar() {
+  return (
+    <aside className="sticky top-0 hidden h-dvh w-64 shrink-0 flex-col border-r border-border bg-card lg:flex">
+      <div className="flex h-14 shrink-0 items-center gap-2.5 border-b border-border px-5">
         <Logo height={24} />
         <span className="rounded border border-border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Admin</span>
       </div>
-      <nav className="flex-1 overflow-y-auto px-3 py-4">
-        {NAV_SECTIONS.map((section) => (
-          <div key={section.label} className="mb-4">
-            <p className="px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              {section.label}
-            </p>
-            <ul className="space-y-0.5">
-              {section.items.map((item) => {
-                const active = pathname === item.href || (item.href !== "/" && pathname.startsWith(`${item.href}/`));
-                const Icon = item.icon;
-                return (
-                  <li key={item.href}>
-                    <Link
-                      href={item.href}
-                      aria-current={active ? "page" : undefined}
-                      onClick={(event) => openSection(event, item.href)}
-                      className={cn(
-                        "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-[color,background-color,transform] duration-150 active:scale-[0.98]",
-                        active
-                          ? "bg-primary text-primary-foreground"
-                          : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                      )}
-                    >
-                      <Icon className="h-4 w-4" />
-                      {item.label}
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        ))}
+      <nav aria-label="Admin sections" className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
+        <NavLinks />
       </nav>
     </aside>
   );

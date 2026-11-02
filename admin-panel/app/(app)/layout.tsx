@@ -12,7 +12,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   if (session.unavailable) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-3 px-4 text-center">
+      <div className="flex min-h-dvh flex-col items-center justify-center gap-3 px-4 text-center">
         <AlertTriangle className="h-8 w-8 text-warning" />
         <p className="text-sm font-medium">The admin API is temporarily unavailable.</p>
         <p className="text-sm text-muted-foreground">Please try again in a moment.</p>
@@ -29,7 +29,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <SessionProvider value={{ actorTelegramId, csrfToken }}>
       <NavigationPending>
-        <div className="flex min-h-screen bg-background">
+        <div className="flex min-h-dvh bg-background">
           <Sidebar />
           <div className="flex min-w-0 flex-1 flex-col">
             <Topbar />

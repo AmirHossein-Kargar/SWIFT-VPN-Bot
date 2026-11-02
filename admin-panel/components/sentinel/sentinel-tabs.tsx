@@ -17,7 +17,7 @@ const TABS: { href: string; label: string; icon: LucideIcon }[] = [
 export function SentinelTabs() {
   const pathname = stripBasePath(usePathname());
   return (
-    <nav aria-label="Money Flow Sentinel sections" className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1">
+    <nav aria-label="Money Flow Sentinel sections" className="-mx-1 flex flex-wrap gap-1 px-1 pb-1">
       {TABS.map(({ href, label, icon: Icon }) => {
         const active = href === "/sentinel" ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
         return (
